@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Deputy Roster View{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/style.css') }}">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/month">Deputy Roster View</a>
+      {% if header_context %}
+        <nav class="month-nav" aria-label="Month navigation">
+          <a class="icon-button" href="{{ header_prev_url }}" aria-label="Previous month">Previous</a>
+          <strong>{{ header_context }}</strong>
+          <a class="icon-button" href="{{ header_next_url }}" aria-label="Next month">Next</a>
+        </nav>
+      {% endif %}
+      <nav class="site-nav" aria-label="Main navigation">
+        <a href="/month">Month</a>
+        <a href="/settings">Settings</a>
+        <form action="/sync-now" method="post">
+          <button type="submit" class="button button-compact">Sync Now</button>
+        </form>
+      </nav>
+    </header>
+
+    <main class="page-shell">
+      {% if notice %}
+        <div class="notice">{{ notice }}</div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

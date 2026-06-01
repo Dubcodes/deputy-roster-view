@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Deputy Roster View{% endblock %}
+
+{% block content %}
+  <section class="page-heading">
+    <div>
+      <p class="eyebrow">Settings</p>
+      <h1>Control Room</h1>
+    </div>
+    <form action="/sync-now" method="post">
+      <button class="button" type="submit">Sync Now</button>
+    </form>
+  </section>
+
+  <section class="settings-grid">
+    <article class="settings-panel">
+      <span class="summary-label">Calendar URL</span>
+      <strong>{{ "Configured" if settings.calendar_configured else "Missing" }}</strong>
+    </article>
+    <article class="settings-panel">
+      <span class="summary-label">Timezone</span>
+      <strong>{{ settings.tz_name }}</strong>
+    </article>
+    <article class="settings-panel">
+      <span class="summary-label">Last successful sync</span>
+      <strong>{{ last_successful_sync.finished_at|datetime if last_successful_sync else "Never" }}</strong>
+    </article>
+    <article class="settings-panel">
+      <span class="summary-label">Open shifts</span>
+      <strong>Not in iCal</strong>
+    </article>
+  </section>
+
+  <section class="settings-grid settings-grid-wide">
+    <article class="settings-panel">
+      <span class="summary-label">Next shift</span>
+      {% if next_shift %}
+        <strong>{{ next_shift.start_at|datetime }}</strong>
+        <p>{{ next_shift.title or "Shift" }}{% if next_shift.location %}, {{ next_shift.location }}{% endif %}</p>
+      {% else %}
+        <strong>None listed</strong>
+      {% endif %}
+    </article>
+    <article class="settings-panel">
+      <span class="summary-label">Next pre-shift sync target</span>
+      {% if pre_shift.target_at %}
+        <strong>{{ pre_shift.target_at|datetime }}</strong>
+        <p>{{ pre_shift.reason }}</p>
+      {% else %}
+        <strong>None</strong>
+        <p>{{ pre_shift.reason }}</p>
+      {% endif %}
+    </article>
+  </section>
+
+  <section class="settings-grid settings-grid-wide">
+    <article class="settings-panel">
+      <div class="section-heading">
+        <h2>Display</h2>
+      </div>
+      <form class="settings-form" action="/settings/display" method="post">
+        <label class="toggle-row">
+          <input type="checkbox" name="show_source_data" {% if display_settings.show_source_data == "1" %}checked{% endif %}>
+          <span>Show source iCal data on shift pages</span>
+        </label>
+        <button class="button" type="submit">Save Display</button>
+      </form>
+    </article>
+
+    <article class="settings-panel">
+      <div class="section-heading">
+        <h2>Maintenance</h2>
+      </div>
+      <div class="stacked-actions">
+        <form action="/sync-now" method="post">
+          <button class="button" type="submit">Sync Now</button>
+        </form>
+        <form action="/settings/clear-changed" method="post">
+          <button class="button button-secondary" type="submit">Clear Changed Flags</button>
+        </form>
+      </div>
+    </article>
+  </section>
+
+  <section class="table-panel">
+    <div class="section-heading">
+      <h2>Sync Logs</h2>
+    </div>
+    {% if not sync_logs %}
+      <div class="empty-state">No syncs have run yet.</div>
+    {% else %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Started</th>
+              <th>Status</th>
+              <th>Message</th>
+              <th>Seen</th>
+              <th>New</th>
+              <th>Changed</th>
+              <th>Cancelled</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for log in sync_logs %}
+              <tr>
+                <td>{{ log.started_at|datetime }}</td>
+                <td><span class="badge {% if log.status != 'ok' %}badge-danger{% endif %}">{{ log.status }}</span></td>
+                <td>{{ log.message }}</td>
+                <td>{{ log.events_seen }}</td>
+                <td>{{ log.events_created }}</td>
+                <td>{{ log.events_updated }}</td>
+                <td>{{ log.events_marked_deleted }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </section>
+{% endblock %}

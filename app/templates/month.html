@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}{{ month_name }} - Deputy Roster View{% endblock %}
+
+{% block content %}
+  <section class="calendar-grid" aria-label="Calendar">
+    {% for weekday in weekdays %}
+      <div class="weekday">{{ weekday }}</div>
+    {% endfor %}
+    <div class="weekday weekday-total">Week</div>
+
+    {% for week in weeks %}
+      {% for day in week.days %}
+        <article class="day-cell{% if not day.in_month %} outside-month{% endif %}{% if day.is_today %} today{% endif %}">
+          <a class="day-link" href="/day/{{ day.iso }}">
+            <span>{{ day.date.strftime("%a") }}</span>
+            <strong>{{ day.day_number }}</strong>
+          </a>
+
+          <div class="shift-list">
+            {% for shift in day.shifts %}
+              <a id="shift-card-{{ shift.id }}" class="shift-card{% if shift.deleted_from_source %} is-deleted{% endif %}{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}#shift-{{ shift.id }}" style="{{ shift.colour_style }}">
+                <span class="shift-time">{{ shift.time_range }}</span>
+                <strong class="shift-role">{{ shift.role_label or shift.title or "Shift" }}</strong>
+                <span class="shift-track">{{ shift.track_label }}</span>
+                <span class="shift-meta">{{ shift.paid_label }}</span>
+                <span class="badge-row">
+                  {% if shift.deleted_from_source %}
+                    <span class="badge badge-danger">Cancelled</span>
+                  {% endif %}
+                  {% for badge in shift.mark_badges %}
+                    <span class="badge">{{ badge }}</span>
+                  {% endfor %}
+                </span>
+              </a>
+            {% endfor %}
+          </div>
+        </article>
+      {% endfor %}
+      <aside class="week-total">
+        <span>Week</span>
+        <strong>{{ week.total|hours }}</strong>
+      </aside>
+    {% endfor %}
+  </section>
+{% endblock %}

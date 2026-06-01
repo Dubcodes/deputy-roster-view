@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}{{ day_date.strftime("%A %d %B %Y") }} - Deputy Roster View{% endblock %}
+
+{% block content %}
+  <section class="page-heading compact-heading">
+    <div>
+      <p class="eyebrow">Day</p>
+      <h1>{{ day_date.strftime("%A %d %B %Y") }}</h1>
+    </div>
+    <div class="heading-actions">
+      <a class="button button-secondary" href="/month?year={{ month_year }}&month={{ month_number }}">Back to month</a>
+    </div>
+  </section>
+
+  {% if not shifts %}
+    <div class="empty-state">No shifts listed for this day.</div>
+  {% endif %}
+
+  <section class="detail-list">
+    {% for shift in shifts %}
+      <article id="shift-{{ shift.id }}" class="detail-card{% if shift.deleted_from_source %} is-deleted{% endif %}" style="{{ shift.colour_style }}">
+        <div class="detail-card-heading">
+          <div>
+            <p class="eyebrow">{{ shift.time_range }}</p>
+            <h2>{{ shift.role_label or shift.title or "Shift" }}</h2>
+            <p class="detail-subtitle">{{ shift.track_label }}{% if shift.location and shift.location != shift.track_label %} · {{ shift.location }}{% endif %}</p>
+          </div>
+          <div class="badge-row">
+            {% if shift.changed_since_viewed %}
+              <span class="badge badge-warn">Changed</span>
+            {% endif %}
+            {% if shift.deleted_from_source %}
+              <span class="badge badge-danger">Cancelled</span>
+            {% endif %}
+            {% if shift.source_status %}
+              <span class="badge">{{ shift.source_status }}</span>
+            {% endif %}
+            {% for badge in shift.mark_badges %}
+              <span class="badge">{{ badge }}</span>
+            {% endfor %}
+          </div>
+        </div>
+
+        <section class="shift-facts shift-facts-compact" aria-label="Shift facts">
+          <div>
+            <span>Track</span>
+            <strong>{{ shift.track_label }}</strong>
+          </div>
+          <div>
+            <span>Role</span>
+            <strong>{{ shift.role_label or "Shift" }}</strong>
+          </div>
+          <div>
+            <span>Start</span>
+            <strong>{{ shift.start_at|datetime }}</strong>
+          </div>
+          <div>
+            <span>End</span>
+            <strong>{{ shift.end_at|datetime }}</strong>
+          </div>
+          <div>
+            <span>Hours</span>
+            <strong>{{ shift.paid_hours|hours }}</strong>
+          </div>
+        </section>
+
+        <div class="shift-actions">
+          {% if shift.source_link %}
+            <a class="button" href="{{ shift.source_link }}" target="_blank" rel="noopener noreferrer">Open in Deputy</a>
+          {% endif %}
+          {% if shift.changed_since_viewed %}
+            <form action="/shift/{{ shift.id }}/mark-viewed" method="post">
+              <button class="button button-secondary" type="submit">Mark Viewed</button>
+            </form>
+          {% endif %}
+        </div>
+
+        {% if shift.description_lines %}
+          <section class="description-block">
+            <h3>Roster Notes</h3>
+            <ul class="roster-lines">
+              {% for line in shift.description_lines %}
+                <li>{{ line }}</li>
+              {% endfor %}
+            </ul>
+          </section>
+        {% endif %}
+
+        <details class="marks-panel">
+          <summary>Marks and note</summary>
+          <form class="marks-form" action="/shift/{{ shift.id }}/marks" method="post">
+            <fieldset>
+              <legend>Marks</legend>
+              <div class="check-grid">
+                {% for field, label in mark_fields %}
+                  <label>
+                    <input type="checkbox" name="{{ field }}" {% if shift[field] %}checked{% endif %}>
+                    <span>{{ label }}</span>
+                  </label>
+                {% endfor %}
+              </div>
+            </fieldset>
+
+            <label class="form-row">
+              <span>Private note</span>
+              <textarea name="private_note" rows="4">{{ shift.private_note or "" }}</textarea>
+            </label>
+
+            <label class="form-row colour-row">
+              <span>Custom colour</span>
+              <input type="color" name="custom_colour" value="{{ shift.custom_colour or '#33c4a5' }}">
+            </label>
+
+            <div class="form-actions">
+              <button class="button" type="submit">Save Marks</button>
+            </div>
+          </form>
+        </details>
+
+        {% if display_settings.show_source_data == "1" and shift.source_payload_pretty %}
+          <details class="source-panel">
+            <summary>Source iCal data</summary>
+            <pre>{{ shift.source_payload_pretty }}</pre>
+          </details>
+        {% endif %}
+      </article>
+    {% endfor %}
+  </section>
+{% endblock %}
