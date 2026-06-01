@@ -24,7 +24,11 @@
           <div>
             <p class="eyebrow">{{ shift.time_range }}</p>
             <h2>{{ shift.role_label or shift.title or "Shift" }}</h2>
-            <p class="detail-subtitle">{{ shift.track_label }}{% if shift.location and shift.location != shift.track_label %} · {{ shift.location }}{% endif %}</p>
+            <p class="detail-subtitle">
+              {{ shift.track_label }}
+              {% if shift.race_type_label %} · {{ shift.race_type_label }}{% endif %}
+              {% if shift.location and shift.location != shift.track_label %} · {{ shift.location }}{% endif %}
+            </p>
           </div>
           <div class="badge-row">
             {% if shift.changed_since_viewed %}
@@ -36,8 +40,11 @@
             {% if shift.source_status %}
               <span class="badge">{{ shift.source_status }}</span>
             {% endif %}
-            {% for badge in shift.mark_badges %}
-              <span class="badge">{{ badge }}</span>
+            {% if shift.race_type_label %}
+              <span class="badge">{{ shift.race_type_label }}</span>
+            {% endif %}
+            {% for label in shift.timing_adjustment_labels %}
+              <span class="badge">{{ label }}</span>
             {% endfor %}
           </div>
         </div>
@@ -50,6 +57,10 @@
           <div>
             <span>Role</span>
             <strong>{{ shift.role_label or "Shift" }}</strong>
+          </div>
+          <div>
+            <span>Type</span>
+            <strong>{{ shift.race_type_label or "Rostered" }}</strong>
           </div>
           <div>
             <span>Start</span>
@@ -87,43 +98,53 @@
           </section>
         {% endif %}
 
-        <details class="marks-panel">
-          <summary>Marks and note</summary>
-          <form class="marks-form" action="/shift/{{ shift.id }}/marks" method="post">
-            <fieldset>
-              <legend>Marks</legend>
-              <div class="check-grid">
-                {% for field, label in mark_fields %}
-                  <label>
-                    <input type="checkbox" name="{{ field }}" {% if shift[field] %}checked{% endif %}>
-                    <span>{{ label }}</span>
-                  </label>
-                {% endfor %}
-              </div>
-            </fieldset>
-
-            <label class="form-row">
-              <span>Private note</span>
-              <textarea name="private_note" rows="4">{{ shift.private_note or "" }}</textarea>
-            </label>
-
-            <label class="form-row colour-row">
-              <span>Custom colour</span>
-              <input type="color" name="custom_colour" value="{{ shift.custom_colour or '#33c4a5' }}">
-            </label>
-
-            <div class="form-actions">
-              <button class="button" type="submit">Save Marks</button>
+        {% if shift.changes %}
+          <details class="change-panel" {% if shift.changed_since_viewed %}open{% endif %}>
+            <summary>What changed</summary>
+            <div class="change-list">
+              {% for change in shift.changes[:12] %}
+                <article class="change-item">
+                  <strong>{{ change.field_label }}</strong>
+                  <div class="change-values">
+                    <p><span>Was</span>{{ change.old_display }}</p>
+                    <p><span>Now</span>{{ change.new_display }}</p>
+                  </div>
+                  <small>{{ change.changed_at|datetime }}</small>
+                </article>
+              {% endfor %}
             </div>
-          </form>
-        </details>
-
-        {% if display_settings.show_source_data == "1" and shift.source_payload_pretty %}
-          <details class="source-panel">
-            <summary>Source iCal data</summary>
-            <pre>{{ shift.source_payload_pretty }}</pre>
           </details>
         {% endif %}
+
+        <section class="timing-panel">
+          <h3>Notes and timing</h3>
+          <form class="marks-form timing-form" action="/shift/{{ shift.id }}/marks" method="post">
+            <label class="form-row">
+              <span>Notes</span>
+              <textarea name="private_note" rows="3">{{ shift.private_note or "" }}</textarea>
+            </label>
+
+            <label class="form-row">
+              <span>Changed time</span>
+              <input type="time" name="timing_adjustment_time" value="{{ shift.timing_adjustment_time or '' }}">
+            </label>
+
+            <div class="check-grid timing-checks">
+              <label>
+                <input type="checkbox" name="timing_adjustment_last_race" {% if shift.timing_adjustment_last_race %}checked{% endif %}>
+                <span>Last race time changed</span>
+              </label>
+              <label>
+                <input type="checkbox" name="timing_adjustment_day_finished" {% if shift.timing_adjustment_day_finished %}checked{% endif %}>
+                <span>Finished/back at office</span>
+              </label>
+            </div>
+
+            <div class="form-actions">
+              <button class="button" type="submit">Save Notes</button>
+            </div>
+          </form>
+        </section>
       </article>
     {% endfor %}
   </section>

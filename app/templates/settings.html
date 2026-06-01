@@ -43,9 +43,10 @@
       {% endif %}
     </article>
     <article class="settings-panel">
-      <span class="summary-label">Next pre-shift sync target</span>
+      <span class="summary-label">Next pre-shift syncs</span>
       {% if pre_shift.target_at %}
         <strong>{{ pre_shift.target_at|datetime }}</strong>
+        <p>Follow-up if changed: {{ pre_shift.followup_target_at|datetime }}</p>
         <p>{{ pre_shift.reason }}</p>
       {% else %}
         <strong>None</strong>
@@ -62,7 +63,7 @@
       <form class="settings-form" action="/settings/display" method="post">
         <label class="toggle-row">
           <input type="checkbox" name="show_source_data" {% if display_settings.show_source_data == "1" %}checked{% endif %}>
-          <span>Show source iCal data on shift pages</span>
+          <span>Show source iCal data below</span>
         </label>
         <button class="button" type="submit">Save Display</button>
       </form>
@@ -82,6 +83,26 @@
       </div>
     </article>
   </section>
+
+  {% if display_settings.show_source_data == "1" %}
+    <section class="table-panel">
+      <div class="section-heading">
+        <h2>Source iCal Data</h2>
+      </div>
+      {% if not source_payload_shifts %}
+        <div class="empty-state">No source data has been stored yet.</div>
+      {% else %}
+        <div class="source-list">
+          {% for shift in source_payload_shifts %}
+            <details class="source-panel">
+              <summary>{{ shift.start_at|datetime }} · {{ shift.track_label }} · {{ shift.role_label or shift.title or "Shift" }}</summary>
+              <pre>{{ shift.source_payload_pretty }}</pre>
+            </details>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </section>
+  {% endif %}
 
   <section class="table-panel">
     <div class="section-heading">

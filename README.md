@@ -1,6 +1,6 @@
 # Deputy Roster View
 
-Deputy Roster View is a small private web app that mirrors a Deputy iCal roster feed into SQLite and shows it as a cleaner month calendar with shift details, calculated paid hours, local marks, notes, and sync history.
+Deputy Roster View is a small private web app that mirrors a Deputy iCal roster feed into SQLite and shows it as a cleaner month calendar with shift details, calculated paid hours, local notes, timing adjustments, and sync history.
 
 The app is read-only against Deputy. It never writes back to Deputy.
 
@@ -61,7 +61,8 @@ In Portainer, create a stack from this repository. Add the same environment valu
 ## Syncing
 
 - Daily sync runs at `SYNC_AT_HOUR`, default `5`, in `TZ`, default `Pacific/Auckland`.
-- A pre-shift checker runs every 10 minutes and syncs once when the next shift is within `PRE_SHIFT_SYNC_MINUTES`, default `30`.
+- A pre-shift checker runs every 10 minutes and syncs once when the next shift is within `PRE_SHIFT_SYNC_MINUTES`, default `60`.
+- If that upcoming shift is marked as changed, the checker runs one more follow-up sync at `CHANGED_FOLLOWUP_SYNC_MINUTES`, default `30`.
 - Use the Sync Now button in the app to trigger a manual sync.
 
 The app redacts calendar details by design and does not display the configured calendar URL.
@@ -76,9 +77,11 @@ Unpaid break minutes are read from Deputy's iCal event description when Deputy i
 paid_hours = raw_hours - break_minutes / 60
 ```
 
-## Local Marks
+## Local Notes
 
-Marks, notes, and custom colours are stored locally in SQLite and are never overwritten by Deputy syncs. Deputy/iCal updates only change the `shifts` table.
+Notes and timing adjustments are stored locally in SQLite and are never overwritten by Deputy syncs. Deputy/iCal updates only change the source roster fields.
+
+The iCal feed only contains rostered shifts. Available/open shifts and applying for them are not included unless a future Deputy API integration is added.
 
 ## Reset Local Database
 
@@ -90,4 +93,4 @@ rm data/deputy_roster.sqlite3
 docker compose up --build
 ```
 
-This removes synced shifts, local marks, notes, and sync history.
+This removes synced shifts, local notes, timing adjustments, and sync history.

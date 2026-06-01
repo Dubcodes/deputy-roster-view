@@ -28,6 +28,9 @@
                 <span class="list-shift-meta">
                   <span>{{ shift.time_range }}</span>
                   <span>{{ shift.paid_label }}</span>
+                  {% if shift.race_type_label %}
+                    <span>{{ shift.race_type_label }}</span>
+                  {% endif %}
                 </span>
                 {% if shift.location %}
                   <span class="list-shift-location">{{ shift.location }}</span>
@@ -35,7 +38,7 @@
                 {% if shift.description_lines %}
                   <span class="list-shift-note">{{ shift.description_lines[0] }}</span>
                 {% endif %}
-                {% if shift.deleted_from_source or shift.changed_since_viewed or shift.mark_badges %}
+                {% if shift.deleted_from_source or shift.changed_since_viewed %}
                   <span class="badge-row">
                     {% if shift.deleted_from_source %}
                       <span class="badge badge-danger">Cancelled</span>
@@ -43,9 +46,6 @@
                     {% if shift.changed_since_viewed %}
                       <span class="badge badge-warn">Changed</span>
                     {% endif %}
-                    {% for badge in shift.mark_badges %}
-                      <span class="badge">{{ badge }}</span>
-                    {% endfor %}
                   </span>
                 {% endif %}
               </a>
@@ -75,14 +75,16 @@
                   <strong class="shift-track">{{ shift.track_label }}</strong>
                   <span class="shift-mini">{{ shift.role_label or shift.title or "Shift" }} · {{ shift.start_label }}</span>
                   <span class="shift-meta">{{ shift.paid_label }}</span>
-                  <span class="badge-row">
-                    {% if shift.deleted_from_source %}
-                      <span class="badge badge-danger">Cancelled</span>
-                    {% endif %}
-                    {% for badge in shift.mark_badges %}
-                      <span class="badge">{{ badge }}</span>
-                    {% endfor %}
-                  </span>
+                  {% if shift.deleted_from_source or shift.changed_since_viewed %}
+                    <span class="badge-row">
+                      {% if shift.deleted_from_source %}
+                        <span class="badge badge-danger">Cancelled</span>
+                      {% endif %}
+                      {% if shift.changed_since_viewed %}
+                        <span class="badge badge-warn">Changed</span>
+                      {% endif %}
+                    </span>
+                  {% endif %}
                 </a>
               {% endfor %}
             </div>
@@ -107,7 +109,7 @@
             <a class="upcoming-card" href="/day/{{ shift.date }}#shift-{{ shift.id }}" style="{{ shift.colour_style }}">
               <span>{{ shift.start_at|day_short }}</span>
               <strong>{{ shift.track_label }}</strong>
-              <span>{{ shift.role_label or shift.title or "Shift" }} · {{ shift.start_label }}</span>
+              <span>{{ shift.role_label or shift.title or "Shift" }} · {{ shift.start_label }}{% if shift.race_type_label %} · {{ shift.race_type_label }}{% endif %}</span>
             </a>
           {% endfor %}
         </div>

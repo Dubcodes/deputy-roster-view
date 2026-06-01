@@ -10,7 +10,13 @@ import requests
 from icalendar import Calendar
 
 from .config import Settings, get_settings
-from .database import get_connection, init_db, mark_missing_future_shifts_deleted, write_sync_log
+from .database import (
+    get_connection,
+    init_db,
+    mark_missing_future_shifts_deleted,
+    write_shift_changes,
+    write_sync_log,
+)
 from .models import ShiftEvent
 
 
@@ -239,8 +245,8 @@ def _float_changed(old_value: Any, new_value: float) -> bool:
     return old != round(float(new_value), 2)
 
 
-def _event_changed(row: Any, event: ShiftEvent) -> bool:
-    event_values = {
+def _event_values(event: ShiftEvent) -> dict[str, Any]:
+    return {
         "title": event.title,
         "description": event.description,
         "location": event.location,
@@ -252,19 +258,24 @@ def _event_changed(row: Any, event: ShiftEvent) -> bool:
         "source_link": event.source_link,
         "source_status": event.source_status,
     }
+
+
+def _event_changes(row: Any, event: ShiftEvent) -> dict[str, tuple[Any, Any]]:
+    event_values = _event_values(event)
+    changes: dict[str, tuple[Any, Any]] = {}
     for field in COMPARE_FIELDS:
         new_value = event_values[field]
         if field in {"raw_hours", "paid_hours"}:
             if _float_changed(row[field], float(new_value)):
-                return True
+                changes[field] = (row[field], round(float(new_value), 2))
         elif field == "break_minutes":
             if int(row[field] or 0) != int(new_value):
-                return True
+                changes[field] = (row[field], int(new_value))
         elif (row[field] or "") != (new_value or ""):
-            return True
+            changes[field] = (row[field], new_value)
     if int(row["deleted_from_source"] or 0):
-        return True
-    return False
+        changes["deleted_from_source"] = (row["deleted_from_source"], 0)
+    return changes
 
 
 def _upsert_event(conn: Any, event: ShiftEvent, now_iso: str) -> str:
@@ -311,7 +322,8 @@ def _upsert_event(conn: Any, event: ShiftEvent, now_iso: str) -> str:
         )
         return "created"
 
-    changed = _event_changed(existing, event)
+    changes = _event_changes(existing, event)
+    changed = bool(changes)
     conn.execute(
         """
         UPDATE shifts
@@ -355,6 +367,8 @@ def _upsert_event(conn: Any, event: ShiftEvent, now_iso: str) -> str:
             event.source_uid,
         ),
     )
+    if changed:
+        write_shift_changes(conn, int(existing["id"]), now_iso, changes)
     return "updated" if changed else "unchanged"
 
 

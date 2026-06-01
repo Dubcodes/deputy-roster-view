@@ -19,11 +19,13 @@ from .database import (
     clear_changed_for_date,
     clear_changed_for_shift,
     get_app_settings,
+    get_shift_changes_for_date,
     fetch_shift,
     fetch_shifts_between,
     fetch_shifts_for_date,
     get_last_successful_sync,
     get_next_upcoming_shift,
+    get_recent_source_payloads,
     get_recent_sync_logs,
     get_upcoming_shifts,
     init_db,
@@ -50,6 +52,7 @@ URL_RE = re.compile(r"https?://\S+")
 SUMMARY_RE = re.compile(r"^\[([^\]]+)\]\s*(.*)$")
 TRACK_NAMES = {
     "CAM": "Cambridge",
+    "CAMBRIDGE": "Cambridge",
     "CAMS": "Cambridge",
     "CAMS-T": "Cambridge",
     "ELLE": "Ellerslie",
@@ -58,6 +61,8 @@ TRACK_NAMES = {
     "MATA-T": "Matamata",
     "PUKE": "Pukekohe",
     "PUKE-T": "Pukekohe",
+    "R": "Rotorua",
+    "ROTORUA": "Rotorua",
     "TARO": "Te Aroha",
     "TARO-T": "Te Aroha",
     "TAUR": "Tauranga",
@@ -66,6 +71,26 @@ TRACK_NAMES = {
     "TRAP-T": "Te Rapa",
     "T-R": "Rotorua",
     "VEH": "Vehicles",
+}
+RACE_TYPES = {
+    "T": "Thoroughbred racing",
+    "H": "Harness racing",
+}
+DEFAULT_RACE_TYPE_BY_CODE = {
+    "CAM": "H",
+}
+CHANGE_FIELD_LABELS = {
+    "title": "Roster title",
+    "description": "Roster notes",
+    "location": "Location",
+    "start_at": "Start time",
+    "end_at": "End time",
+    "raw_hours": "Raw hours",
+    "break_minutes": "Break",
+    "paid_hours": "Hours",
+    "source_link": "Deputy link",
+    "source_status": "Status",
+    "deleted_from_source": "Cancelled",
 }
 
 
@@ -122,6 +147,16 @@ def clean_colour(value: str | None) -> str:
     return ""
 
 
+def clean_time_value(value: str | None) -> str:
+    value = (value or "").strip()
+    if not re.fullmatch(r"\d{2}:\d{2}", value):
+        return ""
+    hour, minute = (int(part) for part in value.split(":"))
+    if hour > 23 or minute > 59:
+        return ""
+    return value
+
+
 def redact_secret_text(value: str) -> str:
     return SECRET_URL_RE.sub(r"\1[redacted]", value)
 
@@ -160,6 +195,7 @@ def parse_shift_title(title: str | None) -> dict[str, str]:
             "source_code": "",
             "track_label": title or "Shift",
             "role_label": "",
+            "race_type_label": "",
             "display_title": title or "Shift",
         }
 
@@ -170,20 +206,62 @@ def parse_shift_title(title: str | None) -> dict[str, str]:
             "source_code": source_code,
             "track_label": "Vehicles",
             "role_label": "Maintenance",
+            "race_type_label": "",
             "display_title": "Vehicle maintenance",
         }
 
-    track_label = TRACK_NAMES.get(source_code.upper())
+    source_code_upper = source_code.upper()
+    race_type_code = ""
+    track_code = source_code_upper
+    if len(source_code_upper) > 2 and source_code_upper[1] == "-" and source_code_upper[0] in RACE_TYPES:
+        race_type_code = source_code_upper[0]
+        track_code = source_code_upper[2:]
+    elif len(source_code_upper) > 2 and source_code_upper[-2] == "-" and source_code_upper[-1] in RACE_TYPES:
+        race_type_code = source_code_upper[-1]
+        track_code = source_code_upper[:-2]
+    if not race_type_code:
+        race_type_code = DEFAULT_RACE_TYPE_BY_CODE.get(track_code, "")
+
+    track_label = TRACK_NAMES.get(track_code)
     if not track_label:
-        base_code = source_code.upper().removesuffix("-T")
-        track_label = TRACK_NAMES.get(base_code, source_code)
+        base_code = track_code.removesuffix("-T")
+        track_label = TRACK_NAMES.get(base_code, track_code.replace("-", " ").title())
+    race_type_label = RACE_TYPES.get(race_type_code, "")
 
     return {
         "source_code": source_code,
         "track_label": track_label,
         "role_label": role_label,
+        "race_type_label": race_type_label,
         "display_title": f"{role_label} at {track_label}" if role_label else track_label,
     }
+
+
+def format_change_value(field_name: str, value: str | None) -> str:
+    value = redact_secret_text(str(value or ""))
+    if value == "":
+        return "blank"
+    if field_name in {"start_at", "end_at"}:
+        return format_datetime(value)
+    if field_name in {"raw_hours", "paid_hours"}:
+        try:
+            return format_hours(float(value))
+        except ValueError:
+            return value
+    if field_name == "break_minutes":
+        return f"{value} min"
+    if field_name == "deleted_from_source":
+        return "Yes" if value == "1" else "No"
+    return value
+
+
+def decorate_change(row: object) -> dict[str, object]:
+    change = dict(row)
+    field_name = str(change.get("field_name") or "")
+    change["field_label"] = CHANGE_FIELD_LABELS.get(field_name, field_name.replace("_", " ").title())
+    change["old_display"] = format_change_value(field_name, str(change.get("old_value") or ""))
+    change["new_display"] = format_change_value(field_name, str(change.get("new_value") or ""))
+    return change
 
 
 def decorate_shift(row: object) -> dict[str, object]:
@@ -205,6 +283,15 @@ def decorate_shift(row: object) -> dict[str, object]:
     shift["description_lines"] = description_lines(str(shift.get("description") or ""))
     shift["source_payload_pretty"] = pretty_source_payload(str(shift.get("source_payload") or ""))
     shift["source_link"] = redact_secret_text(str(shift.get("source_link") or ""))
+    timing_time = clean_time_value(str(shift.get("timing_adjustment_time") or ""))
+    timing_notes = []
+    if timing_time:
+        if int(shift.get("timing_adjustment_last_race") or 0):
+            timing_notes.append(f"Last race changed to {timing_time}")
+        if int(shift.get("timing_adjustment_day_finished") or 0):
+            timing_notes.append(f"Finished/back at office {timing_time}")
+    shift["timing_adjustment_time"] = timing_time
+    shift["timing_adjustment_labels"] = timing_notes
     return shift
 
 
@@ -337,6 +424,12 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
         raise HTTPException(status_code=404, detail="Invalid date") from exc
 
     shifts = [decorate_shift(row) for row in fetch_shifts_for_date(date_text)]
+    changes_by_shift: dict[int, list[dict[str, object]]] = {}
+    for row in get_shift_changes_for_date(date_text):
+        change = decorate_change(row)
+        changes_by_shift.setdefault(int(change["shift_id"]), []).append(change)
+    for shift in shifts:
+        shift["changes"] = changes_by_shift.get(int(shift["id"]), [])
     display_settings = get_app_settings()
     day_total = sum(
         float(shift.get("paid_hours") or 0)
@@ -391,9 +484,12 @@ async def save_shift_marks(shift_id: int, request: Request) -> RedirectResponse:
         values[field] = 1 if form.get(field) else 0
     values["private_note"] = str(form.get("private_note") or "").strip()
     values["custom_colour"] = clean_colour(str(form.get("custom_colour") or ""))
+    values["timing_adjustment_time"] = clean_time_value(str(form.get("timing_adjustment_time") or ""))
+    values["timing_adjustment_last_race"] = 1 if form.get("timing_adjustment_last_race") else 0
+    values["timing_adjustment_day_finished"] = 1 if form.get("timing_adjustment_day_finished") else 0
     update_shift_marks(shift_id, values)
     return RedirectResponse(
-        url=notice_url(f"/day/{shift['date']}", "Marks saved.") + f"#shift-{shift_id}",
+        url=notice_url(f"/day/{shift['date']}", "Notes saved.") + f"#shift-{shift_id}",
         status_code=303,
     )
 
@@ -427,6 +523,10 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "pre_shift": pre_shift,
             "sync_logs": get_recent_sync_logs(),
             "display_settings": get_app_settings(),
+            "source_payload_shifts": [
+                decorate_shift(row)
+                for row in get_recent_source_payloads()
+            ],
         },
     )
 

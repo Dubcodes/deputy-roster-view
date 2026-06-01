@@ -17,6 +17,7 @@ class Settings:
     tz_name: str
     sync_at_hour: int
     pre_shift_sync_minutes: int
+    changed_followup_sync_minutes: int
     data_dir: str
     db_path: str
 
@@ -54,7 +55,8 @@ def get_settings() -> Settings:
         app_password=os.getenv("APP_PASSWORD", ""),
         tz_name=tz_name,
         sync_at_hour=_int_env("SYNC_AT_HOUR", 5),
-        pre_shift_sync_minutes=_int_env("PRE_SHIFT_SYNC_MINUTES", 30),
+        pre_shift_sync_minutes=_int_env("PRE_SHIFT_SYNC_MINUTES", 60),
+        changed_followup_sync_minutes=_int_env("CHANGED_FOLLOWUP_SYNC_MINUTES", 30),
         data_dir=data_dir,
         db_path=db_path,
     )

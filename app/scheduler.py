@@ -12,7 +12,7 @@ from .sync_ics import sync_deputy_calendar
 
 
 _scheduler: BackgroundScheduler | None = None
-_last_pre_shift_key: str | None = None
+_last_pre_shift_keys: set[str] = set()
 
 
 def _now(settings: Settings) -> datetime:
@@ -56,20 +56,21 @@ def shutdown_scheduler() -> None:
 
 
 def check_pre_shift_sync(settings: Settings | None = None) -> dict[str, object]:
-    global _last_pre_shift_key
     settings = settings or get_settings()
     status = get_pre_shift_status(settings)
-    if not status["should_sync"]:
+    due_windows = [
+        window
+        for window in status["sync_windows"]
+        if window["should_sync"] and window["sync_key"] not in _last_pre_shift_keys
+    ]
+    if not due_windows:
         return {"ran": False, "reason": status["reason"]}
-
-    key = str(status["sync_key"])
-    if _last_pre_shift_key == key:
-        return {"ran": False, "reason": "already synced for this shift window"}
 
     result = sync_deputy_calendar(settings)
     if result.get("status") == "ok":
-        _last_pre_shift_key = key
-    return {"ran": True, "result": result}
+        for window in due_windows:
+            _last_pre_shift_keys.add(str(window["sync_key"]))
+    return {"ran": True, "windows": due_windows, "result": result}
 
 
 def get_pre_shift_status(settings: Settings | None = None) -> dict[str, object]:
@@ -80,18 +81,50 @@ def get_pre_shift_status(settings: Settings | None = None) -> dict[str, object]:
         return {
             "shift": None,
             "target_at": None,
+            "followup_target_at": None,
             "should_sync": False,
             "sync_key": None,
+            "sync_windows": [],
             "reason": "no upcoming shift",
         }
 
     start_at = datetime.fromisoformat(shift["start_at"])
     target_at = start_at - timedelta(minutes=settings.pre_shift_sync_minutes)
-    should_sync = target_at <= now <= start_at
+    followup_target_at = start_at - timedelta(minutes=settings.changed_followup_sync_minutes)
+    primary_should_sync = target_at <= now <= start_at
+    followup_should_sync = (
+        bool(int(shift["changed_since_viewed"] or 0))
+        and followup_target_at <= now <= start_at
+    )
+    primary_key = f"{shift['id']}:{shift['start_at']}:primary:{target_at.isoformat()}"
+    followup_key = f"{shift['id']}:{shift['start_at']}:changed-followup:{followup_target_at.isoformat()}"
+    sync_windows = [
+        {
+            "name": "pre-shift",
+            "target_at": target_at.isoformat(),
+            "should_sync": primary_should_sync,
+            "sync_key": primary_key,
+        },
+        {
+            "name": "changed follow-up",
+            "target_at": followup_target_at.isoformat(),
+            "should_sync": followup_should_sync,
+            "sync_key": followup_key,
+        },
+    ]
+    if primary_should_sync:
+        reason = "inside pre-shift sync window"
+    elif followup_should_sync:
+        reason = "inside changed follow-up sync window"
+    else:
+        reason = "waiting for pre-shift window"
+
     return {
         "shift": dict(shift),
         "target_at": target_at.isoformat(),
-        "should_sync": should_sync,
-        "sync_key": f"{shift['id']}:{shift['start_at']}:{target_at.isoformat()}",
-        "reason": "inside pre-shift window" if should_sync else "waiting for pre-shift window",
+        "followup_target_at": followup_target_at.isoformat(),
+        "should_sync": primary_should_sync or followup_should_sync,
+        "sync_key": primary_key,
+        "sync_windows": sync_windows,
+        "reason": reason,
     }

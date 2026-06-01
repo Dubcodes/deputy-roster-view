@@ -57,7 +57,20 @@ def init_db(settings: Settings | None = None) -> None:
                 pay_check INTEGER DEFAULT 0,
                 private_note TEXT,
                 custom_colour TEXT,
+                timing_adjustment_time TEXT,
+                timing_adjustment_last_race INTEGER DEFAULT 0,
+                timing_adjustment_day_finished INTEGER DEFAULT 0,
                 updated_at TEXT,
+                FOREIGN KEY (shift_id) REFERENCES shifts(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS shift_changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                shift_id INTEGER,
+                changed_at TEXT,
+                field_name TEXT,
+                old_value TEXT,
+                new_value TEXT,
                 FOREIGN KEY (shift_id) REFERENCES shifts(id) ON DELETE CASCADE
             );
 
@@ -82,11 +95,15 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_shifts_date ON shifts(date);
             CREATE INDEX IF NOT EXISTS idx_shifts_start_at ON shifts(start_at);
             CREATE INDEX IF NOT EXISTS idx_shifts_changed ON shifts(changed_since_viewed);
+            CREATE INDEX IF NOT EXISTS idx_shift_changes_shift ON shift_changes(shift_id, changed_at);
             CREATE INDEX IF NOT EXISTS idx_sync_log_started_at ON sync_log(started_at);
             """
         )
         _ensure_column(conn, "shifts", "source_link", "TEXT")
         _ensure_column(conn, "shifts", "source_status", "TEXT")
+        _ensure_column(conn, "shift_marks", "timing_adjustment_time", "TEXT")
+        _ensure_column(conn, "shift_marks", "timing_adjustment_last_race", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "shift_marks", "timing_adjustment_day_finished", "INTEGER DEFAULT 0")
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -119,7 +136,9 @@ def fetch_shifts_between(start_date: str, end_date: str) -> list[sqlite3.Row]:
             """
             SELECT s.*, m.checked, m.confirmed, m.important, m.question,
                    m.early_start, m.gear_needed, m.travel_needed, m.pay_check,
-                   m.private_note, m.custom_colour, m.updated_at AS marks_updated_at
+                   m.private_note, m.custom_colour, m.timing_adjustment_time,
+                   m.timing_adjustment_last_race, m.timing_adjustment_day_finished,
+                   m.updated_at AS marks_updated_at
             FROM shifts s
             LEFT JOIN shift_marks m ON m.shift_id = s.id
             WHERE s.date BETWEEN ? AND ?
@@ -140,7 +159,9 @@ def fetch_shift(shift_id: int) -> sqlite3.Row | None:
             """
             SELECT s.*, m.checked, m.confirmed, m.important, m.question,
                    m.early_start, m.gear_needed, m.travel_needed, m.pay_check,
-                   m.private_note, m.custom_colour, m.updated_at AS marks_updated_at
+                   m.private_note, m.custom_colour, m.timing_adjustment_time,
+                   m.timing_adjustment_last_race, m.timing_adjustment_day_finished,
+                   m.updated_at AS marks_updated_at
             FROM shifts s
             LEFT JOIN shift_marks m ON m.shift_id = s.id
             WHERE s.id = ?
@@ -169,6 +190,9 @@ def update_shift_marks(shift_id: int, values: dict[str, object]) -> bool:
                 pay_check = ?,
                 private_note = ?,
                 custom_colour = ?,
+                timing_adjustment_time = ?,
+                timing_adjustment_last_race = ?,
+                timing_adjustment_day_finished = ?,
                 updated_at = ?
             WHERE shift_id = ?
             """,
@@ -183,6 +207,9 @@ def update_shift_marks(shift_id: int, values: dict[str, object]) -> bool:
                 values.get("pay_check", 0),
                 values.get("private_note", ""),
                 values.get("custom_colour", ""),
+                values.get("timing_adjustment_time", ""),
+                values.get("timing_adjustment_last_race", 0),
+                values.get("timing_adjustment_day_finished", 0),
                 datetime.now().isoformat(timespec="seconds"),
                 shift_id,
             ),
@@ -222,9 +249,40 @@ def get_recent_sync_logs(limit: int = 20) -> list[sqlite3.Row]:
     return rows
 
 
+def get_shift_changes_for_date(date_text: str) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.*
+            FROM shift_changes c
+            JOIN shifts s ON s.id = c.shift_id
+            WHERE s.date = ?
+            ORDER BY c.changed_at DESC, c.id DESC
+            """,
+            (date_text,),
+        ).fetchall()
+    return rows
+
+
+def get_recent_source_payloads(limit: int = 6) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM shifts
+            WHERE source_payload IS NOT NULL
+              AND source_payload != ''
+            ORDER BY start_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return rows
+
+
 def get_app_settings() -> dict[str, str]:
     defaults = {
-        "show_source_data": "1",
+        "show_source_data": "0",
     }
     with get_connection() as conn:
         rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
@@ -292,7 +350,9 @@ def get_upcoming_shifts(now_iso: str, limit: int = 5) -> list[sqlite3.Row]:
             """
             SELECT s.*, m.checked, m.confirmed, m.important, m.question,
                    m.early_start, m.gear_needed, m.travel_needed, m.pay_check,
-                   m.private_note, m.custom_colour, m.updated_at AS marks_updated_at
+                   m.private_note, m.custom_colour, m.timing_adjustment_time,
+                   m.timing_adjustment_last_race, m.timing_adjustment_day_finished,
+                   m.updated_at AS marks_updated_at
             FROM shifts s
             LEFT JOIN shift_marks m ON m.shift_id = s.id
             WHERE s.deleted_from_source = 0
@@ -328,6 +388,23 @@ def write_sync_log(summary: dict[str, object]) -> None:
         )
 
 
+def write_shift_changes(conn: sqlite3.Connection, shift_id: int, changed_at: str, changes: dict[str, tuple[object, object]]) -> None:
+    for field_name, (old_value, new_value) in changes.items():
+        conn.execute(
+            """
+            INSERT INTO shift_changes (shift_id, changed_at, field_name, old_value, new_value)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                shift_id,
+                changed_at,
+                field_name,
+                "" if old_value is None else str(old_value),
+                "" if new_value is None else str(new_value),
+            ),
+        )
+
+
 def mark_missing_future_shifts_deleted(
     conn: sqlite3.Connection,
     source_url_hash: str,
@@ -336,19 +413,34 @@ def mark_missing_future_shifts_deleted(
     changed_at: str,
 ) -> int:
     seen = list(seen_uids)
-    base_sql = """
-        UPDATE shifts
-        SET deleted_from_source = 1,
-            changed_since_viewed = 1,
-            last_changed_at = ?
+    where_sql = """
         WHERE source_url_hash = ?
           AND deleted_from_source = 0
           AND start_at >= ?
     """
-    params: list[object] = [changed_at, source_url_hash, now_iso]
+    params: list[object] = [source_url_hash, now_iso]
     if seen:
         placeholders = ",".join("?" for _ in seen)
-        base_sql += f" AND source_uid NOT IN ({placeholders})"
+        where_sql += f" AND source_uid NOT IN ({placeholders})"
         params.extend(seen)
-    result = conn.execute(base_sql, params)
+
+    rows = conn.execute(f"SELECT id FROM shifts {where_sql}", params).fetchall()
+    for row in rows:
+        write_shift_changes(
+            conn,
+            int(row["id"]),
+            changed_at,
+            {"deleted_from_source": (0, 1)},
+        )
+
+    result = conn.execute(
+        f"""
+        UPDATE shifts
+        SET deleted_from_source = 1,
+            changed_since_viewed = 1,
+            last_changed_at = ?
+        {where_sql}
+        """,
+        [changed_at, *params],
+    )
     return result.rowcount
