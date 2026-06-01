@@ -409,7 +409,11 @@ a {
 }
 
 .is-deleted {
-  opacity: 0.72;
+  border-color: #4a505a;
+  border-left-color: #747c89;
+  background: #20242b;
+  opacity: 0.66;
+  filter: grayscale(0.7);
 }
 
 .week-total {

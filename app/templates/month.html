@@ -10,6 +10,7 @@
     data-next-url="{{ header_next_url }}"
     data-month-url="{{ month_view_url }}"
     data-list-url="{{ list_view_url }}"
+    data-sync-url="/sync-now?next={{ request.url.path }}{% if request.url.query %}%3F{{ request.url.query|urlencode }}{% endif %}"
   >
     <div class="view-toggle" aria-label="Roster view">
       <a class="{% if view == 'month' %}is-active{% endif %}" href="{{ month_view_url }}">Month</a>
@@ -27,7 +28,7 @@
           </a>
           <div class="list-day-shifts">
             {% for shift in day.shifts %}
-              <a class="list-shift{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}#shift-{{ shift.id }}" style="{{ shift.colour_style }}">
+              <a class="list-shift{% if shift.deleted_from_source %} is-deleted{% endif %}{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}#shift-{{ shift.id }}" style="{{ shift.colour_style }}">
                 <span class="list-shift-main">
                   <strong>{{ shift.track_label }}</strong>
                   <span>{{ shift.role_label or shift.title or "Shift" }}</span>
@@ -81,7 +82,9 @@
                 <a id="shift-card-{{ shift.id }}" class="shift-card{% if shift.deleted_from_source %} is-deleted{% endif %}{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}#shift-{{ shift.id }}" style="{{ shift.colour_style }}">
                   <strong class="shift-track">{{ shift.track_label }}</strong>
                   <span class="shift-mini">{{ shift.role_label or shift.title or "Shift" }} · {{ shift.start_label }}</span>
-                  <span class="shift-meta">{{ shift.paid_label }}</span>
+                  {% if day.shifts|length == 1 %}
+                    <span class="shift-meta">{{ shift.paid_label }}</span>
+                  {% endif %}
                   {% if shift.deleted_from_source or shift.changed_since_viewed %}
                     <span class="badge-row">
                       {% if shift.deleted_from_source %}
@@ -148,6 +151,7 @@
         if (key === "l") go(nav.dataset.listUrl);
         if (key === "n") go(nav.dataset.nextUrl);
         if (key === "p") go(nav.dataset.prevUrl);
+        if (key === "s") go(nav.dataset.syncUrl);
       });
 
       let startX = 0;

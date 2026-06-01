@@ -5,7 +5,7 @@ import json
 import re
 from datetime import date, datetime
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -305,7 +305,10 @@ def decorate_shift(row: object) -> dict[str, object]:
 
 
 def notice_url(path: str, message: str) -> str:
-    return f"{path}?{urlencode({'notice': message})}"
+    parts = urlsplit(path)
+    query_items = parse_qsl(parts.query, keep_blank_values=True)
+    query_items.append(("notice", message))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query_items), parts.fragment))
 
 
 @app.on_event("startup")
@@ -593,7 +596,7 @@ def clear_all_changed() -> RedirectResponse:
 
 
 @app.api_route("/sync-now", methods=["GET", "POST"])
-def sync_now() -> RedirectResponse:
+def sync_now(next: str | None = None) -> RedirectResponse:
     summary = sync_deputy_calendar()
     if summary.get("status") == "ok":
         message = (
@@ -604,7 +607,8 @@ def sync_now() -> RedirectResponse:
         )
     else:
         message = f"Sync failed: {summary.get('message', 'Unknown error')}"
-    return RedirectResponse(url=notice_url("/settings", message), status_code=303)
+    redirect_path = next if next and next.startswith("/") and not next.startswith("//") else "/settings"
+    return RedirectResponse(url=notice_url(redirect_path, message), status_code=303)
 
 
 templates.env.filters["datetime"] = format_datetime

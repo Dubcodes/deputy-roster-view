@@ -69,7 +69,7 @@ The app redacts calendar details by design and does not display the configured c
 
 ## Navigation
 
-On the month page, swipe left or right on a phone to move between months. On desktop, use `M` for month view, `L` for list view, `N` for next month, and `P` for previous month.
+On the month page, swipe left or right on a phone to move between months. On desktop, use `M` for month view, `L` for list view, `N` for next month, `P` for previous month, and `S` to sync.
 
 ## Hours
 
@@ -85,7 +85,7 @@ paid_hours = raw_hours - break_minutes / 60
 
 Notes and timing adjustments are stored locally in SQLite and are never overwritten by Deputy syncs. Deputy/iCal updates only change the source roster fields.
 
-The iCal feed only contains rostered shifts. Available/open shifts and applying for them are not included unless a future Deputy API integration is added.
+The app displays whatever events Deputy puts in the iCal feed. If an open shift appears in that feed and later disappears, the app marks it as cancelled/removed after the next sync. Applying for available shifts is not supported unless a future Deputy API integration is added.
 
 ## Reset Local Database
 
