@@ -165,6 +165,14 @@ def parse_shift_title(title: str | None) -> dict[str, str]:
 
     source_code = match.group(1).strip()
     role_label = match.group(2).strip()
+    if source_code.upper() == "VEH":
+        return {
+            "source_code": source_code,
+            "track_label": "Vehicles",
+            "role_label": "Maintenance",
+            "display_title": "Vehicle maintenance",
+        }
+
     track_label = TRACK_NAMES.get(source_code.upper())
     if not track_label:
         base_code = source_code.upper().removesuffix("-T")

@@ -340,7 +340,8 @@ a {
 .shift-card strong,
 .shift-card span {
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .shift-time {
@@ -472,8 +473,9 @@ a {
 
 .list-shift {
   display: grid;
-  gap: 2px;
-  padding: 9px;
+  min-width: 0;
+  gap: 6px;
+  padding: 10px;
   border: 1px solid #2e5160;
   border-left: 5px solid var(--shift-colour);
   border-radius: 8px;
@@ -481,13 +483,57 @@ a {
   text-decoration: none;
 }
 
-.list-shift strong {
-  font-size: 1.05rem;
+.list-shift-main {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
 }
 
-.list-shift span {
+.list-shift-main strong {
+  font-size: 1.05rem;
+  line-height: 1.18;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.list-shift-main span {
   color: var(--muted);
   font-weight: 750;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.list-shift-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--accent);
+  font-size: 0.86rem;
+  font-weight: 900;
+}
+
+.list-shift-location,
+.list-shift-note {
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.list-shift-location {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 750;
+}
+
+.list-shift-note {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #d1d8e0;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .upcoming-strip {
@@ -517,12 +563,14 @@ a {
   color: var(--muted);
   font-size: 0.82rem;
   font-weight: 750;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .upcoming-card strong {
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .detail-list {
@@ -591,7 +639,8 @@ a {
 
 .shift-facts strong {
   display: block;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .shift-actions,
@@ -989,6 +1038,15 @@ th {
   .list-day {
     grid-template-columns: 48px 1fr;
     padding: 8px;
+  }
+
+  .list-shift {
+    gap: 5px;
+    padding: 9px;
+  }
+
+  .list-shift-main strong {
+    font-size: 1rem;
   }
 
   .upcoming-list {
