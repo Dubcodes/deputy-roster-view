@@ -3,7 +3,14 @@
 {% block title %}{{ month_name }} - Deputy Roster View{% endblock %}
 
 {% block content %}
-  <div class="month-tools">
+  <div
+    class="month-tools"
+    data-roster-nav
+    data-prev-url="{{ header_prev_url }}"
+    data-next-url="{{ header_next_url }}"
+    data-month-url="{{ month_view_url }}"
+    data-list-url="{{ list_view_url }}"
+  >
     <div class="view-toggle" aria-label="Roster view">
       <a class="{% if view == 'month' %}is-active{% endif %}" href="{{ month_view_url }}">Month</a>
       <a class="{% if view == 'list' %}is-active{% endif %}" href="{{ list_view_url }}">List</a>
@@ -118,4 +125,50 @@
       {% endif %}
     </section>
   {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    (() => {
+      const nav = document.querySelector("[data-roster-nav]");
+      if (!nav) return;
+
+      const go = (url) => {
+        if (url) window.location.href = url;
+      };
+      const isTyping = (event) => {
+        const tag = event.target && event.target.tagName;
+        return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || event.target?.isContentEditable;
+      };
+
+      document.addEventListener("keydown", (event) => {
+        if (event.altKey || event.ctrlKey || event.metaKey || isTyping(event)) return;
+        const key = event.key.toLowerCase();
+        if (key === "m") go(nav.dataset.monthUrl);
+        if (key === "l") go(nav.dataset.listUrl);
+        if (key === "n") go(nav.dataset.nextUrl);
+        if (key === "p") go(nav.dataset.prevUrl);
+      });
+
+      let startX = 0;
+      let startY = 0;
+      document.addEventListener("touchstart", (event) => {
+        if (event.touches.length !== 1) return;
+        startX = event.touches[0].clientX;
+        startY = event.touches[0].clientY;
+      }, { passive: true });
+
+      document.addEventListener("touchend", (event) => {
+        if (!startX || !event.changedTouches.length) return;
+        const endX = event.changedTouches[0].clientX;
+        const endY = event.changedTouches[0].clientY;
+        const deltaX = endX - startX;
+        const deltaY = endY - startY;
+        startX = 0;
+        startY = 0;
+        if (Math.abs(deltaX) < 70 || Math.abs(deltaX) < Math.abs(deltaY) * 1.4) return;
+        go(deltaX < 0 ? nav.dataset.nextUrl : nav.dataset.prevUrl);
+      }, { passive: true });
+    })();
+  </script>
 {% endblock %}

@@ -11,6 +11,7 @@ from icalendar import Calendar
 
 from .config import Settings, get_settings
 from .database import (
+    get_calendar_url,
     get_connection,
     init_db,
     mark_missing_future_shifts_deleted,
@@ -220,12 +221,12 @@ def _fetch_calendar(url: str) -> bytes:
     return response.content
 
 
-def _load_events(settings: Settings) -> list[ShiftEvent]:
-    if not settings.calendar_configured:
-        raise CalendarSyncError("DEPUTY_ICAL_URL is not configured.")
+def _load_events(settings: Settings, calendar_url: str) -> list[ShiftEvent]:
+    if not calendar_url:
+        raise CalendarSyncError("Calendar URL is not configured.")
 
-    source_url_hash = _hash_url(settings.deputy_ical_url)
-    feed_bytes = _fetch_calendar(settings.deputy_ical_url)
+    source_url_hash = _hash_url(calendar_url)
+    feed_bytes = _fetch_calendar(calendar_url)
     try:
         calendar = Calendar.from_ical(feed_bytes)
     except Exception as exc:
@@ -388,9 +389,10 @@ def sync_deputy_calendar(settings: Settings | None = None) -> dict[str, object]:
     }
 
     try:
-        events = _load_events(settings)
+        calendar_url = get_calendar_url(settings)
+        events = _load_events(settings, calendar_url)
         now_iso = _now(settings).isoformat()
-        source_url_hash = _hash_url(settings.deputy_ical_url)
+        source_url_hash = _hash_url(calendar_url)
         seen_uids: set[str] = set()
 
         with get_connection(settings) as conn:

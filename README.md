@@ -12,9 +12,9 @@ The app is read-only against Deputy. It never writes back to Deputy.
    cp .env.example .env
    ```
 
-2. Open `.env` and set `DEPUTY_ICAL_URL` to your Deputy calendar/iCal subscription URL.
+2. Either open `.env` and set `DEPUTY_ICAL_URL` to your Deputy calendar/iCal subscription URL, or paste the URL into Settings after the app starts.
 
-   Keep this URL private. It can grant access to your roster feed. Do not commit `.env`, paste it into logs, or share screenshots that reveal it.
+   Keep this URL private. It can grant access to your roster feed. Do not commit `.env`, paste it into logs, or share screenshots that reveal it. If you expose the app through a tunnel, set `APP_PASSWORD`.
 
 3. Optional: set `APP_PASSWORD` if you want HTTP Basic password protection.
 
@@ -30,7 +30,7 @@ The app is read-only against Deputy. It never writes back to Deputy.
 
 ## Getting The Deputy Calendar URL
 
-In Deputy, look for the calendar subscription/export option for your roster. Copy the iCal/calendar feed URL and place it only in `.env` as `DEPUTY_ICAL_URL`.
+In Deputy, look for the calendar subscription/export option for your roster. Copy the iCal/calendar feed URL and paste it into the app's Settings page or place it only in `.env` as `DEPUTY_ICAL_URL`.
 
 If the URL has previously been pasted into chat, logs, or another shared place, regenerate or reset it in Deputy if Deputy provides that option.
 
@@ -56,7 +56,7 @@ If you changed `APP_PORT`, use that port instead.
 
 ## Portainer
 
-In Portainer, create a stack from this repository. Add the same environment values from `.env`, especially `DEPUTY_ICAL_URL`. Set `APP_PORT` to whichever host port you want exposed. The app stores its SQLite database in the bind-mounted `./data` directory.
+In Portainer, create a stack from this repository. Set `APP_PORT` to whichever host port you want exposed. You can provide `DEPUTY_ICAL_URL` as an environment variable, or leave it blank and paste the URL into Settings once the app is running. The app stores its SQLite database in the bind-mounted `./data` directory.
 
 ## Syncing
 
@@ -66,6 +66,10 @@ In Portainer, create a stack from this repository. Add the same environment valu
 - Use the Sync Now button in the app to trigger a manual sync.
 
 The app redacts calendar details by design and does not display the configured calendar URL.
+
+## Navigation
+
+On the month page, swipe left or right on a phone to move between months. On desktop, use `M` for month view, `L` for list view, `N` for next month, and `P` for previous month.
 
 ## Hours
 

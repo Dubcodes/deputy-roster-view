@@ -19,6 +19,8 @@ from .database import (
     clear_changed_for_date,
     clear_changed_for_shift,
     get_app_settings,
+    get_calendar_url,
+    get_calendar_url_source,
     get_shift_changes_for_date,
     fetch_shift,
     fetch_shifts_between,
@@ -75,6 +77,10 @@ TRACK_NAMES = {
 RACE_TYPES = {
     "T": "Thoroughbred racing",
     "H": "Harness racing",
+}
+ROLE_NAMES = {
+    "DIR": "Director",
+    "SVT": "Sound VT",
 }
 DEFAULT_RACE_TYPE_BY_CODE = {
     "CAM": "H",
@@ -195,6 +201,7 @@ def parse_shift_title(title: str | None) -> dict[str, str]:
             "source_code": "",
             "track_label": title or "Shift",
             "role_label": "",
+            "role_full_label": title or "Shift",
             "race_type_label": "",
             "display_title": title or "Shift",
         }
@@ -206,6 +213,7 @@ def parse_shift_title(title: str | None) -> dict[str, str]:
             "source_code": source_code,
             "track_label": "Vehicles",
             "role_label": "Maintenance",
+            "role_full_label": "Maintenance",
             "race_type_label": "",
             "display_title": "Vehicle maintenance",
         }
@@ -232,6 +240,7 @@ def parse_shift_title(title: str | None) -> dict[str, str]:
         "source_code": source_code,
         "track_label": track_label,
         "role_label": role_label,
+        "role_full_label": ROLE_NAMES.get(role_label.upper(), role_label or "Shift"),
         "race_type_label": race_type_label,
         "display_title": f"{role_label} at {track_label}" if role_label else track_label,
     }
@@ -512,12 +521,15 @@ def settings_view(request: Request, notice: str | None = None) -> object:
     now = datetime.now(settings.timezone).replace(microsecond=0)
     next_shift = get_next_upcoming_shift(now.isoformat())
     pre_shift = get_pre_shift_status(settings)
+    calendar_url = get_calendar_url(settings)
     return templates.TemplateResponse(
         "settings.html",
         {
             "request": request,
             "notice": notice,
             "settings": settings,
+            "calendar_url_configured": bool(calendar_url),
+            "calendar_url_source": get_calendar_url_source(settings),
             "last_successful_sync": get_last_successful_sync(),
             "next_shift": decorate_shift(next_shift) if next_shift else None,
             "pre_shift": pre_shift,
@@ -528,6 +540,35 @@ def settings_view(request: Request, notice: str | None = None) -> object:
                 for row in get_recent_source_payloads()
             ],
         },
+    )
+
+
+@app.post("/settings/calendar")
+async def save_calendar_settings(request: Request) -> RedirectResponse:
+    form = await request.form()
+    if form.get("clear_calendar_url"):
+        update_app_settings({"deputy_ical_url": ""})
+        return RedirectResponse(
+            url=notice_url("/settings", "Saved calendar URL cleared."),
+            status_code=303,
+        )
+
+    calendar_url = str(form.get("deputy_ical_url") or "").strip()
+    if not calendar_url:
+        return RedirectResponse(
+            url=notice_url("/settings", "Paste a calendar URL before saving."),
+            status_code=303,
+        )
+    if not calendar_url.startswith(("http://", "https://")):
+        return RedirectResponse(
+            url=notice_url("/settings", "Calendar URL must start with http:// or https://."),
+            status_code=303,
+        )
+
+    update_app_settings({"deputy_ical_url": calendar_url})
+    return RedirectResponse(
+        url=notice_url("/settings", "Calendar URL saved. Use Sync Now to refresh the roster."),
+        status_code=303,
     )
 
 

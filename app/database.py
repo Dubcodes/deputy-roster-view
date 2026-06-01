@@ -283,11 +283,39 @@ def get_recent_source_payloads(limit: int = 6) -> list[sqlite3.Row]:
 def get_app_settings() -> dict[str, str]:
     defaults = {
         "show_source_data": "0",
+        "deputy_ical_url": "",
     }
     with get_connection() as conn:
         rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
     values = {row["key"]: row["value"] for row in rows}
     return {**defaults, **values}
+
+
+def get_app_setting(key: str, default: str = "") -> str:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?",
+            (key,),
+        ).fetchone()
+    if row is None:
+        return default
+    return str(row["value"] or "")
+
+
+def get_calendar_url(settings: Settings | None = None) -> str:
+    settings = settings or get_settings()
+    saved_url = get_app_setting("deputy_ical_url", "").strip()
+    return saved_url or settings.deputy_ical_url.strip()
+
+
+def get_calendar_url_source(settings: Settings | None = None) -> str:
+    settings = settings or get_settings()
+    saved_url = get_app_setting("deputy_ical_url", "").strip()
+    if saved_url:
+        return "Saved in Settings"
+    if settings.deputy_ical_url.strip():
+        return "Docker/env"
+    return "Missing"
 
 
 def update_app_settings(values: dict[str, str]) -> None:

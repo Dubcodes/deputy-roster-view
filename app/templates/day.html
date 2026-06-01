@@ -23,7 +23,7 @@
         <div class="detail-card-heading">
           <div>
             <p class="eyebrow">{{ shift.time_range }}</p>
-            <h2>{{ shift.role_label or shift.title or "Shift" }}</h2>
+            <h2>{{ shift.role_full_label or shift.role_label or shift.title or "Shift" }}</h2>
             <p class="detail-subtitle">
               {{ shift.track_label }}
               {% if shift.race_type_label %} · {{ shift.race_type_label }}{% endif %}
@@ -56,7 +56,7 @@
           </div>
           <div>
             <span>Role</span>
-            <strong>{{ shift.role_label or "Shift" }}</strong>
+            <strong>{{ shift.role_full_label or shift.role_label or "Shift" }}</strong>
           </div>
           <div>
             <span>Type</span>

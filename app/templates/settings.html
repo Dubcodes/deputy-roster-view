@@ -16,7 +16,8 @@
   <section class="settings-grid">
     <article class="settings-panel">
       <span class="summary-label">Calendar URL</span>
-      <strong>{{ "Configured" if settings.calendar_configured else "Missing" }}</strong>
+      <strong>{{ "Configured" if calendar_url_configured else "Missing" }}</strong>
+      <p>{{ calendar_url_source }}</p>
     </article>
     <article class="settings-panel">
       <span class="summary-label">Timezone</span>
@@ -37,7 +38,7 @@
       <span class="summary-label">Next shift</span>
       {% if next_shift %}
         <strong>{{ next_shift.start_at|datetime }}</strong>
-        <p>{{ next_shift.title or "Shift" }}{% if next_shift.location %}, {{ next_shift.location }}{% endif %}</p>
+        <p>{{ next_shift.role_full_label or next_shift.role_label or "Shift" }} at {{ next_shift.track_label }}{% if next_shift.race_type_label %}, {{ next_shift.race_type_label }}{% endif %}</p>
       {% else %}
         <strong>None listed</strong>
       {% endif %}
@@ -56,6 +57,23 @@
   </section>
 
   <section class="settings-grid settings-grid-wide">
+    <article class="settings-panel">
+      <div class="section-heading">
+        <h2>Calendar Feed</h2>
+      </div>
+      <form class="settings-form" action="/settings/calendar" method="post">
+        <label class="form-row">
+          <span>Deputy iCal URL</span>
+          <input type="password" name="deputy_ical_url" placeholder="Paste a new calendar URL" autocomplete="off">
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" name="clear_calendar_url">
+          <span>Clear saved URL</span>
+        </label>
+        <button class="button" type="submit">Save Calendar URL</button>
+      </form>
+    </article>
+
     <article class="settings-panel">
       <div class="section-heading">
         <h2>Display</h2>
@@ -95,7 +113,7 @@
         <div class="source-list">
           {% for shift in source_payload_shifts %}
             <details class="source-panel">
-              <summary>{{ shift.start_at|datetime }} · {{ shift.track_label }} · {{ shift.role_label or shift.title or "Shift" }}</summary>
+              <summary>{{ shift.start_at|datetime }} · {{ shift.track_label }} · {{ shift.role_full_label or shift.role_label or shift.title or "Shift" }}</summary>
               <pre>{{ shift.source_payload_pretty }}</pre>
             </details>
           {% endfor %}
