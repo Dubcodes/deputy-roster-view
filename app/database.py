@@ -286,6 +286,25 @@ def get_next_upcoming_shift(now_iso: str) -> sqlite3.Row | None:
     return row
 
 
+def get_upcoming_shifts(now_iso: str, limit: int = 5) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT s.*, m.checked, m.confirmed, m.important, m.question,
+                   m.early_start, m.gear_needed, m.travel_needed, m.pay_check,
+                   m.private_note, m.custom_colour, m.updated_at AS marks_updated_at
+            FROM shifts s
+            LEFT JOIN shift_marks m ON m.shift_id = s.id
+            WHERE s.deleted_from_source = 0
+              AND s.start_at >= ?
+            ORDER BY s.start_at ASC
+            LIMIT ?
+            """,
+            (now_iso, limit),
+        ).fetchall()
+    return rows
+
+
 def write_sync_log(summary: dict[str, object]) -> None:
     with get_connection() as conn:
         conn.execute(

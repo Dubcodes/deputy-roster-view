@@ -25,6 +25,7 @@ from .database import (
     get_last_successful_sync,
     get_next_upcoming_shift,
     get_recent_sync_logs,
+    get_upcoming_shifts,
     init_db,
     update_app_settings,
     update_shift_marks,
@@ -88,6 +89,10 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
 def format_datetime(value: str | None, fmt: str = "%a %d %b %H:%M") -> str:
     dt = parse_iso_datetime(value)
     return dt.strftime(fmt) if dt else ""
+
+
+def format_day_short(value: str | None) -> str:
+    return format_datetime(value, "%a %d %b")
 
 
 def format_time(value: str | None) -> str:
@@ -220,10 +225,12 @@ def month_view(
     request: Request,
     year: int | None = None,
     month: int | None = None,
+    view: str = "month",
     notice: str | None = None,
 ) -> object:
     settings = get_settings()
     today = datetime.now(settings.timezone).date()
+    view = "list" if view == "list" else "month"
     year = year or today.year
     month = month or today.month
     if month < 1 or month > 12:
@@ -240,6 +247,7 @@ def month_view(
         shifts_by_date.setdefault(row["date"], []).append(decorate_shift(row))
 
     weeks = []
+    active_days = []
     month_total = 0.0
     for week in month_weeks:
         days = []
@@ -265,6 +273,15 @@ def month_view(
                     "total": day_total,
                 }
             )
+            if day_item.month == month and day_shifts:
+                active_days.append(
+                    {
+                        "date": day_item,
+                        "iso": day_item.isoformat(),
+                        "shifts": day_shifts,
+                        "total": day_total,
+                    }
+                )
         weeks.append({"days": days, "total": week_total})
 
     prev_year, prev_month = add_months(year, month, -1)
@@ -277,10 +294,18 @@ def month_view(
             "request": request,
             "notice": notice,
             "header_context": first_day.strftime("%B %Y"),
-            "header_prev_url": f"/month?year={prev_year}&month={prev_month}",
-            "header_next_url": f"/month?year={next_year}&month={next_month}",
+            "header_prev_url": f"/month?year={prev_year}&month={prev_month}&view={view}",
+            "header_next_url": f"/month?year={next_year}&month={next_month}&view={view}",
             "settings": settings,
             "weeks": weeks,
+            "active_days": active_days,
+            "upcoming_shifts": [
+                decorate_shift(row)
+                for row in get_upcoming_shifts(
+                    datetime.now(settings.timezone).replace(microsecond=0).isoformat(),
+                    limit=5,
+                )
+            ],
             "weekdays": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
             "month_name": first_day.strftime("%B %Y"),
             "month_total": month_total,
@@ -289,6 +314,9 @@ def month_view(
             "next_year": next_year,
             "next_month": next_month,
             "today": today,
+            "view": view,
+            "month_view_url": f"/month?year={year}&month={month}&view=month",
+            "list_view_url": f"/month?year={year}&month={month}&view=list",
         },
     )
 
@@ -432,4 +460,5 @@ def sync_now() -> RedirectResponse:
 
 templates.env.filters["datetime"] = format_datetime
 templates.env.filters["time"] = format_time
+templates.env.filters["day_short"] = format_day_short
 templates.env.filters["hours"] = format_hours

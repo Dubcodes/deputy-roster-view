@@ -216,6 +216,42 @@ a {
   font-size: 1.3rem;
 }
 
+.month-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin: -8px 0 10px;
+}
+
+.view-toggle {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(56px, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.view-toggle a {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 850;
+  text-decoration: none;
+}
+
+.view-toggle a + a {
+  border-left: 1px solid var(--line);
+}
+
+.view-toggle .is-active {
+  background: var(--accent);
+  color: #07120f;
+}
+
 .calendar-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(130px, 1fr)) minmax(95px, 0.55fr);
@@ -323,6 +359,12 @@ a {
   font-weight: 850;
 }
 
+.shift-mini {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
 .shift-meta {
   color: var(--muted);
   font-size: 0.8rem;
@@ -383,6 +425,104 @@ a {
 .week-total strong {
   color: var(--text);
   font-size: 1.15rem;
+}
+
+.roster-list {
+  display: grid;
+  gap: 10px;
+}
+
+.list-day {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 10px;
+}
+
+.today-list-day {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.list-day-date {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  border-right: 1px solid var(--line);
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.list-day-date strong {
+  font-size: 0.82rem;
+}
+
+.list-day-date span {
+  color: var(--text);
+  font-size: 1.6rem;
+  font-weight: 950;
+}
+
+.list-day-shifts {
+  display: grid;
+  gap: 8px;
+}
+
+.list-shift {
+  display: grid;
+  gap: 2px;
+  padding: 9px;
+  border: 1px solid #2e5160;
+  border-left: 5px solid var(--shift-colour);
+  border-radius: 8px;
+  background: #14252a;
+  text-decoration: none;
+}
+
+.list-shift strong {
+  font-size: 1.05rem;
+}
+
+.list-shift span {
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.upcoming-strip {
+  margin-top: 16px;
+}
+
+.upcoming-list {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.upcoming-card {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #2e5160;
+  border-left: 5px solid var(--shift-colour);
+  border-radius: 8px;
+  background: var(--surface);
+  text-decoration: none;
+}
+
+.upcoming-card span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.upcoming-card strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .detail-list {
@@ -704,6 +844,10 @@ th {
     grid-template-columns: repeat(7, minmax(105px, 1fr)) minmax(80px, 0.45fr);
   }
 
+  .upcoming-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .detail-grid,
   .shift-facts,
   .settings-grid {
@@ -744,6 +888,11 @@ th {
     justify-content: flex-start;
   }
 
+  .month-tools {
+    justify-content: flex-end;
+    margin-top: -12px;
+  }
+
   .summary-strip,
   .settings-grid,
   .settings-grid-wide,
@@ -765,30 +914,84 @@ th {
 
   .calendar-grid {
     display: grid;
-    grid-template-columns: 1fr;
-    border: 0;
-    gap: 10px;
-    overflow: visible;
-    background: transparent;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 1px;
+    border: 1px solid var(--line);
+    overflow: hidden;
+    background: var(--line);
   }
 
   .weekday {
+    display: block;
+    padding: 6px 2px;
+    font-size: 0.62rem;
+    text-align: center;
+  }
+
+  .weekday-total,
+  .week-total {
     display: none;
   }
 
-  .day-cell,
-  .week-total {
-    min-height: auto;
-    border: 1px solid var(--line);
-    border-radius: 8px;
+  .day-cell {
+    min-height: 72px;
+    padding: 4px;
+    border: 0;
+    border-radius: 0;
   }
 
   .outside-month {
+    display: block;
+    opacity: 0.44;
+  }
+
+  .day-link {
+    margin-bottom: 3px;
+  }
+
+  .day-link span {
     display: none;
   }
 
-  .week-total {
-    align-items: flex-start;
-    text-align: left;
+  .day-link strong {
+    font-size: 0.78rem;
+  }
+
+  .shift-list {
+    gap: 3px;
+  }
+
+  .shift-card {
+    padding: 4px;
+    border-left-width: 3px;
+    border-radius: 5px;
+  }
+
+  .shift-track {
+    font-size: 0.68rem;
+    line-height: 1.05;
+  }
+
+  .shift-mini {
+    font-size: 0.6rem;
+    line-height: 1.1;
+  }
+
+  .shift-meta,
+  .badge-row {
+    display: none;
+  }
+
+  .roster-list {
+    gap: 8px;
+  }
+
+  .list-day {
+    grid-template-columns: 48px 1fr;
+    padding: 8px;
+  }
+
+  .upcoming-list {
+    grid-template-columns: 1fr;
   }
 }
