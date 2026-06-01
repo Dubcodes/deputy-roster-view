@@ -2,7 +2,7 @@ services:
   deputy-roster-view:
     build: .
     ports:
-      - "8096:8000"
+      - "${APP_PORT:-8096}:8000"
     volumes:
       - ./data:/app/data
     environment:

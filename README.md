@@ -22,6 +22,12 @@ The app is read-only against Deputy. It never writes back to Deputy.
    APP_PASSWORD=your-private-password
    ```
 
+4. Optional: set `APP_PORT` if port `8096` conflicts with another service.
+
+   ```env
+   APP_PORT=8123
+   ```
+
 ## Getting The Deputy Calendar URL
 
 In Deputy, look for the calendar subscription/export option for your roster. Copy the iCal/calendar feed URL and place it only in `.env` as `DEPUTY_ICAL_URL`.
@@ -46,9 +52,11 @@ On another machine, use:
 http://SERVER-IP:8096
 ```
 
+If you changed `APP_PORT`, use that port instead.
+
 ## Portainer
 
-In Portainer, create a stack from this repository or paste `docker-compose.yml`. Add the same environment values from `.env`, especially `DEPUTY_ICAL_URL`. The app stores its SQLite database in the bind-mounted `./data` directory.
+In Portainer, create a stack from this repository. Add the same environment values from `.env`, especially `DEPUTY_ICAL_URL`. Set `APP_PORT` to whichever host port you want exposed. The app stores its SQLite database in the bind-mounted `./data` directory.
 
 ## Syncing
 
