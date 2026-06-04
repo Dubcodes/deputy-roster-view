@@ -55,8 +55,8 @@ SUMMARY_RE = re.compile(r"^\[([^\]]+)\]\s*(.*)$")
 TRACK_NAMES = {
     "CAM": "Cambridge",
     "CAMBRIDGE": "Cambridge",
-    "CAMS": "Cambridge",
-    "CAMS-T": "Cambridge",
+    "CAMS": "Cambridge Synthetic",
+    "CAMS-T": "Cambridge Synthetic",
     "ELLE": "Ellerslie",
     "ELLE-T": "Ellerslie",
     "MATA": "Matamata",
@@ -171,6 +171,9 @@ def description_lines(description: str) -> list[str]:
     lines = []
     for line in (description or "").splitlines():
         clean_line = line.strip()
+        if not clean_line:
+            continue
+        clean_line = re.split(r"(?i)\bbreaks:\s*", clean_line)[0].strip()
         if not clean_line:
             continue
         lower_line = clean_line.lower()
@@ -301,7 +304,94 @@ def decorate_shift(row: object) -> dict[str, object]:
             timing_notes.append(f"Finished/back at office {timing_time}")
     shift["timing_adjustment_time"] = timing_time
     shift["timing_adjustment_labels"] = timing_notes
+    shift["combined_shift_ids"] = [int(shift["id"])]
     return shift
+
+
+def unique_description_lines(*line_groups: list[str]) -> list[str]:
+    seen = set()
+    lines = []
+    for group in line_groups:
+        for line in group:
+            key = re.sub(r"\s+", " ", line.strip()).lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            lines.append(line)
+    return lines
+
+
+def role_is_vehicleish(role_label: str | None) -> bool:
+    return bool(re.fullmatch(r"\d{3,4}", (role_label or "").strip()))
+
+
+def choose_primary_shift(left: dict[str, object], right: dict[str, object]) -> dict[str, object]:
+    left_role = str(left.get("role_label") or "")
+    right_role = str(right.get("role_label") or "")
+    if role_is_vehicleish(left_role) and not role_is_vehicleish(right_role):
+        return right
+    if role_is_vehicleish(right_role) and not role_is_vehicleish(left_role):
+        return left
+    return right if float(right.get("raw_hours") or 0) >= float(left.get("raw_hours") or 0) else left
+
+
+def can_merge_shift(left: dict[str, object], right: dict[str, object]) -> bool:
+    if int(left.get("deleted_from_source") or 0) or int(right.get("deleted_from_source") or 0):
+        return False
+    left_end = parse_iso_datetime(str(left.get("end_at") or ""))
+    right_start = parse_iso_datetime(str(right.get("start_at") or ""))
+    if not left_end or not right_start or left_end != right_start:
+        return False
+    return (
+        left.get("date") == right.get("date")
+        and left.get("track_label") == right.get("track_label")
+        and left.get("location") == right.get("location")
+        and left.get("race_type_label") == right.get("race_type_label")
+    )
+
+
+def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[str, object]:
+    primary = choose_primary_shift(left, right)
+    merged = dict(primary)
+    start_at = parse_iso_datetime(str(left.get("start_at") or ""))
+    end_at = parse_iso_datetime(str(right.get("end_at") or ""))
+    if start_at and end_at:
+        raw_hours = round((end_at - start_at).total_seconds() / 3600, 2)
+        break_minutes = int(left.get("break_minutes") or 0) + int(right.get("break_minutes") or 0)
+        paid_hours = max(0.0, round(raw_hours - (break_minutes / 60), 2))
+        merged.update(
+            {
+                "start_at": start_at.isoformat(),
+                "end_at": end_at.isoformat(),
+                "start_label": start_at.strftime("%H:%M"),
+                "end_label": end_at.strftime("%H:%M"),
+                "time_range": f"{start_at.strftime('%H:%M')}-{end_at.strftime('%H:%M')}",
+                "raw_hours": raw_hours,
+                "paid_hours": paid_hours,
+                "raw_label": format_hours(raw_hours),
+                "paid_label": format_hours(paid_hours),
+                "break_minutes": break_minutes,
+            }
+        )
+    merged["description_lines"] = unique_description_lines(
+        list(left.get("description_lines") or []),
+        list(right.get("description_lines") or []),
+    )
+    merged["changed_since_viewed"] = int(left.get("changed_since_viewed") or 0) or int(right.get("changed_since_viewed") or 0)
+    merged["combined_shift_ids"] = list(left.get("combined_shift_ids") or [left["id"]]) + list(
+        right.get("combined_shift_ids") or [right["id"]]
+    )
+    return merged
+
+
+def combine_adjacent_shifts(shifts: list[dict[str, object]]) -> list[dict[str, object]]:
+    combined: list[dict[str, object]] = []
+    for shift in sorted(shifts, key=lambda item: (str(item.get("start_at") or ""), int(item.get("id") or 0))):
+        if combined and can_merge_shift(combined[-1], shift):
+            combined[-1] = merge_shift_pair(combined[-1], shift)
+        else:
+            combined.append(shift)
+    return combined
 
 
 def notice_url(path: str, message: str) -> str:
@@ -352,6 +442,8 @@ def month_view(
     shifts_by_date: dict[str, list[dict[str, object]]] = {}
     for row in rows:
         shifts_by_date.setdefault(row["date"], []).append(decorate_shift(row))
+    for date_key, day_shifts in list(shifts_by_date.items()):
+        shifts_by_date[date_key] = combine_adjacent_shifts(day_shifts)
 
     weeks = []
     active_days = []
@@ -394,6 +486,10 @@ def month_view(
     prev_year, prev_month = add_months(year, month, -1)
     next_year, next_month = add_months(year, month, 1)
     first_day = date(year, month, 1)
+    now_iso = datetime.now(settings.timezone).replace(microsecond=0).isoformat()
+    upcoming_shifts = combine_adjacent_shifts(
+        [decorate_shift(row) for row in get_upcoming_shifts(now_iso, limit=10)]
+    )[:5]
 
     return templates.TemplateResponse(
         "month.html",
@@ -406,13 +502,7 @@ def month_view(
             "settings": settings,
             "weeks": weeks,
             "active_days": active_days,
-            "upcoming_shifts": [
-                decorate_shift(row)
-                for row in get_upcoming_shifts(
-                    datetime.now(settings.timezone).replace(microsecond=0).isoformat(),
-                    limit=5,
-                )
-            ],
+            "upcoming_shifts": upcoming_shifts,
             "weekdays": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
             "month_name": first_day.strftime("%B %Y"),
             "month_total": month_total,
@@ -435,13 +525,18 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Invalid date") from exc
 
-    shifts = [decorate_shift(row) for row in fetch_shifts_for_date(date_text)]
+    shifts = combine_adjacent_shifts([decorate_shift(row) for row in fetch_shifts_for_date(date_text)])
     changes_by_shift: dict[int, list[dict[str, object]]] = {}
     for row in get_shift_changes_for_date(date_text):
         change = decorate_change(row)
         changes_by_shift.setdefault(int(change["shift_id"]), []).append(change)
     for shift in shifts:
-        shift["changes"] = changes_by_shift.get(int(shift["id"]), [])
+        combined_ids = [int(shift_id) for shift_id in shift.get("combined_shift_ids", [shift["id"]])]
+        shift["changes"] = [
+            change
+            for shift_id in combined_ids
+            for change in changes_by_shift.get(shift_id, [])
+        ]
     display_settings = get_app_settings()
     day_total = sum(
         float(shift.get("paid_hours") or 0)
@@ -530,6 +625,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
         {
             "request": request,
             "notice": notice,
+            "header_mode": "settings",
             "settings": settings,
             "calendar_url_configured": bool(calendar_url),
             "calendar_url_source": get_calendar_url_source(settings),

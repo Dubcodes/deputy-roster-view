@@ -4,19 +4,14 @@
 
 {% block content %}
   <div
-    class="month-tools"
     data-roster-nav
     data-prev-url="{{ header_prev_url }}"
     data-next-url="{{ header_next_url }}"
     data-month-url="{{ month_view_url }}"
     data-list-url="{{ list_view_url }}"
     data-sync-url="/sync-now?next={{ request.url.path }}{% if request.url.query %}%3F{{ request.url.query|urlencode }}{% endif %}"
-  >
-    <div class="view-toggle" aria-label="Roster view">
-      <a class="{% if view == 'month' %}is-active{% endif %}" href="{{ month_view_url }}">Month</a>
-      <a class="{% if view == 'list' %}is-active{% endif %}" href="{{ list_view_url }}">List</a>
-    </div>
-  </div>
+    hidden
+  ></div>
 
   {% if view == "list" %}
     <section class="roster-list" aria-label="Roster list">

@@ -48,11 +48,13 @@ a {
 }
 
 .brand {
+  grid-column: 1;
   font-weight: 800;
   text-decoration: none;
 }
 
 .month-nav {
+  grid-column: 2;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -81,7 +83,27 @@ a {
   text-decoration: none;
 }
 
+.icon-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.icon-button.is-active {
+  background: var(--accent);
+  color: #07120f;
+}
+
+.nav-symbol {
+  display: none;
+}
+
 .site-nav {
+  grid-column: 3;
   display: flex;
   align-items: center;
   justify-self: end;
@@ -93,6 +115,25 @@ a {
   color: var(--muted);
   font-weight: 700;
   text-decoration: none;
+}
+
+.site-nav .icon-button {
+  min-width: 36px;
+  padding: 6px 8px;
+  color: var(--accent);
+}
+
+.site-nav .icon-button.is-active {
+  color: #07120f;
+}
+
+.header-view-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
 }
 
 .site-nav form,
@@ -988,34 +1029,81 @@ th {
 
 @media (max-width: 760px) {
   .site-header {
-    display: flex;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 6px;
+    padding: 8px 6px;
   }
 
-  .site-header,
   .page-heading,
   .detail-card-heading {
     align-items: stretch;
     flex-direction: column;
   }
 
+  .brand {
+    max-width: 78px;
+    align-self: center;
+    font-size: 0.72rem;
+    line-height: 1.05;
+  }
+
   .month-nav {
-    justify-content: flex-start;
+    justify-content: center;
+    gap: 4px;
   }
 
   .month-nav strong {
     min-width: 0;
     flex: 1;
-    text-align: left;
+    font-size: 1rem;
+    line-height: 1.05;
+    text-align: center;
   }
 
-  .site-nav,
+  .icon-button {
+    min-height: 30px;
+    padding: 4px 7px;
+    border-radius: 7px;
+    font-size: 0.78rem;
+  }
+
+  .site-nav .icon-button {
+    min-width: 30px;
+  }
+
+  .icon-button svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .nav-label {
+    display: none;
+  }
+
+  .nav-symbol {
+    display: inline;
+    font-size: 1rem;
+    line-height: 1;
+  }
+
+  .site-nav {
+    justify-content: flex-end;
+    gap: 4px;
+    flex-wrap: nowrap;
+  }
+
   .heading-actions {
     justify-content: flex-start;
   }
 
-  .month-tools {
-    justify-content: flex-end;
-    margin-top: -12px;
+  .header-view-toggle {
+    gap: 2px;
+    padding: 1px;
+    border-radius: 7px;
+  }
+
+  .page-shell {
+    padding: 10px 4px 32px;
   }
 
   .summary-strip,
