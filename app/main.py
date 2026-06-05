@@ -84,6 +84,7 @@ RACE_TYPES = {
 }
 ROLE_NAMES = {
     "DIR": "Director",
+    "SOUND": "Sound",
     "SVT": "Sound VT",
 }
 DEFAULT_RACE_TYPE_BY_CODE = {
@@ -607,7 +608,12 @@ def combine_adjacent_shifts(shifts: list[dict[str, object]]) -> list[dict[str, o
 
 def display_schedule_area(value: str | None) -> str:
     value = (value or "").strip()
-    return ROLE_NAMES.get(value.upper(), value or "Role")
+    match = re.match(r"^(.+?)([TH])-[A-Za-z].*$", value, flags=re.IGNORECASE)
+    if match and match.group(1).strip():
+        value = match.group(1).strip()
+    value = re.sub(r"\s+", " ", value)
+    compact_key = re.sub(r"\s+", "", value.upper())
+    return ROLE_NAMES.get(compact_key, ROLE_NAMES.get(value.upper(), value or "Role"))
 
 
 def decorate_schedule_row(row: object) -> dict[str, object]:
