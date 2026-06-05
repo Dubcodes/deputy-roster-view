@@ -15,14 +15,14 @@ SECRET_KEY_RE = re.compile(
     re.IGNORECASE,
 )
 URL_SECRET_RE = re.compile(r"([?&][A-Za-z0-9_%-]*(?:token|key|secret|session|ap|auth)[A-Za-z0-9_%-]*=)[^&\s\"']+", re.IGNORECASE)
-INTERESTING_URL_RE = re.compile(
-    r"/api/(?:management/v2/(?:shifts|timesheets|employee|areas|locations)|v1/(?:my/notification|resource/.*/QUERY))",
-    re.IGNORECASE,
-)
+INTERESTING_URL_RE = re.compile(r"/api/", re.IGNORECASE)
+EMAIL_VALUE_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+PHONE_VALUE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{6,}\d)(?!\w)")
 MAX_CAPTURED_RESPONSES = 48
 MAX_SAMPLE_DEPTH = 4
 MAX_SAMPLE_LIST_ITEMS = 6
 MAX_SAMPLE_TEXT = 500
+MAX_VISIBLE_TEXT = 7000
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,17 @@ class DeputyWebCaptureResult:
 
 def redacted_text(value: str) -> str:
     return URL_SECRET_RE.sub(r"\1[redacted]", value)
+
+
+def _safe_visible_text(value: str) -> str:
+    cleaned = redacted_text(value)
+    cleaned = EMAIL_VALUE_RE.sub("[redacted email]", cleaned)
+    cleaned = PHONE_VALUE_RE.sub("[redacted phone]", cleaned)
+    lines = [re.sub(r"\s+", " ", line).strip() for line in cleaned.splitlines()]
+    cleaned = "\n".join(line for line in lines if line)
+    if len(cleaned) > MAX_VISIBLE_TEXT:
+        return cleaned[:MAX_VISIBLE_TEXT].rstrip() + "\n..."
+    return cleaned
 
 
 def _clean_url(value: str) -> str:
@@ -177,6 +188,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     captured: list[dict[str, Any]] = []
     extracted_shifts_by_id: dict[str, dict[str, Any]] = {}
     events: list[str] = []
+    page_texts: list[dict[str, Any]] = []
 
     try:
         async with async_playwright() as playwright:
@@ -192,6 +204,15 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     ),
                 )
                 page = await context.new_page()
+
+                async def capture_page_text(label: str) -> None:
+                    try:
+                        text = await page.locator("body").inner_text(timeout=8_000)
+                    except Exception:
+                        return
+                    cleaned = _safe_visible_text(text)
+                    if cleaned:
+                        page_texts.append({"label": label, "length": len(text), "text": cleaned})
 
                 async def capture_response(response: Any) -> None:
                     if len(captured) >= MAX_CAPTURED_RESPONSES:
@@ -245,6 +266,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     await page.wait_for_load_state("networkidle", timeout=35_000)
                 except PlaywrightTimeoutError:
                     events.append("Deputy web app kept loading; using captured responses so far.")
+                await capture_page_text("Deputy web app")
 
                 roster_url = _roster_url(settings)
                 if roster_url:
@@ -254,6 +276,8 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         await page.wait_for_load_state("networkidle", timeout=35_000)
                     except PlaywrightTimeoutError:
                         events.append("Deputy roster page kept loading; using captured responses so far.")
+                    await page.wait_for_timeout(4_000)
+                    await capture_page_text("Deputy roster page")
 
                 probe_url = _week_shift_probe_url(settings)
                 if probe_url:
@@ -308,6 +332,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
         "status": "ok" if captured else "empty",
         "events": events,
         "responses": captured,
+        "page_texts": page_texts,
         "extracted_shifts": sorted(
             extracted_shifts_by_id.values(),
             key=lambda item: (str(item.get("start") or ""), str(item.get("id") or "")),
@@ -341,6 +366,8 @@ def format_capture_payload(value: str) -> dict[str, Any] | None:
         payload["responses"] = []
     if not isinstance(payload.get("extracted_shifts"), list):
         payload["extracted_shifts"] = []
+    if not isinstance(payload.get("page_texts"), list):
+        payload["page_texts"] = []
     payload["captured_at"] = str(payload.get("captured_at") or "")
     payload["status"] = str(payload.get("status") or "unknown")
     for response in payload["responses"]:

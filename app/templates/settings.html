@@ -190,6 +190,16 @@
             </ul>
           </div>
         {% endif %}
+        {% if deputy_web_capture.page_texts %}
+          <div class="source-list">
+            {% for page_text in deputy_web_capture.page_texts %}
+              <details class="source-panel">
+                <summary>{{ page_text.label }} text snapshot</summary>
+                <pre class="capture-text">{{ page_text.text }}</pre>
+              </details>
+            {% endfor %}
+          </div>
+        {% endif %}
         {% if deputy_web_capture.responses %}
           <div class="source-list">
             {% for response in deputy_web_capture.responses %}

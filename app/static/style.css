@@ -825,6 +825,15 @@ a {
   word-break: normal;
 }
 
+.timeline-tag {
+  display: inline-flex;
+  margin-right: 6px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
 .compact-list {
   display: grid;
   gap: 8px;
@@ -1010,6 +1019,10 @@ textarea {
   color: #d6dee7;
   font-size: 0.82rem;
   line-height: 1.45;
+}
+
+.capture-text {
+  white-space: pre-wrap;
 }
 
 .diagnostics-panel {

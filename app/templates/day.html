@@ -95,12 +95,15 @@
             <div class="race-day-grid">
               {% if shift.role_segments %}
                 <div class="race-day-block">
-                  <h4>My Positions</h4>
+                  <h4>My Day</h4>
                   <dl class="timeline-list">
                     {% for segment in shift.role_segments %}
                       <div>
                         <dt>{{ segment.time_range }}</dt>
-                        <dd>{{ segment.role }}</dd>
+                        <dd>
+                          <span class="timeline-tag">{{ segment.label }}</span>
+                          {{ segment.role }}
+                        </dd>
                       </div>
                     {% endfor %}
                   </dl>

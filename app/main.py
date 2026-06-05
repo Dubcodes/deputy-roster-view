@@ -120,6 +120,13 @@ TIMING_LABELS = {
     "first race": "First race",
     "last race": "Last race",
 }
+VEHICLE_ROLE_LABELS = {
+    "684",
+    "685",
+    "OB",
+    "TENDER",
+    "RAV91",
+}
 
 
 app = FastAPI(
@@ -420,10 +427,21 @@ def parse_shift_title(title: str | None) -> dict[str, str]:
 def role_chain_label(segments: list[dict[str, str]]) -> str:
     labels = []
     for segment in segments:
+        if segment.get("kind") == "vehicle":
+            continue
         role = segment.get("role") or "Shift"
         if not labels or labels[-1] != role:
             labels.append(role)
+    if not labels:
+        labels = [segment.get("role") or "Shift" for segment in segments]
     return " -> ".join(labels)
+
+
+def role_is_vehicleish(role_label: str | None) -> bool:
+    normalised = re.sub(r"\s+", "", (role_label or "").strip().upper())
+    if not normalised:
+        return False
+    return bool(re.fullmatch(r"\d{3,4}", normalised) or re.fullmatch(r"RAV\d+", normalised) or normalised in VEHICLE_ROLE_LABELS)
 
 
 def format_change_value(field_name: str, value: str | None) -> str:
@@ -467,10 +485,14 @@ def decorate_shift(row: object) -> dict[str, object]:
     shift["raw_label"] = format_hours(shift.get("raw_hours"))
     shift["mark_badges"] = [label for field, label in MARK_FIELDS if int(shift.get(field) or 0)]
     shift.update(parsed_title)
+    role_short = str(shift.get("role_label") or shift.get("role_full_label") or "Shift")
+    is_vehicle = role_is_vehicleish(role_short)
     role_segment = {
         "time_range": shift["time_range"],
-        "role": shift.get("role_full_label") or shift.get("role_label") or "Shift",
-        "role_short": shift.get("role_label") or shift.get("role_full_label") or "Shift",
+        "role": role_short if is_vehicle else shift.get("role_full_label") or role_short,
+        "role_short": role_short,
+        "kind": "vehicle" if is_vehicle else "role",
+        "label": "Vehicle" if is_vehicle else "Role",
         "start_label": shift["start_label"],
         "end_label": shift["end_label"],
     }
@@ -507,10 +529,6 @@ def unique_description_lines(*line_groups: list[str]) -> list[str]:
             seen.add(key)
             lines.append(line)
     return lines
-
-
-def role_is_vehicleish(role_label: str | None) -> bool:
-    return bool(re.fullmatch(r"\d{3,4}", (role_label or "").strip()))
 
 
 def choose_primary_shift(left: dict[str, object], right: dict[str, object]) -> dict[str, object]:
