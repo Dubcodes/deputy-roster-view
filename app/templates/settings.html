@@ -175,6 +175,10 @@
             <span>Responses</span>
             <strong>{{ deputy_web_capture.responses|length }}</strong>
           </div>
+          <div>
+            <span>Shift records</span>
+            <strong>{{ deputy_web_capture.extracted_shifts|length }}</strong>
+          </div>
         </div>
         {% if deputy_web_capture.events %}
           <div class="description-block source-description">

@@ -87,7 +87,60 @@
           {% endif %}
         </div>
 
-        {% if shift.description_lines %}
+        {% if shift.roster_summary.has_structured %}
+          <section class="race-day-panel">
+            <div class="section-heading">
+              <h3>Race Day</h3>
+            </div>
+            <div class="race-day-grid">
+              {% if shift.roster_summary.timings %}
+                <div class="race-day-block">
+                  <h4>Timings</h4>
+                  <dl class="timeline-list">
+                    {% for timing in shift.roster_summary.timings %}
+                      <div>
+                        <dt>{{ timing.time }}</dt>
+                        <dd>{{ timing.label }}</dd>
+                      </div>
+                    {% endfor %}
+                  </dl>
+                </div>
+              {% endif %}
+
+              {% if shift.roster_summary.production_notes %}
+                <div class="race-day-block">
+                  <h4>Production</h4>
+                  <ul class="compact-list">
+                    {% for note in shift.roster_summary.production_notes %}
+                      <li>{{ note }}</li>
+                    {% endfor %}
+                  </ul>
+                </div>
+              {% endif %}
+
+              {% if shift.roster_summary.crew_allocations %}
+                <div class="race-day-block race-day-block-wide">
+                  <h4>Crew / Vehicles</h4>
+                  <dl class="crew-list">
+                    {% for allocation in shift.roster_summary.crew_allocations %}
+                      <div>
+                        <dt>{{ allocation.vehicle }}</dt>
+                        <dd>{{ allocation.people }}</dd>
+                      </div>
+                    {% endfor %}
+                  </dl>
+                </div>
+              {% endif %}
+            </div>
+            {% if shift.roster_summary.other_lines %}
+              <ul class="roster-lines roster-lines-compact">
+                {% for line in shift.roster_summary.other_lines %}
+                  <li>{{ line }}</li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+          </section>
+        {% elif shift.description_lines %}
           <section class="description-block">
             <h3>Roster Notes</h3>
             <ul class="roster-lines">
@@ -98,9 +151,20 @@
           </section>
         {% endif %}
 
+        {% if shift.description_lines and shift.roster_summary.has_structured %}
+          <details class="raw-source">
+            <summary>Raw roster note</summary>
+            <ul class="roster-lines">
+              {% for line in shift.description_lines %}
+                <li>{{ line }}</li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
+
         {% if shift.changes %}
           <details class="change-panel" {% if shift.changed_since_viewed %}open{% endif %}>
-            <summary>What changed</summary>
+            <summary>Change History</summary>
             <div class="change-list">
               {% for change in shift.changes[:12] %}
                 <article class="change-item">

@@ -100,6 +100,21 @@ CHANGE_FIELD_LABELS = {
     "source_status": "Status",
     "deleted_from_source": "Cancelled",
 }
+TIMING_LINE_PATTERNS = (
+    ("Trucks", re.compile(r"^trucks?\s+(.+)$", re.IGNORECASE)),
+    ("Office", re.compile(r"^office\s+(.+)$", re.IGNORECASE)),
+    ("Clow Place", re.compile(r"^clow\s+place\s+(.+)$", re.IGNORECASE)),
+    ("On track", re.compile(r"^on\s+track\s+(.+)$", re.IGNORECASE)),
+    ("First cross", re.compile(r"^first\s+cross\s+(.+)$", re.IGNORECASE)),
+)
+INLINE_TIMING_RE = re.compile(r"\b(first race|last race|first cross)\s+([0-9: ]{3,5}\s*(?:am|pm)?)", re.IGNORECASE)
+RACE_COUNT_RE = re.compile(r"\b(\d+)\s+races?\b", re.IGNORECASE)
+RACE_COUNT_WITH_TIMES_RE = re.compile(
+    r"\b(\d+)\s+races?\s+([0-9: ]{3,5}\s*(?:am|pm)?)\s*[-–]\s*([0-9: ]{3,5}\s*(?:am|pm)?)",
+    re.IGNORECASE,
+)
+CREW_LINE_RE = re.compile(r"^([A-Za-z]{1,8}\d{0,3}|\d{3,4})\s+(.+)$")
+NON_CREW_LABELS = {"office", "trucks", "truck", "clow", "on", "first", "last", "race", "races", "breaks"}
 
 
 app = FastAPI(
@@ -185,6 +200,109 @@ def description_lines(description: str) -> list[str]:
             continue
         lines.append(clean_line)
     return lines
+
+
+def normalise_roster_time(value: str) -> str:
+    cleaned = re.sub(r"\s+", "", value.strip().lower().replace(".", ""))
+    if not cleaned:
+        return value.strip()
+    meridiem = ""
+    if cleaned.endswith(("am", "pm")):
+        meridiem = cleaned[-2:]
+        cleaned = cleaned[:-2]
+
+    hour = ""
+    minute = ""
+    if ":" in cleaned:
+        hour, minute = cleaned.split(":", 1)
+    elif len(cleaned) <= 2:
+        hour, minute = cleaned, "00"
+    elif len(cleaned) == 3:
+        hour, minute = cleaned[:1], cleaned[1:]
+    else:
+        hour, minute = cleaned[:2], cleaned[2:4]
+
+    if not hour.isdigit() or not minute.isdigit():
+        return value.strip()
+    hour_int = int(hour)
+    minute_int = int(minute)
+    if meridiem == "pm" and hour_int < 12:
+        hour_int += 12
+    elif meridiem == "am" and hour_int == 12:
+        hour_int = 0
+    if hour_int > 23 or minute_int > 59:
+        return value.strip()
+    return f"{hour_int:02d}:{minute_int:02d}"
+
+
+def clean_timing_value(value: str) -> str:
+    value = value.strip().rstrip(".,")
+    match = re.search(r"([0-9: ]{2,5}\s*(?:am|pm)?)", value, flags=re.IGNORECASE)
+    return normalise_roster_time(match.group(1)) if match else value
+
+
+def parse_roster_summary(lines: list[str]) -> dict[str, object]:
+    timings: list[dict[str, str]] = []
+    production_notes: list[str] = []
+    crew_allocations: list[dict[str, str]] = []
+    other_lines: list[str] = []
+    consumed: set[int] = set()
+
+    def add_timing(label: str, value: str) -> None:
+        time_value = clean_timing_value(value)
+        if not any(item["label"] == label and item["time"] == time_value for item in timings):
+            timings.append({"label": label, "time": time_value})
+
+    for index, line in enumerate(lines):
+        for label, pattern in TIMING_LINE_PATTERNS:
+            match = pattern.match(line)
+            if match:
+                add_timing(label, match.group(1))
+                consumed.add(index)
+                break
+
+        race_count = RACE_COUNT_RE.search(line)
+        if race_count:
+            note = f"{race_count.group(1)} races"
+            if note not in production_notes:
+                production_notes.append(note)
+            consumed.add(index)
+
+        race_times = RACE_COUNT_WITH_TIMES_RE.search(line)
+        if race_times:
+            add_timing("First race", race_times.group(2))
+            add_timing("Last race", race_times.group(3))
+            consumed.add(index)
+
+        inline_matches = list(INLINE_TIMING_RE.finditer(line))
+        if inline_matches:
+            for match in inline_matches:
+                label = match.group(1).strip().title()
+                add_timing(label, match.group(2))
+            consumed.add(index)
+
+    for index, line in enumerate(lines):
+        if index in consumed:
+            continue
+        crew_match = CREW_LINE_RE.match(line)
+        if crew_match:
+            vehicle = crew_match.group(1).strip()
+            lower_vehicle = vehicle.lower()
+            if lower_vehicle not in NON_CREW_LABELS:
+                crew_allocations.append({"vehicle": vehicle, "people": crew_match.group(2).strip()})
+                consumed.add(index)
+
+    for index, line in enumerate(lines):
+        if index not in consumed:
+            other_lines.append(line)
+
+    return {
+        "timings": timings,
+        "production_notes": production_notes,
+        "crew_allocations": crew_allocations,
+        "other_lines": other_lines,
+        "has_structured": bool(timings or production_notes or crew_allocations),
+    }
 
 
 def pretty_source_payload(value: str | None) -> str:
@@ -340,6 +458,7 @@ def decorate_shift(row: object) -> dict[str, object]:
     shift["source_payload_pretty"] = pretty_source_payload(str(shift.get("source_payload") or ""))
     shift["source_diagnostics"] = source_payload_diagnostics(str(shift.get("source_payload") or ""))
     shift["source_link"] = redact_secret_text(str(shift.get("source_link") or ""))
+    shift["roster_summary"] = parse_roster_summary(list(shift.get("description_lines") or []))
     timing_time = clean_time_value(str(shift.get("timing_adjustment_time") or ""))
     timing_notes = []
     if timing_time:
@@ -422,6 +541,7 @@ def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[
         list(left.get("description_lines") or []),
         list(right.get("description_lines") or []),
     )
+    merged["roster_summary"] = parse_roster_summary(list(merged.get("description_lines") or []))
     merged["changed_since_viewed"] = int(left.get("changed_since_viewed") or 0) or int(right.get("changed_since_viewed") or 0)
     merged["combined_shift_ids"] = list(left.get("combined_shift_ids") or [left["id"]]) + list(
         right.get("combined_shift_ids") or [right["id"]]

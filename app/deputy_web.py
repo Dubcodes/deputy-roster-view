@@ -5,14 +5,21 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .config import Settings
 
 
-SECRET_KEY_RE = re.compile(r"(password|token|secret|session|cookie|auth|bearer|csrf|xsrf)", re.IGNORECASE)
+SECRET_KEY_RE = re.compile(
+    r"(password|token|secret|session|cookie|auth|bearer|csrf|xsrf|email|mobile|phone|pin|photo|pronoun|referral)",
+    re.IGNORECASE,
+)
 URL_SECRET_RE = re.compile(r"([?&][A-Za-z0-9_%-]*(?:token|key|secret|session|ap|auth)[A-Za-z0-9_%-]*=)[^&\s\"']+", re.IGNORECASE)
-MAX_CAPTURED_RESPONSES = 24
+INTERESTING_URL_RE = re.compile(
+    r"/api/(?:management/v2/(?:shifts|timesheets|employee|areas|locations)|v1/(?:my/notification|resource/.*/QUERY))",
+    re.IGNORECASE,
+)
+MAX_CAPTURED_RESPONSES = 48
 MAX_SAMPLE_DEPTH = 4
 MAX_SAMPLE_LIST_ITEMS = 6
 MAX_SAMPLE_TEXT = 500
@@ -31,8 +38,20 @@ def redacted_text(value: str) -> str:
 
 def _clean_url(value: str) -> str:
     parsed = urlsplit(value)
-    path_only = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-    return redacted_text(path_only)
+    query_items = []
+    for key, item in parse_qsl(parsed.query, keep_blank_values=True):
+        if SECRET_KEY_RE.search(key):
+            query_items.append((key, "[redacted]"))
+        else:
+            query_items.append((key, item[:80]))
+    return redacted_text(urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query_items), "")))
+
+
+def _origin_url(settings: Settings) -> str:
+    parsed = urlsplit(settings.deputy_web_url.strip())
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return urlunsplit((parsed.scheme, parsed.netloc, "/", "", ""))
 
 
 def _login_url(settings: Settings) -> str:
@@ -40,6 +59,11 @@ def _login_url(settings: Settings) -> str:
     if not parsed.scheme or not parsed.netloc:
         return ""
     return urlunsplit((parsed.scheme, parsed.netloc, "/login", "noredirectonce=1", ""))
+
+
+def _roster_url(settings: Settings) -> str:
+    origin_url = _origin_url(settings)
+    return f"{origin_url}#roster" if origin_url else ""
 
 
 def _safe_json_sample(value: Any, depth: int = 0) -> Any:
@@ -79,6 +103,31 @@ def _top_level_shape(value: Any) -> dict[str, Any]:
     return {"kind": type(value).__name__}
 
 
+def _extract_management_shifts(data: Any) -> list[dict[str, Any]]:
+    if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+        return []
+    shifts = []
+    for item in data["data"]:
+        if not isinstance(item, dict):
+            continue
+        shifts.append(
+            {
+                "id": item.get("id"),
+                "employee": item.get("employee"),
+                "area": item.get("area"),
+                "start": item.get("start"),
+                "end": item.get("end"),
+                "duration": item.get("duration"),
+                "isOpen": item.get("isOpen"),
+                "isPublished": item.get("isPublished"),
+                "mealbreakDuration": item.get("mealbreakDuration"),
+                "confirmationStatus": item.get("confirmationStatus"),
+                "note": _safe_json_sample(item.get("note") or ""),
+            }
+        )
+    return shifts
+
+
 async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     if not settings.deputy_login_configured:
         return DeputyWebCaptureResult(
@@ -106,6 +155,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
         )
 
     captured: list[dict[str, Any]] = []
+    extracted_shifts_by_id: dict[str, dict[str, Any]] = {}
     events: list[str] = []
 
     try:
@@ -127,7 +177,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     if len(captured) >= MAX_CAPTURED_RESPONSES:
                         return
                     response_url = response.url
-                    if "/api/" not in response_url and "deputy.com" not in response_url:
+                    if not INTERESTING_URL_RE.search(urlsplit(response_url).path):
                         return
                     content_type = (response.headers.get("content-type") or "").lower()
                     if "json" not in content_type:
@@ -145,6 +195,11 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             "sample": _safe_json_sample(data),
                         }
                     )
+                    if "/api/management/v2/shifts" in response_url:
+                        for shift in _extract_management_shifts(data):
+                            shift_id = str(shift.get("id") or "")
+                            if shift_id:
+                                extracted_shifts_by_id[shift_id] = shift
 
                 page.on("response", capture_response)
                 await page.goto(login_url, wait_until="domcontentloaded", timeout=45_000)
@@ -171,6 +226,15 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                 except PlaywrightTimeoutError:
                     events.append("Deputy web app kept loading; using captured responses so far.")
 
+                roster_url = _roster_url(settings)
+                if roster_url:
+                    await page.goto(roster_url, wait_until="domcontentloaded", timeout=45_000)
+                    events.append("Opened Deputy roster page.")
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=35_000)
+                    except PlaywrightTimeoutError:
+                        events.append("Deputy roster page kept loading; using captured responses so far.")
+
                 await page.wait_for_timeout(4_000)
                 login_still_visible = await page.locator("input[type='password']").count() > 0
                 if login_still_visible:
@@ -189,6 +253,10 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
         "status": "ok" if captured else "empty",
         "events": events,
         "responses": captured,
+        "extracted_shifts": sorted(
+            extracted_shifts_by_id.values(),
+            key=lambda item: (str(item.get("start") or ""), str(item.get("id") or "")),
+        ),
     }
     if captured:
         return DeputyWebCaptureResult(
@@ -216,6 +284,8 @@ def format_capture_payload(value: str) -> dict[str, Any] | None:
         payload["events"] = []
     if not isinstance(payload.get("responses"), list):
         payload["responses"] = []
+    if not isinstance(payload.get("extracted_shifts"), list):
+        payload["extracted_shifts"] = []
     payload["captured_at"] = str(payload.get("captured_at") or "")
     payload["status"] = str(payload.get("status") or "unknown")
     for response in payload["responses"]:
@@ -226,4 +296,5 @@ def format_capture_payload(value: str) -> dict[str, Any] | None:
         response["method"] = str(response.get("method") or "")
         response["status"] = str(response.get("status") or "")
         response["url"] = str(response.get("url") or "")
+        response["sample"] = _safe_json_sample(response.get("sample"))
     return payload

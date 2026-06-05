@@ -767,6 +767,81 @@ a {
   white-space: pre-wrap;
 }
 
+.race-day-panel {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.race-day-panel h3,
+.race-day-panel h4 {
+  margin: 0;
+}
+
+.race-day-grid {
+  display: grid;
+  grid-template-columns: 1fr 0.8fr 1.4fr;
+  gap: 10px;
+}
+
+.race-day-block {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  padding: 11px;
+}
+
+.timeline-list,
+.crew-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.timeline-list div,
+.crew-list div {
+  display: grid;
+  grid-template-columns: 58px 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.timeline-list dt,
+.crew-list dt {
+  color: var(--accent);
+  font-weight: 950;
+}
+
+.timeline-list dd,
+.crew-list dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.compact-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.compact-list li {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.compact-list li:last-child {
+  border-bottom: 0;
+}
+
+.roster-lines-compact {
+  margin-top: 10px;
+}
+
 .marks-panel,
 .timing-panel,
 .change-panel,
@@ -1185,6 +1260,7 @@ th {
   .settings-grid-wide,
   .settings-grid-three,
   .detail-grid,
+  .race-day-grid,
   .shift-facts,
   .check-grid,
   .timing-checks,
