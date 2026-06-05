@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .config import Settings
-from .database import get_next_upcoming_shift
+from .database import get_current_or_next_shift
 
 
 SECRET_KEY_RE = re.compile(
@@ -24,6 +24,9 @@ MAX_CAPTURED_RESPONSES = 80
 MAX_SAMPLE_DEPTH = 4
 MAX_SAMPLE_LIST_ITEMS = 6
 MAX_SAMPLE_TEXT = 500
+SCHEDULE_SAMPLE_DEPTH = 8
+SCHEDULE_SAMPLE_LIST_ITEMS = 80
+SCHEDULE_SAMPLE_TEXT = 4000
 MAX_VISIBLE_TEXT = 16000
 TRACK_NAMES = {
     "CAM": "Cambridge",
@@ -82,6 +85,10 @@ def _is_deputy_api_url(value: str, settings: Settings) -> bool:
     return parsed.netloc == origin.netloc and bool(INTERESTING_URL_RE.search(parsed.path))
 
 
+def _is_schedule_api_url(value: str) -> bool:
+    return "/api/schedule/" in urlsplit(value).path
+
+
 def _origin_url(settings: Settings) -> str:
     parsed = urlsplit(settings.deputy_web_url.strip())
     if not parsed.scheme or not parsed.netloc:
@@ -123,7 +130,7 @@ def _week_shift_probe_url(settings: Settings) -> str:
 
 def _target_schedule_tracks(settings: Settings) -> list[str]:
     now = datetime.now(settings.timezone).replace(microsecond=0).isoformat()
-    shift = get_next_upcoming_shift(now)
+    shift = get_current_or_next_shift(now)
     if shift is None:
         return []
 
@@ -162,8 +169,14 @@ def _target_schedule_tracks(settings: Settings) -> list[str]:
     return unique_names
 
 
-def _safe_json_sample(value: Any, depth: int = 0) -> Any:
-    if depth >= MAX_SAMPLE_DEPTH:
+def _safe_json_sample(
+    value: Any,
+    depth: int = 0,
+    max_depth: int = MAX_SAMPLE_DEPTH,
+    max_list_items: int = MAX_SAMPLE_LIST_ITEMS,
+    max_text: int = MAX_SAMPLE_TEXT,
+) -> Any:
+    if depth >= max_depth:
         return "[nested]"
     if isinstance(value, dict):
         sample: dict[str, Any] = {}
@@ -172,14 +185,14 @@ def _safe_json_sample(value: Any, depth: int = 0) -> Any:
             if SECRET_KEY_RE.search(key_text):
                 sample[key_text] = "[redacted]"
             else:
-                sample[key_text] = _safe_json_sample(item, depth + 1)
+                sample[key_text] = _safe_json_sample(item, depth + 1, max_depth, max_list_items, max_text)
         return sample
     if isinstance(value, list):
-        return [_safe_json_sample(item, depth + 1) for item in value[:MAX_SAMPLE_LIST_ITEMS]]
+        return [_safe_json_sample(item, depth + 1, max_depth, max_list_items, max_text) for item in value[:max_list_items]]
     if isinstance(value, str):
         cleaned = redacted_text(value)
-        if len(cleaned) > MAX_SAMPLE_TEXT:
-            return cleaned[:MAX_SAMPLE_TEXT].rstrip() + "..."
+        if len(cleaned) > max_text:
+            return cleaned[:max_text].rstrip() + "..."
         return cleaned
     if isinstance(value, (int, float, bool)) or value is None:
         return value
@@ -224,6 +237,50 @@ def _extract_management_shifts(data: Any) -> list[dict[str, Any]]:
     return shifts
 
 
+def _extract_schedule_shifts(data: Any) -> list[dict[str, Any]]:
+    if not isinstance(data, dict):
+        return []
+    payload = data.get("data")
+    if not isinstance(payload, dict) or not isinstance(payload.get("shifts"), list):
+        return []
+
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    employees = {}
+    if isinstance(metadata.get("employee"), list):
+        for employee in metadata["employee"]:
+            if not isinstance(employee, dict):
+                continue
+            employee_id = employee.get("id")
+            if employee_id is not None:
+                employees[str(employee_id)] = employee.get("displayName") or employee.get("name") or str(employee_id)
+
+    shifts = []
+    for item in payload["shifts"]:
+        if not isinstance(item, dict):
+            continue
+        employee_id = item.get("employee")
+        shifts.append(
+            {
+                "id": item.get("id"),
+                "employee": employee_id,
+                "employeeName": employees.get(str(employee_id), ""),
+                "area": item.get("area"),
+                "start": item.get("start"),
+                "end": item.get("end"),
+                "duration": item.get("duration"),
+                "isOpen": item.get("isOpen"),
+                "isPublished": item.get("isPublished"),
+                "note": _safe_json_sample(
+                    item.get("note") or "",
+                    max_depth=SCHEDULE_SAMPLE_DEPTH,
+                    max_list_items=SCHEDULE_SAMPLE_LIST_ITEMS,
+                    max_text=SCHEDULE_SAMPLE_TEXT,
+                ),
+            }
+        )
+    return shifts
+
+
 async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     if not settings.deputy_login_configured:
         return DeputyWebCaptureResult(
@@ -252,6 +309,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
 
     captured: list[dict[str, Any]] = []
     extracted_shifts_by_id: dict[str, dict[str, Any]] = {}
+    extracted_schedule_shifts_by_id: dict[str, dict[str, Any]] = {}
     events: list[str] = []
     page_texts: list[dict[str, Any]] = []
     target_tracks = _target_schedule_tracks(settings)
@@ -380,20 +438,40 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         data = await response.json()
                     except Exception:
                         return
-                    captured.append(
+                    is_schedule_response = _is_schedule_api_url(response_url)
+                    sample_kwargs = (
                         {
-                            "url": _clean_url(response_url),
-                            "method": response.request.method,
-                            "status": response.status,
-                            "shape": _top_level_shape(data),
-                            "sample": _safe_json_sample(data),
+                            "max_depth": SCHEDULE_SAMPLE_DEPTH,
+                            "max_list_items": SCHEDULE_SAMPLE_LIST_ITEMS,
+                            "max_text": SCHEDULE_SAMPLE_TEXT,
                         }
+                        if is_schedule_response
+                        else {}
                     )
+                    captured_item = {
+                        "url": _clean_url(response_url),
+                        "method": response.request.method,
+                        "status": response.status,
+                        "shape": _top_level_shape(data),
+                        "sample": _safe_json_sample(data, **sample_kwargs),
+                    }
+                    if is_schedule_response and response.request.method.upper() in {"POST", "PUT", "PATCH"}:
+                        post_data = response.request.post_data or ""
+                        try:
+                            captured_item["request_sample"] = _safe_json_sample(json.loads(post_data), **sample_kwargs)
+                        except ValueError:
+                            captured_item["request_sample"] = redacted_text(post_data[:SCHEDULE_SAMPLE_TEXT])
+                    captured.append(captured_item)
                     if "/api/management/v2/shifts" in response_url:
                         for shift in _extract_management_shifts(data):
                             shift_id = str(shift.get("id") or "")
                             if shift_id:
                                 extracted_shifts_by_id[shift_id] = shift
+                    if is_schedule_response:
+                        for shift in _extract_schedule_shifts(data):
+                            shift_id = str(shift.get("id") or "")
+                            if shift_id:
+                                extracted_schedule_shifts_by_id[shift_id] = shift
 
                 page.on("response", capture_response)
                 await page.goto(login_url, wait_until="domcontentloaded", timeout=45_000)
@@ -478,6 +556,10 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
             extracted_shifts_by_id.values(),
             key=lambda item: (str(item.get("start") or ""), str(item.get("id") or "")),
         ),
+        "extracted_schedule_shifts": sorted(
+            extracted_schedule_shifts_by_id.values(),
+            key=lambda item: (str(item.get("start") or ""), str(item.get("id") or "")),
+        ),
     }
     if captured:
         return DeputyWebCaptureResult(
@@ -507,6 +589,8 @@ def format_capture_payload(value: str) -> dict[str, Any] | None:
         payload["responses"] = []
     if not isinstance(payload.get("extracted_shifts"), list):
         payload["extracted_shifts"] = []
+    if not isinstance(payload.get("extracted_schedule_shifts"), list):
+        payload["extracted_schedule_shifts"] = []
     if not isinstance(payload.get("page_texts"), list):
         payload["page_texts"] = []
     payload["captured_at"] = str(payload.get("captured_at") or "")
@@ -519,7 +603,18 @@ def format_capture_payload(value: str) -> dict[str, Any] | None:
         response["method"] = str(response.get("method") or "")
         response["status"] = str(response.get("status") or "")
         response["url"] = str(response.get("url") or "")
-        response["sample"] = _safe_json_sample(response.get("sample"))
+        sample_kwargs = (
+            {
+                "max_depth": SCHEDULE_SAMPLE_DEPTH,
+                "max_list_items": SCHEDULE_SAMPLE_LIST_ITEMS,
+                "max_text": SCHEDULE_SAMPLE_TEXT,
+            }
+            if _is_schedule_api_url(response["url"])
+            else {}
+        )
+        response["sample"] = _safe_json_sample(response.get("sample"), **sample_kwargs)
+        if "request_sample" in response:
+            response["request_sample"] = _safe_json_sample(response.get("request_sample"), **sample_kwargs)
     payload["copy_text"] = _capture_copy_text(payload)
     return payload
 
@@ -531,6 +626,7 @@ def _capture_copy_text(payload: dict[str, Any]) -> str:
         f"Status: {payload.get('status') or 'unknown'}",
         f"Responses: {len(payload.get('responses') or [])}",
         f"Shift records: {len(payload.get('extracted_shifts') or [])}",
+        f"Schedule shift records: {len(payload.get('extracted_schedule_shifts') or [])}",
         "",
         "Run Log:",
     ]
@@ -561,6 +657,12 @@ def _capture_copy_text(payload: dict[str, Any]) -> str:
         for shift in extracted_shifts:
             lines.append(json.dumps(_safe_json_sample(shift), ensure_ascii=True, sort_keys=True))
 
+    extracted_schedule_shifts = payload.get("extracted_schedule_shifts") or []
+    if extracted_schedule_shifts:
+        lines.extend(["", "Extracted Schedule Shift Records:"])
+        for shift in extracted_schedule_shifts:
+            lines.append(json.dumps(_safe_json_sample(shift), ensure_ascii=True, sort_keys=True))
+
     responses = payload.get("responses") or []
     if responses:
         lines.extend(["", "Captured Responses:"])
@@ -580,6 +682,17 @@ def _capture_copy_text(payload: dict[str, Any]) -> str:
                     f"--- Response {index}: {response.get('method')} {response.get('status')} ---",
                     str(response.get("url") or ""),
                     "Shape: " + " | ".join(shape_bits),
+                ]
+            )
+            if "request_sample" in response:
+                lines.extend(
+                    [
+                        "Request JSON:",
+                        json.dumps(response.get("request_sample"), ensure_ascii=True, indent=2, sort_keys=True),
+                    ]
+                )
+            lines.extend(
+                [
                     "Sample JSON:",
                     json.dumps(response.get("sample"), ensure_ascii=True, indent=2, sort_keys=True),
                 ]

@@ -376,6 +376,25 @@ def get_next_upcoming_shift(now_iso: str) -> sqlite3.Row | None:
     return row
 
 
+def get_current_or_next_shift(now_iso: str) -> sqlite3.Row | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM shifts
+            WHERE deleted_from_source = 0
+              AND end_at >= ?
+            ORDER BY
+              CASE WHEN start_at <= ? THEN 0 ELSE 1 END,
+              start_at ASC,
+              id ASC
+            LIMIT 1
+            """,
+            (now_iso, now_iso),
+        ).fetchone()
+    return row
+
+
 def get_upcoming_shifts(now_iso: str, limit: int = 5) -> list[sqlite3.Row]:
     with get_connection() as conn:
         rows = conn.execute(
