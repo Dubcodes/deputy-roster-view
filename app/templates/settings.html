@@ -28,8 +28,11 @@
       <strong>{{ last_successful_sync.finished_at|datetime if last_successful_sync else "Never" }}</strong>
     </article>
     <article class="settings-panel">
-      <span class="summary-label">Open shifts</span>
-      <strong>Not in iCal</strong>
+      <span class="summary-label">Deputy web</span>
+      <strong>{{ "Configured" if settings.deputy_login_configured else "Not set" }}</strong>
+      {% if settings.deputy_login_configured %}
+        <p>{{ settings.deputy_login_label }}</p>
+      {% endif %}
     </article>
   </section>
 
@@ -56,7 +59,7 @@
     </article>
   </section>
 
-  <section class="settings-grid settings-grid-wide">
+  <section class="settings-grid settings-grid-three">
     <article class="settings-panel">
       <div class="section-heading">
         <h2>Calendar Feed</h2>
@@ -76,15 +79,12 @@
 
     <article class="settings-panel">
       <div class="section-heading">
-        <h2>Display</h2>
+        <h2>Deputy Web</h2>
       </div>
-      <form class="settings-form" action="/settings/display" method="post">
-        <label class="toggle-row">
-          <input type="checkbox" name="show_source_data" {% if display_settings.show_source_data == "1" %}checked{% endif %}>
-          <span>Show source iCal data below</span>
-        </label>
-        <button class="button" type="submit">Save Display</button>
-      </form>
+      <span class="summary-label">Login</span>
+      <strong>{{ "Ready" if settings.deputy_login_configured else "Env needed" }}</strong>
+      <p>{{ settings.deputy_login_label }}</p>
+      <p>Set with Portainer env. Password is never shown here.</p>
     </article>
 
     <article class="settings-panel">
@@ -102,11 +102,9 @@
     </article>
   </section>
 
-  {% if display_settings.show_source_data == "1" %}
-    <section class="table-panel">
-      <div class="section-heading">
-        <h2>Source iCal Data</h2>
-      </div>
+  <details class="table-panel diagnostics-panel">
+    <summary>Most Recent iCal Data</summary>
+    <div class="diagnostics-content">
       {% if not source_payload_shifts %}
         <div class="empty-state">No source data has been stored yet.</div>
       {% else %}
@@ -114,13 +112,40 @@
           {% for shift in source_payload_shifts %}
             <details class="source-panel">
               <summary>{{ shift.start_at|datetime }} · {{ shift.track_label }} · {{ shift.role_full_label or shift.role_label or shift.title or "Shift" }}</summary>
-              <pre>{{ shift.source_payload_pretty }}</pre>
+              <div class="source-fields">
+                {% for item in shift.source_diagnostics.fields %}
+                  <div>
+                    <span>{{ item.label }}</span>
+                    <strong>{{ item.value }}</strong>
+                  </div>
+                {% endfor %}
+              </div>
+              {% if shift.source_diagnostics.description_lines %}
+                <div class="description-block source-description">
+                  <h3>Description</h3>
+                  <ul class="roster-lines">
+                    {% for line in shift.source_diagnostics.description_lines %}
+                      <li>{{ line }}</li>
+                    {% endfor %}
+                  </ul>
+                </div>
+              {% endif %}
+              {% for link in shift.source_diagnostics.hidden_links %}
+                <details class="hidden-url">
+                  <summary>{{ link.label }}</summary>
+                  <p>{{ link.value }}</p>
+                </details>
+              {% endfor %}
+              <details class="raw-source">
+                <summary>Raw JSON</summary>
+                <pre>{{ shift.source_payload_pretty }}</pre>
+              </details>
             </details>
           {% endfor %}
         </div>
       {% endif %}
-    </section>
-  {% endif %}
+    </div>
+  </details>
 
   <section class="table-panel">
     <div class="section-heading">

@@ -22,7 +22,16 @@ The app is read-only against Deputy. It never writes back to Deputy.
    APP_PASSWORD=your-private-password
    ```
 
-4. Optional: set `APP_PORT` if port `8096` conflicts with another service.
+4. Optional: set Deputy web login env values if you want to test future web/API-style roster enrichment. Do not put these in Git.
+
+   ```env
+   DEPUTY_WEB_URL=https://your-business.au.deputy.com/#/
+   DEPUTY_LOGIN_EMAIL=you@example.com
+   DEPUTY_LOGIN_PASSWORD=your-deputy-password
+   DEPUTY_DISPLAY_NAME=Your Name
+   ```
+
+5. Optional: set `APP_PORT` if port `8096` conflicts with another service.
 
    ```env
    APP_PORT=8123
@@ -57,6 +66,8 @@ If you changed `APP_PORT`, use that port instead.
 ## Portainer
 
 In Portainer, create a stack from this repository. Set `APP_PORT` to whichever host port you want exposed. You can provide `DEPUTY_ICAL_URL` as an environment variable, or leave it blank and paste the URL into Settings once the app is running. The app stores its SQLite database in the bind-mounted `./data` directory.
+
+If using Deputy web login diagnostics, set `DEPUTY_LOGIN_EMAIL`, `DEPUTY_LOGIN_PASSWORD`, and `DEPUTY_DISPLAY_NAME` as Portainer environment variables. The app shows whether the login is configured, but never displays the password.
 
 ## Syncing
 

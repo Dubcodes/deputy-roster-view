@@ -18,7 +18,6 @@ from .database import (
     clear_all_changed_flags,
     clear_changed_for_date,
     clear_changed_for_shift,
-    get_app_settings,
     get_calendar_url,
     get_calendar_url_source,
     get_shift_changes_for_date,
@@ -196,6 +195,48 @@ def pretty_source_payload(value: str | None) -> str:
     return redact_secret_text(rendered)
 
 
+def source_payload_diagnostics(value: str | None) -> dict[str, object]:
+    if not value:
+        return {"fields": [], "description_lines": [], "hidden_links": []}
+    try:
+        payload = json.loads(value)
+    except (TypeError, ValueError):
+        return {"fields": [{"label": "Raw payload", "value": redact_secret_text(str(value))}], "description_lines": [], "hidden_links": []}
+
+    normalised = payload.get("normalised", {}) if isinstance(payload, dict) else {}
+    if not isinstance(normalised, dict):
+        normalised = {}
+
+    field_labels = (
+        ("uid", "UID"),
+        ("summary", "Summary"),
+        ("dtstart", "Start"),
+        ("dtend", "End"),
+        ("location", "Location"),
+        ("status", "Status"),
+        ("sequence", "Sequence"),
+        ("last_modified", "Last modified"),
+        ("categories", "Categories"),
+    )
+    fields = []
+    for key, label in field_labels:
+        value_text = str(normalised.get(key) or "").strip()
+        if value_text:
+            fields.append({"label": label, "value": redact_secret_text(value_text)})
+
+    hidden_links = []
+    source_link = str(normalised.get("source_link") or "").strip()
+    if source_link:
+        hidden_links.append({"label": "Deputy link", "value": redact_secret_text(source_link)})
+
+    description = str(normalised.get("description") or "")
+    return {
+        "fields": fields,
+        "description_lines": description_lines(description),
+        "hidden_links": hidden_links,
+    }
+
+
 def parse_shift_title(title: str | None) -> dict[str, str]:
     title = (title or "").strip()
     match = SUMMARY_RE.match(title)
@@ -294,6 +335,7 @@ def decorate_shift(row: object) -> dict[str, object]:
     shift["colour_style"] = f"--shift-colour: {colour};" if colour else ""
     shift["description_lines"] = description_lines(str(shift.get("description") or ""))
     shift["source_payload_pretty"] = pretty_source_payload(str(shift.get("source_payload") or ""))
+    shift["source_diagnostics"] = source_payload_diagnostics(str(shift.get("source_payload") or ""))
     shift["source_link"] = redact_secret_text(str(shift.get("source_link") or ""))
     timing_time = clean_time_value(str(shift.get("timing_adjustment_time") or ""))
     timing_notes = []
@@ -537,7 +579,6 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             for shift_id in combined_ids
             for change in changes_by_shift.get(shift_id, [])
         ]
-    display_settings = get_app_settings()
     day_total = sum(
         float(shift.get("paid_hours") or 0)
         for shift in shifts
@@ -557,7 +598,6 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             "day_total": day_total,
             "has_changed": has_changed,
             "mark_fields": MARK_FIELDS,
-            "display_settings": display_settings,
         },
     )
 
@@ -633,7 +673,6 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "next_shift": decorate_shift(next_shift) if next_shift else None,
             "pre_shift": pre_shift,
             "sync_logs": get_recent_sync_logs(),
-            "display_settings": get_app_settings(),
             "source_payload_shifts": [
                 decorate_shift(row)
                 for row in get_recent_source_payloads()
@@ -669,17 +708,6 @@ async def save_calendar_settings(request: Request) -> RedirectResponse:
         url=notice_url("/settings", "Calendar URL saved. Use Sync Now to refresh the roster."),
         status_code=303,
     )
-
-
-@app.post("/settings/display")
-async def save_display_settings(request: Request) -> RedirectResponse:
-    form = await request.form()
-    update_app_settings(
-        {
-            "show_source_data": "1" if form.get("show_source_data") else "0",
-        }
-    )
-    return RedirectResponse(url=notice_url("/settings", "Display settings saved."), status_code=303)
 
 
 @app.post("/settings/clear-changed")

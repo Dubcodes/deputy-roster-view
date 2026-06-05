@@ -933,6 +933,76 @@ textarea {
   line-height: 1.45;
 }
 
+.diagnostics-panel {
+  margin-bottom: 12px;
+}
+
+.diagnostics-panel > summary {
+  cursor: pointer;
+  font-size: 1.05rem;
+  font-weight: 900;
+}
+
+.diagnostics-content {
+  margin-top: 14px;
+}
+
+.source-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.source-fields div {
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.source-fields span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.source-fields strong,
+.hidden-url p {
+  display: block;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.source-description {
+  margin-top: 12px;
+}
+
+.hidden-url,
+.raw-source {
+  margin-top: 10px;
+}
+
+.hidden-url summary,
+.raw-source summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 850;
+}
+
+.hidden-url p {
+  margin: 8px 0 0;
+  padding: 9px;
+  border-radius: 8px;
+  background: #0b0d10;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 .empty-state {
   border: 1px dashed var(--line);
   border-radius: 8px;
@@ -951,6 +1021,10 @@ textarea {
 
 .settings-grid-wide {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-grid-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .settings-panel p {
@@ -1109,11 +1183,13 @@ th {
   .summary-strip,
   .settings-grid,
   .settings-grid-wide,
+  .settings-grid-three,
   .detail-grid,
   .shift-facts,
   .check-grid,
   .timing-checks,
-  .change-values {
+  .change-values,
+  .source-fields {
     grid-template-columns: 1fr;
   }
 

@@ -13,6 +13,10 @@ DEFAULT_TZ = "Pacific/Auckland"
 @dataclass(frozen=True)
 class Settings:
     deputy_ical_url: str
+    deputy_web_url: str
+    deputy_login_email: str
+    deputy_login_password: str
+    deputy_display_name: str
     app_password: str
     tz_name: str
     sync_at_hour: int
@@ -33,6 +37,21 @@ class Settings:
     def auth_enabled(self) -> bool:
         return bool(self.app_password)
 
+    @property
+    def deputy_login_configured(self) -> bool:
+        return bool(self.deputy_web_url.strip() and self.deputy_login_email.strip() and self.deputy_login_password)
+
+    @property
+    def deputy_login_label(self) -> str:
+        if self.deputy_display_name.strip():
+            return self.deputy_display_name.strip()
+        email = self.deputy_login_email.strip()
+        if not email or "@" not in email:
+            return email or "Not set"
+        name, domain = email.split("@", 1)
+        masked_name = name[:2] + "***" if len(name) > 2 else "***"
+        return f"{masked_name}@{domain}"
+
 
 def _int_env(name: str, default: int) -> int:
     value = os.getenv(name)
@@ -52,6 +71,10 @@ def get_settings() -> Settings:
 
     return Settings(
         deputy_ical_url=os.getenv("DEPUTY_ICAL_URL", "").strip(),
+        deputy_web_url=os.getenv("DEPUTY_WEB_URL", "https://bb12c621103108.au.deputy.com/#/").strip(),
+        deputy_login_email=os.getenv("DEPUTY_LOGIN_EMAIL", "").strip(),
+        deputy_login_password=os.getenv("DEPUTY_LOGIN_PASSWORD", ""),
+        deputy_display_name=os.getenv("DEPUTY_DISPLAY_NAME", "").strip(),
         app_password=os.getenv("APP_PASSWORD", ""),
         tz_name=tz_name,
         sync_at_hour=_int_env("SYNC_AT_HOUR", 5),
