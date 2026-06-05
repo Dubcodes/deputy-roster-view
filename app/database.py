@@ -302,6 +302,10 @@ def get_app_setting(key: str, default: str = "") -> str:
     return str(row["value"] or "")
 
 
+def get_last_deputy_web_capture() -> str:
+    return get_app_setting("last_deputy_web_capture", "")
+
+
 def get_calendar_url(settings: Settings | None = None) -> str:
     settings = settings or get_settings()
     saved_url = get_app_setting("deputy_ical_url", "").strip()

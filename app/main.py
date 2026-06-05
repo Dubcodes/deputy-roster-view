@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import asyncio
 import json
 import re
 from datetime import date, datetime
@@ -21,6 +22,7 @@ from .database import (
     get_calendar_url,
     get_calendar_url_source,
     get_shift_changes_for_date,
+    get_last_deputy_web_capture,
     fetch_shift,
     fetch_shifts_between,
     fetch_shifts_for_date,
@@ -34,6 +36,7 @@ from .database import (
     update_shift_marks,
 )
 from .deputy_api import test_deputy_roster_api
+from .deputy_web import format_capture_payload, run_deputy_web_capture
 from .scheduler import get_pre_shift_status, shutdown_scheduler, start_scheduler
 from .sync_ics import sync_deputy_calendar
 
@@ -678,6 +681,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
                 decorate_shift(row)
                 for row in get_recent_source_payloads()
             ],
+            "deputy_web_capture": format_capture_payload(get_last_deputy_web_capture()),
         },
     )
 
@@ -728,6 +732,14 @@ def test_deputy_api() -> RedirectResponse:
         fields = ", ".join(key for key, value in result.sample.items() if value not in (None, "", []))
         message = f"{message} First record includes: {fields}."
     return RedirectResponse(url=notice_url("/settings", message), status_code=303)
+
+
+@app.post("/settings/deputy-web-capture")
+def capture_deputy_web() -> RedirectResponse:
+    result = asyncio.run(run_deputy_web_capture(get_settings()))
+    if result.payload:
+        update_app_settings({"last_deputy_web_capture": json.dumps(result.payload, ensure_ascii=True)})
+    return RedirectResponse(url=notice_url("/settings", result.message), status_code=303)
 
 
 @app.api_route("/sync-now", methods=["GET", "POST"])

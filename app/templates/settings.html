@@ -91,6 +91,9 @@
       <form action="/settings/deputy-api-test" method="post">
         <button class="button button-secondary" type="submit">Test Deputy API</button>
       </form>
+      <form action="/settings/deputy-web-capture" method="post">
+        <button class="button button-secondary" type="submit">Capture Web Data</button>
+      </form>
     </article>
 
     <article class="settings-panel">
@@ -149,6 +152,71 @@
             </details>
           {% endfor %}
         </div>
+      {% endif %}
+    </div>
+  </details>
+
+  <details class="table-panel diagnostics-panel">
+    <summary>Most Recent Deputy Web Capture</summary>
+    <div class="diagnostics-content">
+      {% if not deputy_web_capture %}
+        <div class="empty-state">No Deputy web capture has run yet.</div>
+      {% else %}
+        <div class="source-fields">
+          <div>
+            <span>Captured</span>
+            <strong>{{ deputy_web_capture.captured_at }}</strong>
+          </div>
+          <div>
+            <span>Status</span>
+            <strong>{{ deputy_web_capture.status }}</strong>
+          </div>
+          <div>
+            <span>Responses</span>
+            <strong>{{ deputy_web_capture.responses|length }}</strong>
+          </div>
+        </div>
+        {% if deputy_web_capture.events %}
+          <div class="description-block source-description">
+            <h3>Run Log</h3>
+            <ul class="roster-lines">
+              {% for event in deputy_web_capture.events %}
+                <li>{{ event }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+        {% if deputy_web_capture.responses %}
+          <div class="source-list">
+            {% for response in deputy_web_capture.responses %}
+              <details class="source-panel">
+                <summary>{{ response.method }} {{ response.status }} · {{ response.url }}</summary>
+                <div class="source-fields">
+                  <div>
+                    <span>Shape</span>
+                    <strong>{{ response.shape.kind }}</strong>
+                  </div>
+                  {% if response.shape.count is defined %}
+                    <div>
+                      <span>Count</span>
+                      <strong>{{ response.shape.count }}</strong>
+                    </div>
+                  {% endif %}
+                  {% if response.shape.keys is defined %}
+                    <div>
+                      <span>Keys</span>
+                      <strong>{{ response.shape.keys|join(", ") }}</strong>
+                    </div>
+                  {% endif %}
+                </div>
+                <details class="raw-source">
+                  <summary>Sample JSON</summary>
+                  <pre>{{ response.sample|tojson(indent=2) }}</pre>
+                </details>
+              </details>
+            {% endfor %}
+          </div>
+        {% endif %}
       {% endif %}
     </div>
   </details>

@@ -22,7 +22,7 @@ The app is read-only against Deputy. It never writes back to Deputy.
    APP_PASSWORD=your-private-password
    ```
 
-4. Optional: set Deputy web/API env values if you want to test future roster enrichment. Do not put these in Git.
+4. Optional: set Deputy web env values if you want to test roster enrichment from the logged-in Deputy web app. Do not put these in Git.
 
    ```env
    DEPUTY_WEB_URL=https://your-business.au.deputy.com/#/
@@ -32,7 +32,7 @@ The app is read-only against Deputy. It never writes back to Deputy.
    DEPUTY_API_TOKEN=your-deputy-api-token
    ```
 
-   The API token is the preferred path for pulling richer roster data such as other employees, roles, open shifts, operational units, and roster metadata. Email/password fields are only a future fallback because browser login can be brittle and may involve MFA.
+   If you do not have an API token, use Settings -> Capture Web Data after the app is running. It opens Deputy in a headless browser, logs in with your env credentials, and captures a local diagnostics summary of the JSON responses the Deputy web app receives. This is read-only and is intended to help identify where roster crew/role data lives before building it into the main views.
 
 5. Optional: set `APP_PORT` if port `8096` conflicts with another service.
 
@@ -70,7 +70,9 @@ If you changed `APP_PORT`, use that port instead.
 
 In Portainer, create a stack from this repository. Set `APP_PORT` to whichever host port you want exposed. You can provide `DEPUTY_ICAL_URL` as an environment variable, or leave it blank and paste the URL into Settings once the app is running. The app stores its SQLite database in the bind-mounted `./data` directory.
 
-If using Deputy web/API diagnostics, set `DEPUTY_LOGIN_EMAIL`, `DEPUTY_LOGIN_PASSWORD`, `DEPUTY_DISPLAY_NAME`, and `DEPUTY_API_TOKEN` as Portainer environment variables. The app shows whether the login and API token are configured, but never displays the password or token. Use Settings -> Test Deputy API to check whether the token can read roster records.
+If using Deputy web diagnostics, set `DEPUTY_LOGIN_EMAIL`, `DEPUTY_LOGIN_PASSWORD`, and `DEPUTY_DISPLAY_NAME` as Portainer environment variables. The app shows whether the login is configured, but never displays the password. Use Settings -> Capture Web Data to check whether the logged-in web app exposes richer roster data.
+
+If you do have a Deputy API token, set `DEPUTY_API_TOKEN` and use Settings -> Test Deputy API. Most normal users will not have this.
 
 ## Syncing
 
