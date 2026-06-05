@@ -212,4 +212,18 @@ def format_capture_payload(value: str) -> dict[str, Any] | None:
         return None
     if not isinstance(payload, dict):
         return None
+    if not isinstance(payload.get("events"), list):
+        payload["events"] = []
+    if not isinstance(payload.get("responses"), list):
+        payload["responses"] = []
+    payload["captured_at"] = str(payload.get("captured_at") or "")
+    payload["status"] = str(payload.get("status") or "unknown")
+    for response in payload["responses"]:
+        if not isinstance(response, dict):
+            continue
+        if not isinstance(response.get("shape"), dict):
+            response["shape"] = {"kind": "unknown"}
+        response["method"] = str(response.get("method") or "")
+        response["status"] = str(response.get("status") or "")
+        response["url"] = str(response.get("url") or "")
     return payload

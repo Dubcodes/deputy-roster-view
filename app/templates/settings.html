@@ -191,21 +191,23 @@
             {% for response in deputy_web_capture.responses %}
               <details class="source-panel">
                 <summary>{{ response.method }} {{ response.status }} · {{ response.url }}</summary>
+                {% set shape_keys = response.shape.get("keys") %}
+                {% set shape_count = response.shape.get("count") %}
                 <div class="source-fields">
                   <div>
                     <span>Shape</span>
-                    <strong>{{ response.shape.kind }}</strong>
+                    <strong>{{ response.shape.get("kind", "unknown") }}</strong>
                   </div>
-                  {% if response.shape.count is defined %}
+                  {% if shape_count is not none %}
                     <div>
                       <span>Count</span>
-                      <strong>{{ response.shape.count }}</strong>
+                      <strong>{{ shape_count }}</strong>
                     </div>
                   {% endif %}
-                  {% if response.shape.keys is defined %}
+                  {% if shape_keys %}
                     <div>
                       <span>Keys</span>
-                      <strong>{{ response.shape.keys|join(", ") }}</strong>
+                      <strong>{{ shape_keys|join(", ") }}</strong>
                     </div>
                   {% endif %}
                 </div>
