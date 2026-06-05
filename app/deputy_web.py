@@ -520,4 +520,69 @@ def format_capture_payload(value: str) -> dict[str, Any] | None:
         response["status"] = str(response.get("status") or "")
         response["url"] = str(response.get("url") or "")
         response["sample"] = _safe_json_sample(response.get("sample"))
+    payload["copy_text"] = _capture_copy_text(payload)
     return payload
+
+
+def _capture_copy_text(payload: dict[str, Any]) -> str:
+    lines = [
+        "Deputy Web Capture",
+        f"Captured: {payload.get('captured_at') or 'unknown'}",
+        f"Status: {payload.get('status') or 'unknown'}",
+        f"Responses: {len(payload.get('responses') or [])}",
+        f"Shift records: {len(payload.get('extracted_shifts') or [])}",
+        "",
+        "Run Log:",
+    ]
+
+    events = payload.get("events") or []
+    if events:
+        lines.extend(f"- {event}" for event in events)
+    else:
+        lines.append("- No run log entries.")
+
+    page_texts = payload.get("page_texts") or []
+    if page_texts:
+        lines.extend(["", "Page Text Snapshots:"])
+        for index, page_text in enumerate(page_texts, start=1):
+            if not isinstance(page_text, dict):
+                continue
+            lines.extend(
+                [
+                    "",
+                    f"--- Page Text {index}: {page_text.get('label') or 'Snapshot'} ---",
+                    str(page_text.get("text") or ""),
+                ]
+            )
+
+    extracted_shifts = payload.get("extracted_shifts") or []
+    if extracted_shifts:
+        lines.extend(["", "Extracted Shift Records:"])
+        for shift in extracted_shifts:
+            lines.append(json.dumps(_safe_json_sample(shift), ensure_ascii=True, sort_keys=True))
+
+    responses = payload.get("responses") or []
+    if responses:
+        lines.extend(["", "Captured Responses:"])
+        for index, response in enumerate(responses, start=1):
+            if not isinstance(response, dict):
+                continue
+            shape = response.get("shape") if isinstance(response.get("shape"), dict) else {}
+            shape_bits = [str(shape.get("kind") or "unknown")]
+            if shape.get("count") is not None:
+                shape_bits.append(f"count={shape.get('count')}")
+            keys = shape.get("keys")
+            if isinstance(keys, list) and keys:
+                shape_bits.append("keys=" + ", ".join(str(key) for key in keys))
+            lines.extend(
+                [
+                    "",
+                    f"--- Response {index}: {response.get('method')} {response.get('status')} ---",
+                    str(response.get("url") or ""),
+                    "Shape: " + " | ".join(shape_bits),
+                    "Sample JSON:",
+                    json.dumps(response.get("sample"), ensure_ascii=True, indent=2, sort_keys=True),
+                ]
+            )
+
+    return "\n".join(lines).strip()

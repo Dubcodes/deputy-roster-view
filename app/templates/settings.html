@@ -180,6 +180,14 @@
             <strong>{{ deputy_web_capture.extracted_shifts|length }}</strong>
           </div>
         </div>
+        <div class="copy-panel">
+          <div class="section-heading">
+            <h3>Copy Capture Data</h3>
+            <button class="button button-compact" type="button" data-copy-target="deputy-web-copy">Copy All</button>
+          </div>
+          <textarea id="deputy-web-copy" class="copy-box" rows="12" readonly>{{ deputy_web_capture.copy_text }}</textarea>
+          <p class="copy-status" data-copy-status aria-live="polite"></p>
+        </div>
         {% if deputy_web_capture.events %}
           <div class="description-block source-description">
             <h3>Run Log</h3>
@@ -274,4 +282,37 @@
       </div>
     {% endif %}
   </section>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    (() => {
+      const button = document.querySelector("[data-copy-target]");
+      const status = document.querySelector("[data-copy-status]");
+      if (!button) return;
+
+      const setStatus = (message) => {
+        if (!status) return;
+        status.textContent = message;
+        window.setTimeout(() => {
+          if (status.textContent === message) status.textContent = "";
+        }, 3000);
+      };
+
+      button.addEventListener("click", async () => {
+        const target = document.getElementById(button.dataset.copyTarget);
+        if (!target) return;
+        target.focus();
+        target.select();
+        target.setSelectionRange(0, target.value.length);
+        try {
+          await navigator.clipboard.writeText(target.value);
+          setStatus("Copied.");
+        } catch (error) {
+          const copied = document.execCommand && document.execCommand("copy");
+          setStatus(copied ? "Copied." : "Selected. Use copy from your browser.");
+        }
+      });
+    })();
+  </script>
 {% endblock %}

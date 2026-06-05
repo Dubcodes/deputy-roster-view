@@ -1025,6 +1025,37 @@ textarea {
   white-space: pre-wrap;
 }
 
+.copy-panel {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.copy-panel .section-heading {
+  margin-bottom: 8px;
+}
+
+.copy-panel h3 {
+  margin: 0;
+}
+
+.copy-box {
+  min-height: 260px;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.copy-status {
+  min-height: 1.2em;
+  margin: 8px 0 0;
+  color: var(--accent);
+  font-weight: 850;
+}
+
 .diagnostics-panel {
   margin-bottom: 12px;
 }
