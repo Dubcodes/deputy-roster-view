@@ -18,6 +18,7 @@ from .database import (
     clear_all_changed_flags,
     clear_changed_for_date,
     clear_changed_for_shift,
+    fetch_deputy_schedule_for_date,
     get_calendar_url,
     get_calendar_url_source,
     get_shift_changes_for_date,
@@ -31,6 +32,7 @@ from .database import (
     get_recent_sync_logs,
     get_upcoming_shifts,
     init_db,
+    save_deputy_web_schedule,
     update_app_settings,
     update_shift_marks,
 )
@@ -603,6 +605,52 @@ def combine_adjacent_shifts(shifts: list[dict[str, object]]) -> list[dict[str, o
     return combined
 
 
+def display_schedule_area(value: str | None) -> str:
+    value = (value or "").strip()
+    return ROLE_NAMES.get(value.upper(), value or "Role")
+
+
+def decorate_schedule_row(row: object) -> dict[str, object]:
+    item = dict(row)
+    start_at = parse_iso_datetime(item.get("start_at"))
+    end_at = parse_iso_datetime(item.get("end_at"))
+    item["start_label"] = start_at.strftime("%H:%M") if start_at else ""
+    item["end_label"] = end_at.strftime("%H:%M") if end_at else ""
+    item["time_range"] = f"{item['start_label']}-{item['end_label']}" if item["start_label"] and item["end_label"] else ""
+    item["area_display"] = display_schedule_area(str(item.get("area_name") or ""))
+    item["duration_label"] = format_hours(item.get("duration"))
+    return item
+
+
+def schedule_groups(rows: list[object]) -> list[dict[str, object]]:
+    groups_by_key: dict[tuple[object, str], dict[str, object]] = {}
+    for row in rows:
+        item = decorate_schedule_row(row)
+        key = (item.get("area_id"), str(item.get("area_name") or ""))
+        group = groups_by_key.setdefault(
+            key,
+            {
+                "area_id": item.get("area_id"),
+                "area_name": item.get("area_name") or "Role",
+                "area_display": item.get("area_display") or "Role",
+                "sort_order": item.get("area_roster_sort_order") or 999999,
+                "rows": [],
+            },
+        )
+        group["rows"].append(item)
+
+    groups = sorted(
+        groups_by_key.values(),
+        key=lambda group: (int(group.get("sort_order") or 999999), str(group.get("area_display") or "")),
+    )
+    for group in groups:
+        group["rows"] = sorted(
+            list(group.get("rows") or []),
+            key=lambda item: (str(item.get("start_at") or ""), str(item.get("employee_name") or "")),
+        )
+    return groups
+
+
 def notice_url(path: str, message: str) -> str:
     parts = urlsplit(path)
     query_items = parse_qsl(parts.query, keep_blank_values=True)
@@ -746,6 +794,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             for shift_id in combined_ids
             for change in changes_by_shift.get(shift_id, [])
         ]
+    deputy_schedule_groups = schedule_groups(fetch_deputy_schedule_for_date(date_text))
     day_total = sum(
         float(shift.get("paid_hours") or 0)
         for shift in shifts
@@ -762,6 +811,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             "month_year": day_date.year,
             "month_number": day_date.month,
             "shifts": shifts,
+            "deputy_schedule_groups": deputy_schedule_groups,
             "day_total": day_total,
             "has_changed": has_changed,
             "mark_fields": MARK_FIELDS,
@@ -914,6 +964,9 @@ async def capture_deputy_web() -> RedirectResponse:
         return RedirectResponse(url=notice_url("/settings", message), status_code=303)
 
     if result.payload:
+        saved_schedule_rows = save_deputy_web_schedule(result.payload)
+        if saved_schedule_rows:
+            result.payload.setdefault("events", []).append(f"Saved {saved_schedule_rows} schedule rows locally.")
         update_app_settings({"last_deputy_web_capture": json.dumps(result.payload, ensure_ascii=True)})
     return RedirectResponse(url=notice_url("/settings", result.message), status_code=303)
 

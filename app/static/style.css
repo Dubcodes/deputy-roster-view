@@ -855,6 +855,63 @@ a {
   margin-top: 10px;
 }
 
+.deputy-schedule-panel {
+  margin-top: 16px;
+}
+
+.schedule-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.schedule-role {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  padding: 10px;
+}
+
+.schedule-role h4 {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font-size: 0.92rem;
+}
+
+.schedule-role ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.schedule-role li {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+}
+
+.schedule-role li:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.schedule-role span {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 850;
+}
+
+.schedule-role strong {
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
 .marks-panel,
 .timing-panel,
 .change-panel,
@@ -1211,6 +1268,10 @@ th {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .schedule-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .detail-grid,
   .shift-facts,
   .settings-grid {
@@ -1308,6 +1369,7 @@ th {
   .settings-grid-wide,
   .settings-grid-three,
   .detail-grid,
+  .schedule-grid,
   .race-day-grid,
   .shift-facts,
   .check-grid,

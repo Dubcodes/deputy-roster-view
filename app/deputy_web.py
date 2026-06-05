@@ -29,7 +29,7 @@ SCHEDULE_SAMPLE_LIST_ITEMS = 80
 SCHEDULE_SAMPLE_TEXT = 4000
 MAX_VISIBLE_TEXT = 16000
 FULL_COPY_PATH_RE = re.compile(
-    r"/api/(?:schedule/|management/v2/(?:shifts|areas|locations|custom-fields)|v1/my/roster|v2/weather/)",
+    r"/api/(?:schedule/|management/v2/(?:shifts|custom-fields)|v1/my/roster)",
     re.IGNORECASE,
 )
 TRACK_NAMES = {
@@ -250,6 +250,24 @@ def _extract_management_shifts(data: Any) -> list[dict[str, Any]]:
     return shifts
 
 
+def _extract_area_refs(data: Any) -> list[dict[str, Any]]:
+    if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+        return []
+    areas = []
+    for item in data["data"]:
+        if not isinstance(item, dict) or item.get("id") is None:
+            continue
+        areas.append(
+            {
+                "id": item.get("id"),
+                "name": item.get("name") or str(item.get("id")),
+                "locationId": item.get("locationId"),
+                "rosterSortOrder": item.get("rosterSortOrder"),
+            }
+        )
+    return areas
+
+
 def _extract_schedule_shifts(data: Any) -> list[dict[str, Any]]:
     if not isinstance(data, dict):
         return []
@@ -323,6 +341,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     captured: list[dict[str, Any]] = []
     extracted_shifts_by_id: dict[str, dict[str, Any]] = {}
     extracted_schedule_shifts_by_id: dict[str, dict[str, Any]] = {}
+    area_refs_by_id: dict[str, dict[str, Any]] = {}
     events: list[str] = []
     page_texts: list[dict[str, Any]] = []
     target_tracks = _target_schedule_tracks(settings)
@@ -440,8 +459,6 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
 
                 async def capture_response(response: Any) -> None:
                     try:
-                        if len(captured) >= MAX_CAPTURED_RESPONSES:
-                            return
                         response_url = response.url
                         if not _is_deputy_api_url(response_url, settings):
                             return
@@ -475,12 +492,18 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 captured_item["request_sample"] = _safe_json_sample(json.loads(post_data), **sample_kwargs)
                             except ValueError:
                                 captured_item["request_sample"] = redacted_text(post_data[:SCHEDULE_SAMPLE_TEXT])
-                        captured.append(captured_item)
+                        if len(captured) < MAX_CAPTURED_RESPONSES:
+                            captured.append(captured_item)
                         if "/api/management/v2/shifts" in response_url:
                             for shift in _extract_management_shifts(data):
                                 shift_id = str(shift.get("id") or "")
                                 if shift_id:
                                     extracted_shifts_by_id[shift_id] = shift
+                        if "/api/management/v2/areas" in response_url:
+                            for area in _extract_area_refs(data):
+                                area_id = str(area.get("id") or "")
+                                if area_id:
+                                    area_refs_by_id[area_id] = area
                         if is_schedule_response:
                             for shift in _extract_schedule_shifts(data):
                                 shift_id = str(shift.get("id") or "")
@@ -562,20 +585,38 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
         events.append(f"Capture stopped: {redacted_text(str(exc))}")
 
     captured_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
+    extracted_schedule_shifts = sorted(
+        extracted_schedule_shifts_by_id.values(),
+        key=lambda item: (str(item.get("start") or ""), str(item.get("id") or "")),
+    )
+    used_area_ids = {str(shift.get("area") or "") for shift in extracted_schedule_shifts}
+    area_refs = sorted(
+        (area for area_id, area in area_refs_by_id.items() if area_id in used_area_ids),
+        key=lambda item: (
+            int(item.get("rosterSortOrder") or 999999),
+            str(item.get("name") or ""),
+            str(item.get("id") or ""),
+        ),
+    )
+    for shift in extracted_schedule_shifts:
+        area_ref = area_refs_by_id.get(str(shift.get("area") or ""))
+        if area_ref:
+            shift["areaName"] = area_ref.get("name") or ""
+            shift["areaLocationId"] = area_ref.get("locationId")
+            shift["areaRosterSortOrder"] = area_ref.get("rosterSortOrder")
+
     payload = {
         "captured_at": captured_at,
         "status": "ok" if captured else "empty",
         "events": events,
         "responses": captured,
         "page_texts": page_texts,
+        "areas": area_refs,
         "extracted_shifts": sorted(
             extracted_shifts_by_id.values(),
             key=lambda item: (str(item.get("start") or ""), str(item.get("id") or "")),
         ),
-        "extracted_schedule_shifts": sorted(
-            extracted_schedule_shifts_by_id.values(),
-            key=lambda item: (str(item.get("start") or ""), str(item.get("id") or "")),
-        ),
+        "extracted_schedule_shifts": extracted_schedule_shifts,
     }
     if captured:
         return DeputyWebCaptureResult(
@@ -607,6 +648,8 @@ def format_capture_payload(value: str) -> dict[str, Any] | None:
         payload["extracted_shifts"] = []
     if not isinstance(payload.get("extracted_schedule_shifts"), list):
         payload["extracted_schedule_shifts"] = []
+    if not isinstance(payload.get("areas"), list):
+        payload["areas"] = []
     if not isinstance(payload.get("page_texts"), list):
         payload["page_texts"] = []
     payload["captured_at"] = str(payload.get("captured_at") or "")
@@ -675,6 +718,25 @@ def _capture_copy_text(payload: dict[str, Any]) -> str:
 
     extracted_schedule_shifts = payload.get("extracted_schedule_shifts") or []
     if extracted_schedule_shifts:
+        area_refs = {
+            str(area.get("id") or ""): area
+            for area in payload.get("areas") or []
+            if isinstance(area, dict)
+        }
+        used_area_ids = {str(shift.get("area") or "") for shift in extracted_schedule_shifts if isinstance(shift, dict)}
+        if area_refs:
+            lines.extend(["", "Schedule Area References:"])
+            for area_id in sorted(
+                used_area_ids,
+                key=lambda item: (
+                    int(area_refs.get(item, {}).get("rosterSortOrder") or 999999),
+                    str(area_refs.get(item, {}).get("name") or ""),
+                    item,
+                ),
+            ):
+                area = area_refs.get(area_id)
+                if area:
+                    lines.append(json.dumps(_safe_json_sample(area), ensure_ascii=True, sort_keys=True))
         lines.extend(["", "Extracted Schedule Shift Records:"])
         for shift in extracted_schedule_shifts:
             lines.append(json.dumps(_safe_json_sample(shift), ensure_ascii=True, sort_keys=True))

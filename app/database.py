@@ -92,11 +92,39 @@ def init_db(settings: Settings | None = None) -> None:
                 updated_at TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS deputy_schedule_areas (
+                area_id INTEGER PRIMARY KEY,
+                name TEXT,
+                location_id INTEGER,
+                roster_sort_order INTEGER,
+                updated_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_schedule_shifts (
+                source_shift_id INTEGER PRIMARY KEY,
+                captured_at TEXT,
+                area_id INTEGER,
+                area_name TEXT,
+                area_roster_sort_order INTEGER,
+                employee_id INTEGER,
+                employee_name TEXT,
+                start_at TEXT,
+                end_at TEXT,
+                date TEXT,
+                duration REAL,
+                is_open INTEGER DEFAULT 0,
+                is_published INTEGER DEFAULT 0,
+                note TEXT,
+                raw_payload TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_shifts_date ON shifts(date);
             CREATE INDEX IF NOT EXISTS idx_shifts_start_at ON shifts(start_at);
             CREATE INDEX IF NOT EXISTS idx_shifts_changed ON shifts(changed_since_viewed);
             CREATE INDEX IF NOT EXISTS idx_shift_changes_shift ON shift_changes(shift_id, changed_at);
             CREATE INDEX IF NOT EXISTS idx_sync_log_started_at ON sync_log(started_at);
+            CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_date ON deputy_schedule_shifts(date);
+            CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_start ON deputy_schedule_shifts(start_at);
             """
         )
         _ensure_column(conn, "shifts", "source_link", "TEXT")
@@ -104,6 +132,8 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "shift_marks", "timing_adjustment_time", "TEXT")
         _ensure_column(conn, "shift_marks", "timing_adjustment_last_race", "INTEGER DEFAULT 0")
         _ensure_column(conn, "shift_marks", "timing_adjustment_day_finished", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "deputy_schedule_shifts", "area_name", "TEXT")
+        _ensure_column(conn, "deputy_schedule_shifts", "area_roster_sort_order", "INTEGER")
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -264,6 +294,24 @@ def get_shift_changes_for_date(date_text: str) -> list[sqlite3.Row]:
     return rows
 
 
+def fetch_deputy_schedule_for_date(date_text: str) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM deputy_schedule_shifts
+            WHERE date = ?
+            ORDER BY
+                COALESCE(area_roster_sort_order, 999999),
+                area_name,
+                start_at,
+                employee_name
+            """,
+            (date_text,),
+        ).fetchall()
+    return rows
+
+
 def get_recent_source_payloads(limit: int = 6) -> list[sqlite3.Row]:
     with get_connection() as conn:
         rows = conn.execute(
@@ -336,6 +384,122 @@ def update_app_settings(values: dict[str, str]) -> None:
                 """,
                 (key, value, now),
             )
+
+
+def save_deputy_web_schedule(payload: dict[str, object]) -> int:
+    captured_at = str(payload.get("captured_at") or datetime.now().isoformat(timespec="seconds"))
+    areas = payload.get("areas") if isinstance(payload.get("areas"), list) else []
+    shifts = payload.get("extracted_schedule_shifts") if isinstance(payload.get("extracted_schedule_shifts"), list) else []
+    area_lookup: dict[str, dict[str, object]] = {}
+
+    with get_connection() as conn:
+        for area in areas:
+            if not isinstance(area, dict) or area.get("id") in (None, ""):
+                continue
+            area_id = int(area["id"])
+            area_lookup[str(area_id)] = area
+            conn.execute(
+                """
+                INSERT INTO deputy_schedule_areas (
+                    area_id, name, location_id, roster_sort_order, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(area_id) DO UPDATE SET
+                    name = excluded.name,
+                    location_id = excluded.location_id,
+                    roster_sort_order = excluded.roster_sort_order,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    area_id,
+                    str(area.get("name") or area_id),
+                    _optional_int(area.get("locationId")),
+                    _optional_int(area.get("rosterSortOrder")),
+                    captured_at,
+                ),
+            )
+
+        saved = 0
+        for shift in shifts:
+            if not isinstance(shift, dict) or shift.get("id") in (None, ""):
+                continue
+            area_id = _optional_int(shift.get("area"))
+            area = area_lookup.get(str(area_id)) if area_id is not None else None
+            area_name = str(shift.get("areaName") or (area or {}).get("name") or area_id or "")
+            area_sort = _optional_int(shift.get("areaRosterSortOrder"))
+            if area_sort is None and area:
+                area_sort = _optional_int(area.get("rosterSortOrder"))
+            start_at = str(shift.get("start") or "")
+            end_at = str(shift.get("end") or "")
+            conn.execute(
+                """
+                INSERT INTO deputy_schedule_shifts (
+                    source_shift_id, captured_at, area_id, area_name,
+                    area_roster_sort_order, employee_id, employee_name,
+                    start_at, end_at, date, duration, is_open, is_published,
+                    note, raw_payload
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_shift_id) DO UPDATE SET
+                    captured_at = excluded.captured_at,
+                    area_id = excluded.area_id,
+                    area_name = excluded.area_name,
+                    area_roster_sort_order = excluded.area_roster_sort_order,
+                    employee_id = excluded.employee_id,
+                    employee_name = excluded.employee_name,
+                    start_at = excluded.start_at,
+                    end_at = excluded.end_at,
+                    date = excluded.date,
+                    duration = excluded.duration,
+                    is_open = excluded.is_open,
+                    is_published = excluded.is_published,
+                    note = excluded.note,
+                    raw_payload = excluded.raw_payload
+                """,
+                (
+                    int(shift["id"]),
+                    captured_at,
+                    area_id,
+                    area_name,
+                    area_sort,
+                    _optional_int(shift.get("employee")),
+                    str(shift.get("employeeName") or ""),
+                    start_at,
+                    end_at,
+                    start_at[:10],
+                    _optional_float(shift.get("duration")),
+                    1 if shift.get("isOpen") else 0,
+                    1 if shift.get("isPublished") else 0,
+                    str(shift.get("note") or ""),
+                    json_dumps(shift),
+                ),
+            )
+            saved += 1
+    return saved
+
+
+def _optional_int(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def json_dumps(value: object) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=True, sort_keys=True)
 
 
 def clear_all_changed_flags() -> int:
