@@ -28,6 +28,10 @@ SCHEDULE_SAMPLE_DEPTH = 8
 SCHEDULE_SAMPLE_LIST_ITEMS = 80
 SCHEDULE_SAMPLE_TEXT = 4000
 MAX_VISIBLE_TEXT = 16000
+FULL_COPY_PATH_RE = re.compile(
+    r"/api/(?:schedule/|management/v2/(?:shifts|areas|locations|custom-fields)|v1/my/roster|v2/weather/)",
+    re.IGNORECASE,
+)
 TRACK_NAMES = {
     "CAM": "Cambridge",
     "CAMBRIDGE": "Cambridge",
@@ -87,6 +91,15 @@ def _is_deputy_api_url(value: str, settings: Settings) -> bool:
 
 def _is_schedule_api_url(value: str) -> bool:
     return "/api/schedule/" in urlsplit(value).path
+
+
+def _include_full_response_in_copy(response: dict[str, Any]) -> bool:
+    url = str(response.get("url") or "")
+    try:
+        status = int(response.get("status") or 0)
+    except (TypeError, ValueError):
+        status = 0
+    return status >= 400 or bool(FULL_COPY_PATH_RE.search(urlsplit(url).path))
 
 
 def _origin_url(settings: Settings) -> str:
@@ -426,52 +439,55 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         events.append("Could not select the target track automatically.")
 
                 async def capture_response(response: Any) -> None:
-                    if len(captured) >= MAX_CAPTURED_RESPONSES:
-                        return
-                    response_url = response.url
-                    if not _is_deputy_api_url(response_url, settings):
-                        return
-                    content_type = (response.headers.get("content-type") or "").lower()
-                    if "json" not in content_type:
-                        return
                     try:
-                        data = await response.json()
-                    except Exception:
-                        return
-                    is_schedule_response = _is_schedule_api_url(response_url)
-                    sample_kwargs = (
-                        {
-                            "max_depth": SCHEDULE_SAMPLE_DEPTH,
-                            "max_list_items": SCHEDULE_SAMPLE_LIST_ITEMS,
-                            "max_text": SCHEDULE_SAMPLE_TEXT,
-                        }
-                        if is_schedule_response
-                        else {}
-                    )
-                    captured_item = {
-                        "url": _clean_url(response_url),
-                        "method": response.request.method,
-                        "status": response.status,
-                        "shape": _top_level_shape(data),
-                        "sample": _safe_json_sample(data, **sample_kwargs),
-                    }
-                    if is_schedule_response and response.request.method.upper() in {"POST", "PUT", "PATCH"}:
-                        post_data = response.request.post_data or ""
+                        if len(captured) >= MAX_CAPTURED_RESPONSES:
+                            return
+                        response_url = response.url
+                        if not _is_deputy_api_url(response_url, settings):
+                            return
+                        content_type = (response.headers.get("content-type") or "").lower()
+                        if "json" not in content_type:
+                            return
                         try:
-                            captured_item["request_sample"] = _safe_json_sample(json.loads(post_data), **sample_kwargs)
-                        except ValueError:
-                            captured_item["request_sample"] = redacted_text(post_data[:SCHEDULE_SAMPLE_TEXT])
-                    captured.append(captured_item)
-                    if "/api/management/v2/shifts" in response_url:
-                        for shift in _extract_management_shifts(data):
-                            shift_id = str(shift.get("id") or "")
-                            if shift_id:
-                                extracted_shifts_by_id[shift_id] = shift
-                    if is_schedule_response:
-                        for shift in _extract_schedule_shifts(data):
-                            shift_id = str(shift.get("id") or "")
-                            if shift_id:
-                                extracted_schedule_shifts_by_id[shift_id] = shift
+                            data = await response.json()
+                        except Exception:
+                            return
+                        is_schedule_response = _is_schedule_api_url(response_url)
+                        sample_kwargs = (
+                            {
+                                "max_depth": SCHEDULE_SAMPLE_DEPTH,
+                                "max_list_items": SCHEDULE_SAMPLE_LIST_ITEMS,
+                                "max_text": SCHEDULE_SAMPLE_TEXT,
+                            }
+                            if is_schedule_response
+                            else {}
+                        )
+                        captured_item = {
+                            "url": _clean_url(response_url),
+                            "method": response.request.method,
+                            "status": response.status,
+                            "shape": _top_level_shape(data),
+                            "sample": _safe_json_sample(data, **sample_kwargs),
+                        }
+                        if is_schedule_response and response.request.method.upper() in {"POST", "PUT", "PATCH"}:
+                            post_data = response.request.post_data or ""
+                            try:
+                                captured_item["request_sample"] = _safe_json_sample(json.loads(post_data), **sample_kwargs)
+                            except ValueError:
+                                captured_item["request_sample"] = redacted_text(post_data[:SCHEDULE_SAMPLE_TEXT])
+                        captured.append(captured_item)
+                        if "/api/management/v2/shifts" in response_url:
+                            for shift in _extract_management_shifts(data):
+                                shift_id = str(shift.get("id") or "")
+                                if shift_id:
+                                    extracted_shifts_by_id[shift_id] = shift
+                        if is_schedule_response:
+                            for shift in _extract_schedule_shifts(data):
+                                shift_id = str(shift.get("id") or "")
+                                if shift_id:
+                                    extracted_schedule_shifts_by_id[shift_id] = shift
+                    except Exception as exc:
+                        events.append(f"Skipped one Deputy response during capture: {redacted_text(str(exc))[:180]}.")
 
                 page.on("response", capture_response)
                 await page.goto(login_url, wait_until="domcontentloaded", timeout=45_000)
@@ -665,7 +681,7 @@ def _capture_copy_text(payload: dict[str, Any]) -> str:
 
     responses = payload.get("responses") or []
     if responses:
-        lines.extend(["", "Captured Responses:"])
+        lines.extend(["", "Captured Response Summary:"])
         for index, response in enumerate(responses, start=1):
             if not isinstance(response, dict):
                 continue
@@ -684,6 +700,8 @@ def _capture_copy_text(payload: dict[str, Any]) -> str:
                     "Shape: " + " | ".join(shape_bits),
                 ]
             )
+            if not _include_full_response_in_copy(response):
+                continue
             if "request_sample" in response:
                 lines.extend(
                     [
