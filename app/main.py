@@ -33,6 +33,7 @@ from .database import (
     update_app_settings,
     update_shift_marks,
 )
+from .deputy_api import test_deputy_roster_api
 from .scheduler import get_pre_shift_status, shutdown_scheduler, start_scheduler
 from .sync_ics import sync_deputy_calendar
 
@@ -717,6 +718,16 @@ def clear_all_changed() -> RedirectResponse:
         url=notice_url("/settings", f"Cleared changed flags on {changed} shifts."),
         status_code=303,
     )
+
+
+@app.post("/settings/deputy-api-test")
+def test_deputy_api() -> RedirectResponse:
+    result = test_deputy_roster_api(get_settings())
+    message = result.message
+    if result.sample:
+        fields = ", ".join(key for key, value in result.sample.items() if value not in (None, "", []))
+        message = f"{message} First record includes: {fields}."
+    return RedirectResponse(url=notice_url("/settings", message), status_code=303)
 
 
 @app.api_route("/sync-now", methods=["GET", "POST"])

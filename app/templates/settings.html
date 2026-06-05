@@ -29,10 +29,11 @@
     </article>
     <article class="settings-panel">
       <span class="summary-label">Deputy web</span>
-      <strong>{{ "Configured" if settings.deputy_login_configured else "Not set" }}</strong>
+      <strong>{{ "Login ready" if settings.deputy_login_configured else "Login not set" }}</strong>
       {% if settings.deputy_login_configured %}
         <p>{{ settings.deputy_login_label }}</p>
       {% endif %}
+      <p>API token: {{ "configured" if settings.deputy_api_configured else "missing" }}</p>
     </article>
   </section>
 
@@ -84,7 +85,12 @@
       <span class="summary-label">Login</span>
       <strong>{{ "Ready" if settings.deputy_login_configured else "Env needed" }}</strong>
       <p>{{ settings.deputy_login_label }}</p>
-      <p>Set with Portainer env. Password is never shown here.</p>
+      <span class="summary-label">API token</span>
+      <strong>{{ "Ready" if settings.deputy_api_configured else "Env needed" }}</strong>
+      <p>Set with Portainer env. Password and token are never shown here.</p>
+      <form action="/settings/deputy-api-test" method="post">
+        <button class="button button-secondary" type="submit">Test Deputy API</button>
+      </form>
     </article>
 
     <article class="settings-panel">

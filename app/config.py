@@ -17,6 +17,7 @@ class Settings:
     deputy_login_email: str
     deputy_login_password: str
     deputy_display_name: str
+    deputy_api_token: str
     app_password: str
     tz_name: str
     sync_at_hour: int
@@ -52,6 +53,10 @@ class Settings:
         masked_name = name[:2] + "***" if len(name) > 2 else "***"
         return f"{masked_name}@{domain}"
 
+    @property
+    def deputy_api_configured(self) -> bool:
+        return bool(self.deputy_api_token.strip())
+
 
 def _int_env(name: str, default: int) -> int:
     value = os.getenv(name)
@@ -75,6 +80,7 @@ def get_settings() -> Settings:
         deputy_login_email=os.getenv("DEPUTY_LOGIN_EMAIL", "").strip(),
         deputy_login_password=os.getenv("DEPUTY_LOGIN_PASSWORD", ""),
         deputy_display_name=os.getenv("DEPUTY_DISPLAY_NAME", "").strip(),
+        deputy_api_token=os.getenv("DEPUTY_API_TOKEN", "").strip(),
         app_password=os.getenv("APP_PASSWORD", ""),
         tz_name=tz_name,
         sync_at_hour=_int_env("SYNC_AT_HOUR", 5),
