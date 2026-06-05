@@ -115,6 +115,11 @@ RACE_COUNT_WITH_TIMES_RE = re.compile(
 )
 CREW_LINE_RE = re.compile(r"^([A-Za-z]{1,8}\d{0,3}|\d{3,4})\s+(.+)$")
 NON_CREW_LABELS = {"office", "trucks", "truck", "clow", "on", "first", "last", "race", "races", "breaks"}
+TIMING_LABELS = {
+    "first cross": "First cross",
+    "first race": "First race",
+    "last race": "Last race",
+}
 
 
 app = FastAPI(
@@ -249,8 +254,9 @@ def parse_roster_summary(lines: list[str]) -> dict[str, object]:
     consumed: set[int] = set()
 
     def add_timing(label: str, value: str) -> None:
+        label = TIMING_LABELS.get(label.strip().lower(), label.strip())
         time_value = clean_timing_value(value)
-        if not any(item["label"] == label and item["time"] == time_value for item in timings):
+        if not any(item["label"].lower() == label.lower() and item["time"] == time_value for item in timings):
             timings.append({"label": label, "time": time_value})
 
     for index, line in enumerate(lines):
@@ -411,6 +417,15 @@ def parse_shift_title(title: str | None) -> dict[str, str]:
     }
 
 
+def role_chain_label(segments: list[dict[str, str]]) -> str:
+    labels = []
+    for segment in segments:
+        role = segment.get("role") or "Shift"
+        if not labels or labels[-1] != role:
+            labels.append(role)
+    return " -> ".join(labels)
+
+
 def format_change_value(field_name: str, value: str | None) -> str:
     value = redact_secret_text(str(value or ""))
     if value == "":
@@ -452,6 +467,15 @@ def decorate_shift(row: object) -> dict[str, object]:
     shift["raw_label"] = format_hours(shift.get("raw_hours"))
     shift["mark_badges"] = [label for field, label in MARK_FIELDS if int(shift.get(field) or 0)]
     shift.update(parsed_title)
+    role_segment = {
+        "time_range": shift["time_range"],
+        "role": shift.get("role_full_label") or shift.get("role_label") or "Shift",
+        "role_short": shift.get("role_label") or shift.get("role_full_label") or "Shift",
+        "start_label": shift["start_label"],
+        "end_label": shift["end_label"],
+    }
+    shift["role_segments"] = [role_segment]
+    shift["role_chain_label"] = role_chain_label(shift["role_segments"])
     colour = clean_colour(str(shift.get("custom_colour") or ""))
     shift["colour_style"] = f"--shift-colour: {colour};" if colour else ""
     shift["description_lines"] = description_lines(str(shift.get("description") or ""))
@@ -542,6 +566,8 @@ def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[
         list(right.get("description_lines") or []),
     )
     merged["roster_summary"] = parse_roster_summary(list(merged.get("description_lines") or []))
+    merged["role_segments"] = list(left.get("role_segments") or []) + list(right.get("role_segments") or [])
+    merged["role_chain_label"] = role_chain_label(list(merged.get("role_segments") or []))
     merged["changed_since_viewed"] = int(left.get("changed_since_viewed") or 0) or int(right.get("changed_since_viewed") or 0)
     merged["combined_shift_ids"] = list(left.get("combined_shift_ids") or [left["id"]]) + list(
         right.get("combined_shift_ids") or [right["id"]]

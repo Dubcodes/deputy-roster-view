@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -63,7 +63,27 @@ def _login_url(settings: Settings) -> str:
 
 def _roster_url(settings: Settings) -> str:
     origin_url = _origin_url(settings)
-    return f"{origin_url}#roster" if origin_url else ""
+    return f"{origin_url}#/roster" if origin_url else ""
+
+
+def _week_shift_probe_url(settings: Settings) -> str:
+    origin_url = _origin_url(settings)
+    if not origin_url:
+        return ""
+    today = datetime.now(settings.timezone).date()
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    start_at = datetime.combine(week_start, time.min, settings.timezone).isoformat()
+    end_at = datetime.combine(week_end, time.max, settings.timezone).replace(microsecond=0).isoformat()
+    query = urlencode(
+        {
+            "start": start_at,
+            "end": end_at,
+            "published": "TRUE",
+            "expandMetadata": "true",
+        }
+    )
+    return f"{origin_url}api/management/v2/shifts?{query}"
 
 
 def _safe_json_sample(value: Any, depth: int = 0) -> Any:
@@ -165,10 +185,10 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
             try:
                 browser = await playwright.chromium.launch(headless=True, args=["--no-sandbox"])
                 context = await browser.new_context(
-                    viewport={"width": 390, "height": 844},
+                    viewport={"width": 1360, "height": 900},
                     user_agent=(
-                        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
-                        "(KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36"
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
                     ),
                 )
                 page = await context.new_page()
@@ -234,6 +254,41 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         await page.wait_for_load_state("networkidle", timeout=35_000)
                     except PlaywrightTimeoutError:
                         events.append("Deputy roster page kept loading; using captured responses so far.")
+
+                probe_url = _week_shift_probe_url(settings)
+                if probe_url:
+                    probe = await page.evaluate(
+                        """
+                        async (url) => {
+                          const response = await fetch(url, { credentials: "include" });
+                          const contentType = response.headers.get("content-type") || "";
+                          return {
+                            status: response.status,
+                            ok: response.ok,
+                            data: contentType.includes("json") ? await response.json() : null
+                          };
+                        }
+                        """,
+                        probe_url,
+                    )
+                    if isinstance(probe, dict):
+                        status = probe.get("status")
+                        events.append(f"Probed weekly schedule shifts without employee filter: HTTP {status}.")
+                        data = probe.get("data")
+                        if data is not None and len(captured) < MAX_CAPTURED_RESPONSES:
+                            captured.append(
+                                {
+                                    "url": _clean_url(probe_url),
+                                    "method": "GET",
+                                    "status": status,
+                                    "shape": _top_level_shape(data),
+                                    "sample": _safe_json_sample(data),
+                                }
+                            )
+                            for shift in _extract_management_shifts(data):
+                                shift_id = str(shift.get("id") or "")
+                                if shift_id:
+                                    extracted_shifts_by_id[shift_id] = shift
 
                 await page.wait_for_timeout(4_000)
                 login_still_visible = await page.locator("input[type='password']").count() > 0

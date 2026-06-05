@@ -23,7 +23,7 @@
         <div class="detail-card-heading">
           <div>
             <p class="eyebrow">{{ shift.time_range }}</p>
-            <h2>{{ shift.role_full_label or shift.role_label or shift.title or "Shift" }}</h2>
+            <h2>{{ shift.role_chain_label or shift.role_full_label or shift.role_label or shift.title or "Shift" }}</h2>
             <p class="detail-subtitle">
               {{ shift.track_label }}
               {% if shift.race_type_label %} · {{ shift.race_type_label }}{% endif %}
@@ -56,7 +56,7 @@
           </div>
           <div>
             <span>Role</span>
-            <strong>{{ shift.role_full_label or shift.role_label or "Shift" }}</strong>
+            <strong>{{ shift.role_chain_label or shift.role_full_label or shift.role_label or "Shift" }}</strong>
           </div>
           <div>
             <span>Type</span>
@@ -87,12 +87,26 @@
           {% endif %}
         </div>
 
-        {% if shift.roster_summary.has_structured %}
+        {% if shift.roster_summary.has_structured or shift.role_segments|length > 1 %}
           <section class="race-day-panel">
             <div class="section-heading">
               <h3>Race Day</h3>
             </div>
             <div class="race-day-grid">
+              {% if shift.role_segments %}
+                <div class="race-day-block">
+                  <h4>My Positions</h4>
+                  <dl class="timeline-list">
+                    {% for segment in shift.role_segments %}
+                      <div>
+                        <dt>{{ segment.time_range }}</dt>
+                        <dd>{{ segment.role }}</dd>
+                      </div>
+                    {% endfor %}
+                  </dl>
+                </div>
+              {% endif %}
+
               {% if shift.roster_summary.timings %}
                 <div class="race-day-block">
                   <h4>Timings</h4>

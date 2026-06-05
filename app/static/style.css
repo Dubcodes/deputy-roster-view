@@ -792,6 +792,10 @@ a {
   padding: 11px;
 }
 
+.race-day-block-wide {
+  grid-column: span 2;
+}
+
 .timeline-list,
 .crew-list {
   display: grid;
@@ -802,7 +806,7 @@ a {
 .timeline-list div,
 .crew-list div {
   display: grid;
-  grid-template-columns: 58px 1fr;
+  grid-template-columns: 88px 1fr;
   gap: 10px;
   align-items: baseline;
 }
@@ -1267,6 +1271,10 @@ th {
   .change-values,
   .source-fields {
     grid-template-columns: 1fr;
+  }
+
+  .race-day-block-wide {
+    grid-column: auto;
   }
 
   .shift-facts div,
