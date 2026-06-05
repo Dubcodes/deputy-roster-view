@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import calendar
-import asyncio
 import json
 import re
 from datetime import date, datetime
@@ -36,7 +35,7 @@ from .database import (
     update_shift_marks,
 )
 from .deputy_api import test_deputy_roster_api
-from .deputy_web import format_capture_payload, run_deputy_web_capture
+from .deputy_web import format_capture_payload, redacted_text, run_deputy_web_capture
 from .scheduler import get_pre_shift_status, shutdown_scheduler, start_scheduler
 from .sync_ics import sync_deputy_calendar
 
@@ -735,8 +734,21 @@ def test_deputy_api() -> RedirectResponse:
 
 
 @app.post("/settings/deputy-web-capture")
-def capture_deputy_web() -> RedirectResponse:
-    result = asyncio.run(run_deputy_web_capture(get_settings()))
+async def capture_deputy_web() -> RedirectResponse:
+    settings = get_settings()
+    try:
+        result = await run_deputy_web_capture(settings)
+    except Exception as exc:
+        message = f"Deputy web capture failed: {redacted_text(str(exc))[:220]}"
+        payload = {
+            "captured_at": datetime.now(settings.timezone).isoformat(timespec="seconds"),
+            "status": "error",
+            "events": [message],
+            "responses": [],
+        }
+        update_app_settings({"last_deputy_web_capture": json.dumps(payload, ensure_ascii=True)})
+        return RedirectResponse(url=notice_url("/settings", message), status_code=303)
+
     if result.payload:
         update_app_settings({"last_deputy_web_capture": json.dumps(result.payload, ensure_ascii=True)})
     return RedirectResponse(url=notice_url("/settings", result.message), status_code=303)

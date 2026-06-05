@@ -108,76 +108,80 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     captured: list[dict[str, Any]] = []
     events: list[str] = []
 
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
-        context = await browser.new_context(
-            viewport={"width": 390, "height": 844},
-            user_agent=(
-                "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36"
-            ),
-        )
-        page = await context.new_page()
-
-        async def capture_response(response: Any) -> None:
-            if len(captured) >= MAX_CAPTURED_RESPONSES:
-                return
-            response_url = response.url
-            if "/api/" not in response_url and "deputy.com" not in response_url:
-                return
-            content_type = (response.headers.get("content-type") or "").lower()
-            if "json" not in content_type:
-                return
+    try:
+        async with async_playwright() as playwright:
+            browser = None
+            context = None
             try:
-                data = await response.json()
-            except Exception:
-                return
-            captured.append(
-                {
-                    "url": _clean_url(response_url),
-                    "method": response.request.method,
-                    "status": response.status,
-                    "shape": _top_level_shape(data),
-                    "sample": _safe_json_sample(data),
-                }
-            )
+                browser = await playwright.chromium.launch(headless=True, args=["--no-sandbox"])
+                context = await browser.new_context(
+                    viewport={"width": 390, "height": 844},
+                    user_agent=(
+                        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36"
+                    ),
+                )
+                page = await context.new_page()
 
-        page.on("response", capture_response)
+                async def capture_response(response: Any) -> None:
+                    if len(captured) >= MAX_CAPTURED_RESPONSES:
+                        return
+                    response_url = response.url
+                    if "/api/" not in response_url and "deputy.com" not in response_url:
+                        return
+                    content_type = (response.headers.get("content-type") or "").lower()
+                    if "json" not in content_type:
+                        return
+                    try:
+                        data = await response.json()
+                    except Exception:
+                        return
+                    captured.append(
+                        {
+                            "url": _clean_url(response_url),
+                            "method": response.request.method,
+                            "status": response.status,
+                            "shape": _top_level_shape(data),
+                            "sample": _safe_json_sample(data),
+                        }
+                    )
 
-        try:
-            await page.goto(login_url, wait_until="domcontentloaded", timeout=45_000)
-            events.append("Opened Deputy login page.")
+                page.on("response", capture_response)
+                await page.goto(login_url, wait_until="domcontentloaded", timeout=45_000)
+                events.append("Opened Deputy login page.")
 
-            email_field = page.locator(
-                "input[type='email'], input[name*='email' i], input[id*='email' i], input[type='text']"
-            ).first
-            password_field = page.locator("input[type='password']").first
-            await email_field.fill(settings.deputy_login_email, timeout=20_000)
-            await password_field.fill(settings.deputy_login_password, timeout=20_000)
-            await password_field.press("Enter")
-            events.append("Submitted login form.")
+                email_field = page.locator(
+                    "input[type='email'], input[name*='email' i], input[id*='email' i], input[type='text']"
+                ).first
+                password_field = page.locator("input[type='password']").first
+                await email_field.fill(settings.deputy_login_email, timeout=20_000)
+                await password_field.fill(settings.deputy_login_password, timeout=20_000)
+                await password_field.press("Enter")
+                events.append("Submitted login form.")
 
-            try:
-                await page.wait_for_load_state("networkidle", timeout=25_000)
-            except PlaywrightTimeoutError:
-                events.append("Network stayed active after login; continuing capture.")
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=25_000)
+                except PlaywrightTimeoutError:
+                    events.append("Network stayed active after login; continuing capture.")
 
-            await page.goto(settings.deputy_web_url, wait_until="domcontentloaded", timeout=45_000)
-            events.append("Opened Deputy web app.")
-            try:
-                await page.wait_for_load_state("networkidle", timeout=35_000)
-            except PlaywrightTimeoutError:
-                events.append("Deputy web app kept loading; using captured responses so far.")
+                await page.goto(settings.deputy_web_url, wait_until="domcontentloaded", timeout=45_000)
+                events.append("Opened Deputy web app.")
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=35_000)
+                except PlaywrightTimeoutError:
+                    events.append("Deputy web app kept loading; using captured responses so far.")
 
-            await page.wait_for_timeout(4_000)
-            login_still_visible = await page.locator("input[type='password']").count() > 0
-            if login_still_visible:
-                events.append("Password field is still visible; login may have failed or needs MFA/SSO.")
-        except Exception as exc:
-            events.append(f"Capture stopped: {redacted_text(str(exc))}")
-        finally:
-            await context.close()
-            await browser.close()
+                await page.wait_for_timeout(4_000)
+                login_still_visible = await page.locator("input[type='password']").count() > 0
+                if login_still_visible:
+                    events.append("Password field is still visible; login may have failed or needs MFA/SSO.")
+            finally:
+                if context is not None:
+                    await context.close()
+                if browser is not None:
+                    await browser.close()
+    except Exception as exc:
+        events.append(f"Capture stopped: {redacted_text(str(exc))}")
 
     captured_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
     payload = {
