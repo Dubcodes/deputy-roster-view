@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .config import Settings
+from .database import get_next_upcoming_shift
 
 
 SECRET_KEY_RE = re.compile(
@@ -18,11 +19,28 @@ URL_SECRET_RE = re.compile(r"([?&][A-Za-z0-9_%-]*(?:token|key|secret|session|ap|
 INTERESTING_URL_RE = re.compile(r"/api/", re.IGNORECASE)
 EMAIL_VALUE_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 PHONE_VALUE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{6,}\d)(?!\w)")
-MAX_CAPTURED_RESPONSES = 48
+SUMMARY_CODE_RE = re.compile(r"^\[([^\]]+)\]")
+MAX_CAPTURED_RESPONSES = 80
 MAX_SAMPLE_DEPTH = 4
 MAX_SAMPLE_LIST_ITEMS = 6
 MAX_SAMPLE_TEXT = 500
-MAX_VISIBLE_TEXT = 7000
+MAX_VISIBLE_TEXT = 16000
+TRACK_NAMES = {
+    "CAM": "Cambridge",
+    "CAMBRIDGE": "Cambridge",
+    "CAMS": "Cambridge Synthetic",
+    "ELLE": "Ellerslie",
+    "MATA": "Matamata",
+    "PUKE": "Pukekohe",
+    "R": "Rotorua",
+    "ROTORUA": "Rotorua",
+    "TARO": "Te Aroha",
+    "TAUR": "Tauranga",
+    "TRAP": "Te Rapa",
+}
+DEFAULT_RACE_TYPE_BY_CODE = {
+    "CAM": "H",
+}
 
 
 @dataclass(frozen=True)
@@ -56,6 +74,12 @@ def _clean_url(value: str) -> str:
         else:
             query_items.append((key, item[:80]))
     return redacted_text(urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query_items), "")))
+
+
+def _is_deputy_api_url(value: str, settings: Settings) -> bool:
+    parsed = urlsplit(value)
+    origin = urlsplit(_origin_url(settings))
+    return parsed.netloc == origin.netloc and bool(INTERESTING_URL_RE.search(parsed.path))
 
 
 def _origin_url(settings: Settings) -> str:
@@ -95,6 +119,47 @@ def _week_shift_probe_url(settings: Settings) -> str:
         }
     )
     return f"{origin_url}api/management/v2/shifts?{query}"
+
+
+def _target_schedule_tracks(settings: Settings) -> list[str]:
+    now = datetime.now(settings.timezone).replace(microsecond=0).isoformat()
+    shift = get_next_upcoming_shift(now)
+    if shift is None:
+        return []
+
+    names: list[str] = []
+    title = str(shift["title"] or "")
+    match = SUMMARY_CODE_RE.match(title)
+    source_code = match.group(1).strip().upper() if match else ""
+    if source_code and source_code != "VEH":
+        race_type = ""
+        track_code = source_code
+        if len(source_code) > 2 and source_code[1] == "-" and source_code[0] in {"T", "H"}:
+            race_type = source_code[0]
+            track_code = source_code[2:]
+        elif len(source_code) > 2 and source_code[-2] == "-" and source_code[-1] in {"T", "H"}:
+            race_type = source_code[-1]
+            track_code = source_code[:-2]
+        if not race_type:
+            race_type = DEFAULT_RACE_TYPE_BY_CODE.get(track_code, "")
+
+        track_name = TRACK_NAMES.get(track_code, track_code.replace("-", " ").title())
+        if race_type:
+            names.append(f"{race_type}-{track_name}")
+        names.extend([track_name, source_code])
+
+    location = str(shift["location"] or "").strip()
+    if location:
+        names.append(location)
+
+    unique_names = []
+    seen = set()
+    for name in names:
+        key = name.lower()
+        if key and key not in seen:
+            seen.add(key)
+            unique_names.append(name)
+    return unique_names
 
 
 def _safe_json_sample(value: Any, depth: int = 0) -> Any:
@@ -189,6 +254,11 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     extracted_shifts_by_id: dict[str, dict[str, Any]] = {}
     events: list[str] = []
     page_texts: list[dict[str, Any]] = []
+    target_tracks = _target_schedule_tracks(settings)
+    if target_tracks:
+        events.append(f"Target schedule track: {target_tracks[0]}.")
+    else:
+        events.append("No upcoming shift track found for schedule selection.")
 
     try:
         async with async_playwright() as playwright:
@@ -214,11 +284,94 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     if cleaned:
                         page_texts.append({"label": label, "length": len(text), "text": cleaned})
 
+                async def wait_for_page_to_settle(label: str, timeout: int = 25_000) -> None:
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=timeout)
+                    except PlaywrightTimeoutError:
+                        events.append(f"{label} kept loading; using captured responses so far.")
+
+                async def current_body_text() -> str:
+                    try:
+                        return await page.locator("body").inner_text(timeout=8_000)
+                    except Exception:
+                        return ""
+
+                async def open_schedule_page() -> None:
+                    locators = [
+                        page.get_by_role("link", name=re.compile(r"^Schedule$", re.IGNORECASE)).first,
+                        page.get_by_role("button", name=re.compile(r"^Schedule$", re.IGNORECASE)).first,
+                        page.get_by_text("Schedule", exact=True).first,
+                    ]
+                    for locator in locators:
+                        try:
+                            if await locator.count() == 0:
+                                continue
+                            await locator.click(timeout=8_000)
+                            events.append("Clicked Schedule navigation.")
+                            await wait_for_page_to_settle("Schedule page", timeout=30_000)
+                            await page.wait_for_timeout(3_000)
+                            return
+                        except Exception:
+                            continue
+                    events.append("Could not click Schedule navigation; trying roster URL.")
+                    roster_url = _roster_url(settings)
+                    if roster_url:
+                        await page.goto(roster_url, wait_until="domcontentloaded", timeout=45_000)
+                        events.append("Opened Deputy roster page URL.")
+                        await wait_for_page_to_settle("Deputy roster page", timeout=35_000)
+                        await page.wait_for_timeout(3_000)
+
+                async def select_target_track() -> None:
+                    if not target_tracks:
+                        return
+                    body_text = await current_body_text()
+                    body_lower = body_text.lower()
+                    if any(track.lower() in body_lower for track in target_tracks) and "week by area" in body_lower:
+                        events.append("Target track already appears selected on the schedule page.")
+                        return
+
+                    for target in target_tracks:
+                        locators = [
+                            page.get_by_role("button", name=re.compile(re.escape(target), re.IGNORECASE)).first,
+                            page.get_by_text(target, exact=True).first,
+                            page.get_by_text(target, exact=False).first,
+                        ]
+                        for locator in locators:
+                            try:
+                                if await locator.count() == 0:
+                                    continue
+                                await locator.click(timeout=8_000)
+                                events.append(f"Clicked schedule track option: {target}.")
+                                await wait_for_page_to_settle("Schedule track selection", timeout=30_000)
+                                await page.wait_for_timeout(4_000)
+                                body_text = await current_body_text()
+                                if "week by area" in body_text.lower() or target.lower() in body_text.lower():
+                                    return
+                            except Exception:
+                                continue
+
+                    try:
+                        search_input = page.locator(
+                            "input[type='search'], input[placeholder*='Search' i], input[aria-label*='Search' i]"
+                        ).first
+                        if await search_input.count() > 0:
+                            await search_input.fill(target_tracks[0], timeout=8_000)
+                            events.append(f"Searched schedule page for track: {target_tracks[0]}.")
+                            await page.wait_for_timeout(2_000)
+                            option = page.get_by_text(target_tracks[0], exact=False).first
+                            if await option.count() > 0:
+                                await option.click(timeout=8_000)
+                                events.append(f"Selected schedule search result: {target_tracks[0]}.")
+                                await wait_for_page_to_settle("Schedule search selection", timeout=30_000)
+                                await page.wait_for_timeout(4_000)
+                    except Exception:
+                        events.append("Could not select the target track automatically.")
+
                 async def capture_response(response: Any) -> None:
                     if len(captured) >= MAX_CAPTURED_RESPONSES:
                         return
                     response_url = response.url
-                    if not INTERESTING_URL_RE.search(urlsplit(response_url).path):
+                    if not _is_deputy_api_url(response_url, settings):
                         return
                     content_type = (response.headers.get("content-type") or "").lower()
                     if "json" not in content_type:
@@ -255,29 +408,17 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                 await password_field.press("Enter")
                 events.append("Submitted login form.")
 
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=25_000)
-                except PlaywrightTimeoutError:
-                    events.append("Network stayed active after login; continuing capture.")
+                await wait_for_page_to_settle("Login", timeout=25_000)
 
                 await page.goto(settings.deputy_web_url, wait_until="domcontentloaded", timeout=45_000)
                 events.append("Opened Deputy web app.")
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=35_000)
-                except PlaywrightTimeoutError:
-                    events.append("Deputy web app kept loading; using captured responses so far.")
+                await wait_for_page_to_settle("Deputy web app", timeout=35_000)
                 await capture_page_text("Deputy web app")
 
-                roster_url = _roster_url(settings)
-                if roster_url:
-                    await page.goto(roster_url, wait_until="domcontentloaded", timeout=45_000)
-                    events.append("Opened Deputy roster page.")
-                    try:
-                        await page.wait_for_load_state("networkidle", timeout=35_000)
-                    except PlaywrightTimeoutError:
-                        events.append("Deputy roster page kept loading; using captured responses so far.")
-                    await page.wait_for_timeout(4_000)
-                    await capture_page_text("Deputy roster page")
+                await open_schedule_page()
+                await capture_page_text("Deputy schedule page")
+                await select_target_track()
+                await capture_page_text("Deputy selected schedule page")
 
                 probe_url = _week_shift_probe_url(settings)
                 if probe_url:
