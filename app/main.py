@@ -1397,8 +1397,8 @@ async def capture_deputy_web() -> RedirectResponse:
     return RedirectResponse(url=notice_url("/settings", str(result["message"])), status_code=303)
 
 
-@app.api_route("/sync-now", methods=["GET", "POST"])
-def sync_now(request: Request, background_tasks: BackgroundTasks, next: str | None = None) -> JSONResponse | RedirectResponse:
+@app.api_route("/sync-now", methods=["GET", "POST"], response_model=None)
+def sync_now(request: Request, background_tasks: BackgroundTasks, next: str | None = None) -> object:
     started = queue_manual_sync(background_tasks)
     status = get_manual_sync_status()
     wants_json = request.headers.get("x-requested-with") == "fetch" or "application/json" in request.headers.get("accept", "")
