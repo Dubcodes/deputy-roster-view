@@ -130,6 +130,108 @@ VEHICLE_ROLE_LABELS = {
     "TRANSIT",
     "RAV91",
 }
+SCHEDULE_POSITION_ALIASES = {
+    "side1": ("side1", "Side 1"),
+    "sideone": ("side1", "Side 1"),
+    "side1camera": ("side1", "Side 1"),
+    "side1cam": ("side1", "Side 1"),
+    "sideonecamera": ("side1", "Side 1"),
+    "sideonecam": ("side1", "Side 1"),
+    "side2": ("side2", "Side 2"),
+    "sidetwo": ("side2", "Side 2"),
+    "side2camera": ("side2", "Side 2"),
+    "side2cam": ("side2", "Side 2"),
+    "sidetwocamera": ("side2", "Side 2"),
+    "sidetwocam": ("side2", "Side 2"),
+    "start": ("start", "Start"),
+    "startcamera": ("start", "Start"),
+    "startcam": ("start", "Start"),
+    "headon": ("headon", "Head On"),
+    "headoncamera": ("headon", "Head On"),
+    "headoncam": ("headon", "Head On"),
+    "back": ("back", "Back"),
+    "backcamera": ("back", "Back"),
+    "back2": ("back2", "Back2"),
+    "backtwo": ("back2", "Back2"),
+    "back2camera": ("back2", "Back2"),
+    "backtwocamera": ("back2", "Back2"),
+    "turn": ("turn", "Turn"),
+    "turncamera": ("turn", "Turn"),
+    "ivbp": ("ivbp", "IV / BP"),
+    "ivandbp": ("ivbp", "IV / BP"),
+    "ivbpcamera": ("ivbp", "IV / BP"),
+    "rts": ("rts", "RTS"),
+    "iv1": ("iv1", "IV1"),
+    "ivone": ("iv1", "IV1"),
+    "gimbal": ("gimbal", "Gimbal"),
+    "gimbals": ("gimbal", "Gimbal"),
+    "gimball": ("gimbal", "Gimbal"),
+    "gimballs": ("gimbal", "Gimbal"),
+    "gimble": ("gimbal", "Gimbal"),
+    "gimbalcamera": ("gimbal", "Gimbal"),
+    "gimballcamera": ("gimbal", "Gimbal"),
+    "gimbalassist": ("gimbalassist", "Gimbal Assist"),
+    "gimbalsassist": ("gimbalassist", "Gimbal Assist"),
+    "gimballassist": ("gimbalassist", "Gimbal Assist"),
+    "gimballsassist": ("gimbalassist", "Gimbal Assist"),
+    "gimbalassistant": ("gimbalassist", "Gimbal Assist"),
+    "gimbalsassistant": ("gimbalassist", "Gimbal Assist"),
+    "gimballassistant": ("gimbalassist", "Gimbal Assist"),
+    "gimballsassistant": ("gimbalassist", "Gimbal Assist"),
+    "steadi": ("steadi", "Steadi"),
+    "steady": ("steadi", "Steadi"),
+    "steadicam": ("steadi", "Steadi"),
+    "steadycam": ("steadi", "Steadi"),
+    "steadycamera": ("steadi", "Steadi"),
+    "steadicamera": ("steadi", "Steadi"),
+    "steadiassist": ("steadiassist", "Steadi Assist"),
+    "steadyassist": ("steadiassist", "Steadi Assist"),
+    "steadicamassist": ("steadiassist", "Steadi Assist"),
+    "steadycamassist": ("steadiassist", "Steadi Assist"),
+    "steadiassistant": ("steadiassist", "Steadi Assist"),
+    "steadyassistant": ("steadiassist", "Steadi Assist"),
+    "ldho": ("ldho", "LDHO"),
+    "director": ("director", "Director"),
+    "dir": ("director", "Director"),
+    "northern": ("northern", "Northern"),
+    "sound": ("sound", "Sound"),
+    "soundvt": ("soundvt", "Sound VT"),
+    "svt": ("soundvt", "Sound VT"),
+    "vt": ("vt", "VT"),
+    "ccu1": ("ccu1", "CCU1"),
+    "ccuone": ("ccu1", "CCU1"),
+    "ccu2": ("ccu2", "CCU2"),
+    "ccutwo": ("ccu2", "CCU2"),
+    "fm": ("fm", "FM"),
+    "eng": ("eng", "ENG"),
+    "engineer": ("eng", "ENG"),
+}
+SCHEDULE_POSITION_ORDER = {
+    "side1": 10,
+    "side2": 20,
+    "start": 30,
+    "headon": 40,
+    "back": 50,
+    "back2": 60,
+    "turn": 70,
+    "ivbp": 80,
+    "rts": 90,
+    "iv1": 100,
+    "gimbal": 110,
+    "gimbalassist": 111,
+    "steadi": 120,
+    "steadiassist": 121,
+    "ldho": 130,
+    "director": 200,
+    "northern": 210,
+    "sound": 220,
+    "soundvt": 230,
+    "vt": 240,
+    "ccu1": 250,
+    "ccu2": 260,
+    "fm": 270,
+    "eng": 280,
+}
 
 
 app = FastAPI(
@@ -606,6 +708,28 @@ def combine_adjacent_shifts(shifts: list[dict[str, object]]) -> list[dict[str, o
     return combined
 
 
+def schedule_label_key(value: str | None) -> str:
+    value = (value or "").strip().lower()
+    value = value.replace("&", "and")
+    return re.sub(r"[^a-z0-9]+", "", value)
+
+
+def schedule_label_alias(value: str | None) -> tuple[str, str] | None:
+    key = schedule_label_key(value)
+    alias = SCHEDULE_POSITION_ALIASES.get(key)
+    if alias:
+        return alias
+    if "gimbal" in key or "gimball" in key or "gimble" in key:
+        if "assist" in key or "assistant" in key:
+            return "gimbalassist", "Gimbal Assist"
+        return "gimbal", "Gimbal"
+    if "steadi" in key or "steady" in key:
+        if "assist" in key or "assistant" in key:
+            return "steadiassist", "Steadi Assist"
+        return "steadi", "Steadi"
+    return None
+
+
 def display_schedule_area(value: str | None) -> str:
     value = (value or "").strip()
     match = re.match(r"^(.+?)([TH])-[A-Za-z].*$", value, flags=re.IGNORECASE)
@@ -613,7 +737,9 @@ def display_schedule_area(value: str | None) -> str:
         value = match.group(1).strip()
     value = re.sub(r"\s+", " ", value)
     compact_key = re.sub(r"\s+", "", value.upper())
-    return ROLE_NAMES.get(compact_key, ROLE_NAMES.get(value.upper(), value or "Role"))
+    role_label = ROLE_NAMES.get(compact_key, ROLE_NAMES.get(value.upper(), value or "Role"))
+    alias = schedule_label_alias(role_label)
+    return alias[1] if alias else role_label
 
 
 def schedule_area_is_vehicle(value: str | None) -> bool:
@@ -629,6 +755,16 @@ def schedule_sort_value(value: object) -> int:
         return 999999
 
 
+def schedule_display_sort(value: str | None, fallback: object = None) -> int:
+    alias = schedule_label_alias(value)
+    if alias and alias[0] in SCHEDULE_POSITION_ORDER:
+        return SCHEDULE_POSITION_ORDER[alias[0]]
+    fallback_sort = schedule_sort_value(fallback)
+    if schedule_area_is_vehicle(value):
+        return 5000 + fallback_sort
+    return 1000 + fallback_sort
+
+
 def decorate_schedule_row(row: object) -> dict[str, object]:
     item = dict(row)
     start_at = parse_iso_datetime(item.get("start_at"))
@@ -639,6 +775,7 @@ def decorate_schedule_row(row: object) -> dict[str, object]:
     item["area_display"] = display_schedule_area(str(item.get("area_name") or ""))
     item["duration_label"] = format_hours(item.get("duration"))
     item["area_sort_order"] = schedule_sort_value(item.get("area_roster_sort_order"))
+    item["display_sort_order"] = schedule_display_sort(item["area_display"], item["area_sort_order"])
     item["is_vehicle_area"] = schedule_area_is_vehicle(str(item.get("area_display") or ""))
     item["changed"] = bool(int(item.get("changed_since_viewed") or 0))
     item["change_summary"] = str(item.get("change_summary") or "")
@@ -656,7 +793,7 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
     for row in rows:
         item = decorate_schedule_row(row)
         area_label = str(item.get("area_display") or "Role")
-        area_sort = schedule_sort_value(item.get("area_sort_order"))
+        area_sort = schedule_sort_value(item.get("display_sort_order"))
         employee_name = str(item.get("employee_name") or "").strip()
         is_vehicle = bool(item.get("is_vehicle_area"))
 
