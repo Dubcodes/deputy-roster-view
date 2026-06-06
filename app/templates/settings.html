@@ -3,41 +3,18 @@
 {% block title %}Settings - Deputy Roster View{% endblock %}
 
 {% block content %}
-  <section class="page-heading">
-    <div>
-      <p class="eyebrow">Settings</p>
-      <h1>Control Room</h1>
-    </div>
-    <form action="/sync-now" method="post">
-      <button class="button" type="submit">Sync Now</button>
-    </form>
-  </section>
+  <section class="settings-grid settings-grid-wide settings-quiet">
+    <article class="settings-panel sync-panel">
+      <div class="section-heading">
+        <h2>Roster Update</h2>
+      </div>
+      <p class="sync-state" data-sync-status>{{ "Ready" if settings.deputy_login_configured else "Deputy login needed" }}</p>
+      <form action="/sync-now" method="post" data-progress-form>
+        <button class="button" type="submit" data-progress-button>Sync and Update</button>
+      </form>
+      <p class="muted">Auto sync runs at 5am, one hour before a shift, and again 30 minutes before start if changes were found.</p>
+    </article>
 
-  <section class="settings-grid">
-    <article class="settings-panel">
-      <span class="summary-label">Calendar URL</span>
-      <strong>{{ "Configured" if calendar_url_configured else "Missing" }}</strong>
-      <p>{{ calendar_url_source }}</p>
-    </article>
-    <article class="settings-panel">
-      <span class="summary-label">Timezone</span>
-      <strong>{{ settings.tz_name }}</strong>
-    </article>
-    <article class="settings-panel">
-      <span class="summary-label">Last successful sync</span>
-      <strong>{{ last_successful_sync.finished_at|datetime if last_successful_sync else "Never" }}</strong>
-    </article>
-    <article class="settings-panel">
-      <span class="summary-label">Deputy web</span>
-      <strong>{{ "Login ready" if settings.deputy_login_configured else "Login not set" }}</strong>
-      {% if settings.deputy_login_configured %}
-        <p>{{ settings.deputy_login_label }}</p>
-      {% endif %}
-      <p>API token: {{ "configured" if settings.deputy_api_configured else "missing" }}</p>
-    </article>
-  </section>
-
-  <section class="settings-grid settings-grid-wide">
     <article class="settings-panel">
       <span class="summary-label">Next shift</span>
       {% if next_shift %}
@@ -46,154 +23,43 @@
       {% else %}
         <strong>None listed</strong>
       {% endif %}
-    </article>
-    <article class="settings-panel">
-      <span class="summary-label">Next pre-shift syncs</span>
-      {% if pre_shift.target_at %}
-        <strong>{{ pre_shift.target_at|datetime }}</strong>
-        <p>Follow-up if changed: {{ pre_shift.followup_target_at|datetime }}</p>
-        <p>{{ pre_shift.reason }}</p>
-      {% else %}
-        <strong>None</strong>
-        <p>{{ pre_shift.reason }}</p>
-      {% endif %}
+      <p class="muted">Last sync: {{ last_successful_sync.finished_at|datetime if last_successful_sync else "Never" }}</p>
     </article>
   </section>
 
-  <section class="settings-grid settings-grid-three">
-    <article class="settings-panel">
-      <div class="section-heading">
-        <h2>Calendar Feed</h2>
-      </div>
+  <details class="table-panel diagnostics-panel">
+    <summary>iCal Backup Feed</summary>
+    <div class="diagnostics-content">
       <form class="settings-form" action="/settings/calendar" method="post">
         <label class="form-row">
           <span>Deputy iCal URL</span>
-          <input type="password" name="deputy_ical_url" placeholder="Paste a new calendar URL" autocomplete="off">
+          <input type="password" name="deputy_ical_url" placeholder="Paste a backup calendar URL" autocomplete="off">
         </label>
         <label class="toggle-row">
           <input type="checkbox" name="clear_calendar_url">
           <span>Clear saved URL</span>
         </label>
-        <button class="button" type="submit">Save Calendar URL</button>
+        <button class="button" type="submit">Save Backup URL</button>
       </form>
-    </article>
-
-    <article class="settings-panel">
-      <div class="section-heading">
-        <h2>Deputy Web</h2>
-      </div>
-      <span class="summary-label">Login</span>
-      <strong>{{ "Ready" if settings.deputy_login_configured else "Env needed" }}</strong>
-      <p>{{ settings.deputy_login_label }}</p>
-      <span class="summary-label">API token</span>
-      <strong>{{ "Ready" if settings.deputy_api_configured else "Env needed" }}</strong>
-      <p>Set with Portainer env. Password and token are never shown here.</p>
-      <form action="/settings/deputy-api-test" method="post">
-        <button class="button button-secondary" type="submit">Test Deputy API</button>
-      </form>
-      <div class="capture-action-row">
-        <form action="/settings/deputy-web-capture" method="post">
-          <button class="button button-secondary" type="submit">Capture Web Data</button>
-        </form>
-        {% if deputy_web_capture %}
-          {% set web_stats = deputy_web_capture.stats %}
-          <div class="capture-quick-stats" aria-label="Latest Deputy web capture stats">
-            <div>
-              <span>Status</span>
-              <strong>{{ deputy_web_capture.status }}</strong>
-            </div>
-            <div>
-              <span>Responses</span>
-              <strong>{{ web_stats.responses }}</strong>
-            </div>
-            <div>
-              <span>My shifts</span>
-              <strong>{{ web_stats.shift_records }}</strong>
-            </div>
-            <div>
-              <span>Target</span>
-              <strong>{{ web_stats.target_track or "Unknown" }}</strong>
-            </div>
-            <div>
-              <span>Crew rows</span>
-              <strong>{{ web_stats.saved_schedule_rows }}</strong>
-            </div>
-            <div>
-              <span>Crew days</span>
-              <strong>{{ web_stats.schedule_date_count }} · {{ web_stats.schedule_date_label }}</strong>
-            </div>
-          </div>
-        {% endif %}
-      </div>
-      {% if deputy_web_capture %}
-        {% set web_stats = deputy_web_capture.stats %}
-        <p class="capture-summary">
-          Last capture {{ deputy_web_capture.captured_at or "unknown" }}.
-          My shifts covered {{ web_stats.own_shift_date_count }} day{% if web_stats.own_shift_date_count != 1 %}s{% endif %}: {{ web_stats.own_shift_date_label }}.
-        </p>
-        {% if web_stats.coverage_warning %}
-          <p class="capture-warning">
-            Crew data currently covers only {{ web_stats.schedule_date_label }}, so other days may not show everyone yet.
-          </p>
-        {% endif %}
-      {% endif %}
-    </article>
-
-    <article class="settings-panel">
-      <div class="section-heading">
-        <h2>Maintenance</h2>
-      </div>
-      <div class="stacked-actions">
-        <form action="/sync-now" method="post">
-          <button class="button" type="submit">Sync Now</button>
-        </form>
-        <form action="/settings/clear-changed" method="post">
-          <button class="button button-secondary" type="submit">Clear Changed Flags</button>
-        </form>
-      </div>
-    </article>
-  </section>
+    </div>
+  </details>
 
   <details class="table-panel diagnostics-panel">
     <summary>Most Recent iCal Data</summary>
     <div class="diagnostics-content">
       {% if not source_payload_shifts %}
-        <div class="empty-state">No source data has been stored yet.</div>
+        <div class="empty-state">No iCal source data has been stored yet.</div>
       {% else %}
-        <div class="source-list">
-          {% for shift in source_payload_shifts %}
-            <details class="source-panel">
-              <summary>{{ shift.start_at|datetime }} · {{ shift.track_label }} · {{ shift.role_full_label or shift.role_label or shift.title or "Shift" }}</summary>
-              <div class="source-fields">
-                {% for item in shift.source_diagnostics.fields %}
-                  <div>
-                    <span>{{ item.label }}</span>
-                    <strong>{{ item.value }}</strong>
-                  </div>
-                {% endfor %}
-              </div>
-              {% if shift.source_diagnostics.description_lines %}
-                <div class="description-block source-description">
-                  <h3>Description</h3>
-                  <ul class="roster-lines">
-                    {% for line in shift.source_diagnostics.description_lines %}
-                      <li>{{ line }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-              {% endif %}
-              {% for link in shift.source_diagnostics.hidden_links %}
-                <details class="hidden-url">
-                  <summary>{{ link.label }}</summary>
-                  <p>{{ link.value }}</p>
-                </details>
-              {% endfor %}
-              <details class="raw-source">
-                <summary>Raw JSON</summary>
-                <pre>{{ shift.source_payload_pretty }}</pre>
-              </details>
-            </details>
-          {% endfor %}
+        <div class="copy-panel">
+          <div class="section-heading">
+            <h3>Copy iCal Data</h3>
+            <button class="button button-compact" type="button" data-copy-target="ical-copy">Copy All</button>
+          </div>
+          <textarea id="ical-copy" class="copy-box" rows="10" readonly>{% for shift in source_payload_shifts %}--- {{ shift.start_at|datetime }} · {{ shift.track_label }} · {{ shift.role_full_label or shift.role_label or shift.title or "Shift" }} ---
+{{ shift.source_payload_pretty }}
+
+{% endfor %}</textarea>
+          <p class="copy-status" data-copy-status-for="ical-copy" aria-live="polite"></p>
         </div>
       {% endif %}
     </div>
@@ -205,160 +71,115 @@
       {% if not deputy_web_capture %}
         <div class="empty-state">No Deputy web capture has run yet.</div>
       {% else %}
-        <div class="source-fields">
-          <div>
-            <span>Captured</span>
-            <strong>{{ deputy_web_capture.captured_at }}</strong>
-          </div>
-          <div>
-            <span>Status</span>
-            <strong>{{ deputy_web_capture.status }}</strong>
-          </div>
-          <div>
-            <span>Responses</span>
-            <strong>{{ deputy_web_capture.responses|length }}</strong>
-          </div>
-          <div>
-            <span>Shift records</span>
-            <strong>{{ deputy_web_capture.extracted_shifts|length }}</strong>
-          </div>
-          <div>
-            <span>Schedule records</span>
-            <strong>{{ deputy_web_capture.extracted_schedule_shifts|length }}</strong>
-          </div>
-        </div>
+        <p class="muted">Captured {{ deputy_web_capture.captured_at }} · {{ deputy_web_capture.status }}</p>
         <div class="copy-panel">
           <div class="section-heading">
             <h3>Copy Capture Data</h3>
             <button class="button button-compact" type="button" data-copy-target="deputy-web-copy">Copy All</button>
           </div>
           <textarea id="deputy-web-copy" class="copy-box" rows="12" readonly>{{ deputy_web_capture.copy_text }}</textarea>
-          <p class="copy-status" data-copy-status aria-live="polite"></p>
+          <p class="copy-status" data-copy-status-for="deputy-web-copy" aria-live="polite"></p>
         </div>
-        {% if deputy_web_capture.events %}
-          <div class="description-block source-description">
-            <h3>Run Log</h3>
-            <ul class="roster-lines">
-              {% for event in deputy_web_capture.events %}
-                <li>{{ event }}</li>
-              {% endfor %}
-            </ul>
-          </div>
-        {% endif %}
-        {% if deputy_web_capture.page_texts %}
-          <div class="source-list">
-            {% for page_text in deputy_web_capture.page_texts %}
-              <details class="source-panel">
-                <summary>{{ page_text.label }} text snapshot</summary>
-                <pre class="capture-text">{{ page_text.text }}</pre>
-              </details>
-            {% endfor %}
-          </div>
-        {% endif %}
-        {% if deputy_web_capture.responses %}
-          <div class="source-list">
-            {% for response in deputy_web_capture.responses %}
-              <details class="source-panel">
-                <summary>{{ response.method }} {{ response.status }} · {{ response.url }}</summary>
-                {% set shape_keys = response.shape.get("keys") %}
-                {% set shape_count = response.shape.get("count") %}
-                <div class="source-fields">
-                  <div>
-                    <span>Shape</span>
-                    <strong>{{ response.shape.get("kind", "unknown") }}</strong>
-                  </div>
-                  {% if shape_count is not none %}
-                    <div>
-                      <span>Count</span>
-                      <strong>{{ shape_count }}</strong>
-                    </div>
-                  {% endif %}
-                  {% if shape_keys %}
-                    <div>
-                      <span>Keys</span>
-                      <strong>{{ shape_keys|join(", ") }}</strong>
-                    </div>
-                  {% endif %}
-                </div>
-                <details class="raw-source">
-                  <summary>Sample JSON</summary>
-                  <pre>{{ response.sample|tojson(indent=2) }}</pre>
-                </details>
-              </details>
-            {% endfor %}
-          </div>
-        {% endif %}
       {% endif %}
     </div>
   </details>
 
-  <section class="table-panel">
-    <div class="section-heading">
-      <h2>Sync Logs</h2>
-    </div>
-    {% if not sync_logs %}
-      <div class="empty-state">No syncs have run yet.</div>
-    {% else %}
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Started</th>
-              <th>Status</th>
-              <th>Message</th>
-              <th>Seen</th>
-              <th>New</th>
-              <th>Changed</th>
-              <th>Cancelled</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for log in sync_logs %}
-              <tr>
-                <td>{{ log.started_at|datetime }}</td>
-                <td><span class="badge {% if log.status != 'ok' %}badge-danger{% endif %}">{{ log.status }}</span></td>
-                <td>{{ log.message }}</td>
-                <td>{{ log.events_seen }}</td>
-                <td>{{ log.events_created }}</td>
-                <td>{{ log.events_updated }}</td>
-                <td>{{ log.events_marked_deleted }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+  <details class="table-panel diagnostics-panel">
+    <summary>Maintenance</summary>
+    <div class="diagnostics-content">
+      <div class="stacked-actions">
+        <form action="/settings/clear-changed" method="post">
+          <button class="button button-secondary" type="submit">Clear Changed Flags</button>
+        </form>
       </div>
-    {% endif %}
-  </section>
+
+      <div class="section-heading sync-log-heading">
+        <h2>Sync Logs</h2>
+      </div>
+      {% if not sync_logs %}
+        <div class="empty-state">No syncs have run yet.</div>
+      {% else %}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Started</th>
+                <th>Status</th>
+                <th>Message</th>
+                <th>Seen</th>
+                <th>New</th>
+                <th>Changed</th>
+                <th>Cancelled</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for log in sync_logs %}
+                <tr>
+                  <td>{{ log.started_at|datetime }}</td>
+                  <td><span class="badge {% if log.status != 'ok' %}badge-danger{% endif %}">{{ log.status }}</span></td>
+                  <td>{{ log.message }}</td>
+                  <td>{{ log.events_seen }}</td>
+                  <td>{{ log.events_created }}</td>
+                  <td>{{ log.events_updated }}</td>
+                  <td>{{ log.events_marked_deleted }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    </div>
+  </details>
 {% endblock %}
 
 {% block scripts %}
   <script>
     (() => {
-      const button = document.querySelector("[data-copy-target]");
-      const status = document.querySelector("[data-copy-status]");
-      if (!button) return;
+      document.querySelectorAll("[data-copy-target]").forEach((button) => {
+        const status = document.querySelector(`[data-copy-status-for="${button.dataset.copyTarget}"]`);
+        const setStatus = (message) => {
+          if (!status) return;
+          status.textContent = message;
+          window.setTimeout(() => {
+            if (status.textContent === message) status.textContent = "";
+          }, 3000);
+        };
 
-      const setStatus = (message) => {
-        if (!status) return;
-        status.textContent = message;
-        window.setTimeout(() => {
-          if (status.textContent === message) status.textContent = "";
-        }, 3000);
-      };
+        button.addEventListener("click", async () => {
+          const target = document.getElementById(button.dataset.copyTarget);
+          if (!target) return;
+          target.focus();
+          target.select();
+          target.setSelectionRange(0, target.value.length);
+          try {
+            await navigator.clipboard.writeText(target.value);
+            setStatus("Copied.");
+          } catch (error) {
+            const copied = document.execCommand && document.execCommand("copy");
+            setStatus(copied ? "Copied." : "Selected. Use copy from your browser.");
+          }
+        });
+      });
 
-      button.addEventListener("click", async () => {
-        const target = document.getElementById(button.dataset.copyTarget);
-        if (!target) return;
-        target.focus();
-        target.select();
-        target.setSelectionRange(0, target.value.length);
-        try {
-          await navigator.clipboard.writeText(target.value);
-          setStatus("Copied.");
-        } catch (error) {
-          const copied = document.execCommand && document.execCommand("copy");
-          setStatus(copied ? "Copied." : "Selected. Use copy from your browser.");
-        }
+      document.querySelectorAll("[data-progress-form]").forEach((form) => {
+        const state = document.querySelector("[data-sync-status]");
+        const button = form.querySelector("[data-progress-button]");
+        const stages = [
+          [0, "Scanning Deputy page now"],
+          [1600, "Processing roster"],
+          [3600, "Posting updates"],
+          [5600, "Live"],
+          [7200, "Ready"],
+        ];
+        form.addEventListener("submit", () => {
+          if (button) button.disabled = true;
+          stages.forEach(([delay, label]) => {
+            window.setTimeout(() => {
+              if (state) state.textContent = label;
+              if (button) button.textContent = label;
+            }, delay);
+          });
+        });
       });
     })();
   </script>

@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .config import Settings, get_settings
-from .database import get_current_or_next_shift, save_deputy_web_schedule, update_app_settings
+from .database import get_current_or_next_shift, get_upcoming_shifts, save_deputy_web_schedule, update_app_settings
 
 
 SECRET_KEY_RE = re.compile(
@@ -130,12 +130,7 @@ def _roster_url(settings: Settings) -> str:
     return f"{origin_url}#/roster" if origin_url else ""
 
 
-def _target_schedule_tracks(settings: Settings) -> list[str]:
-    now = datetime.now(settings.timezone).replace(microsecond=0).isoformat()
-    shift = get_current_or_next_shift(now)
-    if shift is None:
-        return []
-
+def _shift_track_candidates(shift: object) -> list[str]:
     names: list[str] = []
     title = str(shift["title"] or "")
     match = SUMMARY_CODE_RE.match(title)
@@ -169,6 +164,35 @@ def _target_schedule_tracks(settings: Settings) -> list[str]:
             seen.add(key)
             unique_names.append(name)
     return unique_names
+
+
+def _target_schedule_track_groups(settings: Settings) -> list[list[str]]:
+    now = datetime.now(settings.timezone).replace(microsecond=0).isoformat()
+    rows = []
+    current = get_current_or_next_shift(now)
+    if current is not None:
+        rows.append(current)
+    rows.extend(get_upcoming_shifts(now, limit=16))
+
+    groups = []
+    seen = set()
+    for shift in rows:
+        candidates = _shift_track_candidates(shift)
+        if not candidates:
+            continue
+        date_key = str(shift["date"] or "")
+        first_key = candidates[0].lower()
+        group_key = f"{date_key}:{first_key}"
+        if group_key in seen:
+            continue
+        seen.add(group_key)
+        groups.append(candidates)
+    return groups
+
+
+def _target_schedule_tracks(settings: Settings) -> list[str]:
+    groups = _target_schedule_track_groups(settings)
+    return groups[0] if groups else []
 
 
 def _safe_json_sample(
@@ -333,9 +357,12 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     area_refs_by_id: dict[str, dict[str, Any]] = {}
     events: list[str] = []
     page_texts: list[dict[str, Any]] = []
-    target_tracks = _target_schedule_tracks(settings)
-    if target_tracks:
-        events.append(f"Target schedule track: {target_tracks[0]}.")
+    target_track_groups = _target_schedule_track_groups(settings)
+    if target_track_groups:
+        target_labels = ", ".join(group[0] for group in target_track_groups[:8])
+        extra_count = max(0, len(target_track_groups) - 8)
+        suffix = f", +{extra_count} more" if extra_count else ""
+        events.append(f"Target schedule tracks: {target_labels}{suffix}.")
     else:
         events.append("No upcoming shift track found for schedule selection.")
 
@@ -400,14 +427,14 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         await wait_for_page_to_settle("Deputy roster page", timeout=35_000)
                         await page.wait_for_timeout(3_000)
 
-                async def select_target_track() -> None:
+                async def select_target_track(target_tracks: list[str]) -> bool:
                     if not target_tracks:
-                        return
+                        return False
                     body_text = await current_body_text()
                     body_lower = body_text.lower()
                     if any(track.lower() in body_lower for track in target_tracks) and "week by area" in body_lower:
-                        events.append("Target track already appears selected on the schedule page.")
-                        return
+                        events.append(f"Target track already appears selected: {target_tracks[0]}.")
+                        return True
 
                     for target in target_tracks:
                         locators = [
@@ -425,7 +452,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 await page.wait_for_timeout(4_000)
                                 body_text = await current_body_text()
                                 if "week by area" in body_text.lower() or target.lower() in body_text.lower():
-                                    return
+                                    return True
                             except Exception:
                                 continue
 
@@ -443,8 +470,11 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 events.append(f"Selected schedule search result: {target_tracks[0]}.")
                                 await wait_for_page_to_settle("Schedule search selection", timeout=30_000)
                                 await page.wait_for_timeout(4_000)
+                                return True
                     except Exception:
-                        events.append("Could not select the target track automatically.")
+                        pass
+                    events.append(f"Could not select schedule target automatically: {target_tracks[0]}.")
+                    return False
 
                 async def capture_response(response: Any) -> None:
                     try:
@@ -525,8 +555,13 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
 
                 await open_schedule_page()
                 await capture_page_text("Deputy schedule page")
-                await select_target_track()
-                await capture_page_text("Deputy selected schedule page")
+                if target_track_groups:
+                    for target_tracks in target_track_groups:
+                        selected = await select_target_track(target_tracks)
+                        if selected:
+                            await capture_page_text(f"Deputy selected schedule page - {target_tracks[0]}")
+                else:
+                    await capture_page_text("Deputy selected schedule page")
 
                 await page.wait_for_timeout(4_000)
                 login_still_visible = await page.locator("input[type='password']").count() > 0
@@ -720,7 +755,9 @@ def _capture_stats(payload: dict[str, Any]) -> dict[str, Any]:
     saved_schedule_rows = None
     for event in events:
         event_text = str(event)
-        if event_text.startswith("Target schedule track:"):
+        if event_text.startswith("Target schedule tracks:"):
+            target_track = event_text.split(":", 1)[1].strip().rstrip(".")
+        elif event_text.startswith("Target schedule track:"):
             target_track = event_text.split(":", 1)[1].strip().rstrip(".")
         saved_match = re.search(r"Saved\s+(\d+)\s+schedule rows locally", event_text, re.IGNORECASE)
         if saved_match:

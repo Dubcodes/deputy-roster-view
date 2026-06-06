@@ -3,7 +3,7 @@ from __future__ import annotations
 import calendar
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -88,6 +88,7 @@ ROLE_NAMES = {
 DEFAULT_RACE_TYPE_BY_CODE = {
     "CAM": "H",
 }
+TIMESHEET_ANCHOR_DATE = date(2026, 6, 7)
 CHANGE_FIELD_LABELS = {
     "title": "Roster title",
     "description": "Roster notes",
@@ -273,6 +274,29 @@ def format_hours(value: float | int | None) -> str:
     if minutes == 0:
         return f"{hours}h"
     return f"{hours}h {minutes:02d}m"
+
+
+def timesheet_due_date(day_value: date) -> bool:
+    days_since_anchor = (day_value - TIMESHEET_ANCHOR_DATE).days
+    return days_since_anchor >= 0 and days_since_anchor % 14 == 0
+
+
+def timesheet_period(day_value: date) -> tuple[date, date]:
+    return day_value - timedelta(days=13), day_value
+
+
+def timesheet_marker(day_value: date) -> dict[str, object] | None:
+    if not timesheet_due_date(day_value):
+        return None
+    period_start, period_end = timesheet_period(day_value)
+    return {
+        "date": day_value,
+        "iso": day_value.isoformat(),
+        "label": "Timesheet submission",
+        "period_start": period_start,
+        "period_end": period_end,
+        "url": f"/timesheet/{day_value.isoformat()}",
+    }
 
 
 def add_months(year: int, month: int, delta: int) -> tuple[int, int]:
@@ -576,6 +600,43 @@ def decorate_change(row: object) -> dict[str, object]:
     return change
 
 
+def duration_hours_between(start_text: str | None, end_text: str | None) -> float:
+    start_at = parse_iso_datetime(start_text)
+    end_at = parse_iso_datetime(end_text)
+    if not start_at or not end_at:
+        return 0.0
+    return max(0.0, round((end_at - start_at).total_seconds() / 3600, 2))
+
+
+def apply_timing_math(shift: dict[str, object]) -> None:
+    break_minutes = int(shift.get("break_minutes") or 0)
+    segments = []
+    for segment in shift.get("role_segments") or []:
+        if not isinstance(segment, dict):
+            continue
+        segments.append(
+            {
+                "time_range": segment.get("time_range") or "",
+                "label": segment.get("label") or "",
+                "role": segment.get("role") or "",
+                "duration_label": segment.get("duration_label") or "",
+            }
+        )
+    if break_minutes:
+        formula = f"Paid: {shift.get('raw_label')} - {break_minutes} min = {shift.get('paid_label')}"
+    else:
+        formula = f"Paid: {shift.get('paid_label')}"
+    shift["timing_math"] = {
+        "segments": segments,
+        "start_label": shift.get("start_label") or "",
+        "end_label": shift.get("end_label") or "",
+        "raw_label": shift.get("raw_label") or format_hours(shift.get("raw_hours")),
+        "paid_label": shift.get("paid_label") or format_hours(shift.get("paid_hours")),
+        "break_minutes": break_minutes,
+        "formula": formula,
+    }
+
+
 def decorate_shift(row: object) -> dict[str, object]:
     shift = dict(row)
     parsed_title = parse_shift_title(str(shift.get("title") or ""))
@@ -600,6 +661,7 @@ def decorate_shift(row: object) -> dict[str, object]:
         "label": "Vehicle" if is_vehicle else "Role",
         "start_label": shift["start_label"],
         "end_label": shift["end_label"],
+        "duration_label": format_hours(duration_hours_between(shift.get("start_at"), shift.get("end_at"))),
     }
     shift["role_segments"] = [role_segment]
     shift["role_chain_label"] = role_chain_label(shift["role_segments"])
@@ -620,6 +682,7 @@ def decorate_shift(row: object) -> dict[str, object]:
     shift["timing_adjustment_time"] = timing_time
     shift["timing_adjustment_labels"] = timing_notes
     shift["combined_shift_ids"] = [int(shift["id"])]
+    apply_timing_math(shift)
     return shift
 
 
@@ -695,6 +758,7 @@ def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[
     merged["combined_shift_ids"] = list(left.get("combined_shift_ids") or [left["id"]]) + list(
         right.get("combined_shift_ids") or [right["id"]]
     )
+    apply_timing_math(merged)
     return merged
 
 
@@ -868,6 +932,49 @@ def notice_url(path: str, message: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query_items), parts.fragment))
 
 
+def build_timesheet_summary(submission_date: date) -> dict[str, object]:
+    period_start, period_end = timesheet_period(submission_date)
+    rows = fetch_shifts_between(period_start.isoformat(), period_end.isoformat())
+    shifts_by_date: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        shifts_by_date.setdefault(row["date"], []).append(decorate_shift(row))
+    for date_key, day_shifts in list(shifts_by_date.items()):
+        shifts_by_date[date_key] = combine_adjacent_shifts(day_shifts)
+
+    day_rows = []
+    total_hours = 0.0
+    for offset in range(14):
+        day_item = period_start + timedelta(days=offset)
+        shifts = [
+            shift
+            for shift in shifts_by_date.get(day_item.isoformat(), [])
+            if not int(shift.get("deleted_from_source") or 0)
+        ]
+        day_total = sum(float(shift.get("paid_hours") or 0) for shift in shifts)
+        total_hours += day_total
+        locations = []
+        for shift in shifts:
+            location = str(shift.get("track_label") or shift.get("location") or "Shift")
+            if location not in locations:
+                locations.append(location)
+        day_rows.append(
+            {
+                "date": day_item,
+                "iso": day_item.isoformat(),
+                "total": day_total,
+                "locations": ", ".join(locations) if locations else "-",
+                "shifts": shifts,
+            }
+        )
+    return {
+        "submission_date": submission_date,
+        "period_start": period_start,
+        "period_end": period_end,
+        "days": day_rows,
+        "total": total_hours,
+    }
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
@@ -920,6 +1027,7 @@ def month_view(
         week_total = 0.0
         for day_item in week:
             day_shifts = shifts_by_date.get(day_item.isoformat(), [])
+            timesheet = timesheet_marker(day_item)
             day_total = sum(
                 float(shift.get("paid_hours") or 0)
                 for shift in day_shifts
@@ -937,15 +1045,17 @@ def month_view(
                     "is_today": day_item == today,
                     "shifts": day_shifts,
                     "total": day_total,
+                    "timesheet": timesheet,
                 }
             )
-            if day_item.month == month and day_shifts:
+            if day_item.month == month and (day_shifts or timesheet):
                 active_days.append(
                     {
                         "date": day_item,
                         "iso": day_item.isoformat(),
                         "shifts": day_shifts,
                         "total": day_total,
+                        "timesheet": timesheet,
                     }
                 )
         weeks.append({"days": days, "total": week_total})
@@ -981,6 +1091,26 @@ def month_view(
             "view": view,
             "month_view_url": f"/month?year={year}&month={month}&view=month",
             "list_view_url": f"/month?year={year}&month={month}&view=list",
+        },
+    )
+
+
+@app.get("/timesheet/{date_text}")
+def timesheet_view(request: Request, date_text: str, notice: str | None = None) -> object:
+    try:
+        submission_date = date.fromisoformat(date_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Invalid date") from exc
+
+    summary = build_timesheet_summary(submission_date)
+    return templates.TemplateResponse(
+        "timesheet.html",
+        {
+            "request": request,
+            "notice": notice,
+            "summary": summary,
+            "month_year": submission_date.year,
+            "month_number": submission_date.month,
         },
     )
 

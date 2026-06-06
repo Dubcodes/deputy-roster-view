@@ -90,29 +90,12 @@
           {% endif %}
         </div>
 
-        {% if shift.roster_summary.has_structured or shift.role_segments|length > 1 %}
+        {% if shift.roster_summary.has_structured %}
           <section class="race-day-panel">
             <div class="section-heading">
               <h3>Race Day</h3>
             </div>
             <div class="race-day-grid">
-              {% if shift.role_segments %}
-                <div class="race-day-block">
-                  <h4>My Day</h4>
-                  <dl class="timeline-list">
-                    {% for segment in shift.role_segments %}
-                      <div>
-                        <dt>{{ segment.time_range }}</dt>
-                        <dd>
-                          <span class="timeline-tag">{{ segment.label }}</span>
-                          {{ segment.role }}
-                        </dd>
-                      </div>
-                    {% endfor %}
-                  </dl>
-                </div>
-              {% endif %}
-
               {% if shift.roster_summary.timings %}
                 <div class="race-day-block">
                   <h4>Timings</h4>
@@ -226,6 +209,27 @@
             </div>
           </details>
         {% endif %}
+
+        <section class="maths-panel">
+          <h3>Maths</h3>
+          <div class="maths-card">
+            {% if shift.timing_math.segments|length > 1 %}
+              <dl class="timeline-list maths-segments">
+                {% for segment in shift.timing_math.segments %}
+                  <div>
+                    <dt>{{ segment.time_range }}</dt>
+                    <dd>{{ segment.label }} {{ segment.role }}{% if segment.duration_label %} · {{ segment.duration_label }}{% endif %}</dd>
+                  </div>
+                {% endfor %}
+              </dl>
+            {% endif %}
+            <p>
+              {{ shift.timing_math.start_label }}-{{ shift.timing_math.end_label }}
+              = {{ shift.timing_math.raw_label }}.
+              {{ shift.timing_math.formula }}.
+            </p>
+          </div>
+        </section>
 
         <section class="timing-panel">
           <h3>Notes and timing</h3>

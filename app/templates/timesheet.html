@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Timesheet {{ summary.submission_date.strftime("%d %b %Y") }} - Deputy Roster View{% endblock %}
+
+{% block content %}
+  <section class="page-heading compact-heading">
+    <div>
+      <p class="eyebrow">Timesheet</p>
+      <h1>{{ summary.period_start.strftime("%d %b") }}-{{ summary.period_end.strftime("%d %b %Y") }}</h1>
+    </div>
+    <div class="heading-actions">
+      <a class="button button-secondary" href="/month?year={{ month_year }}&month={{ month_number }}&view=list">Back to list</a>
+    </div>
+  </section>
+
+  <section class="table-panel timesheet-panel">
+    <div class="timesheet-list">
+      {% for day in summary.days %}
+        <a class="timesheet-row{% if day.total == 0 %} timesheet-row-empty{% endif %}" href="/day/{{ day.iso }}">
+          <span>{{ day.date.strftime("%a %d %b") }}</span>
+          <strong>{{ day.total|hours }}</strong>
+          <span>{{ day.locations }}</span>
+        </a>
+      {% endfor %}
+    </div>
+    <div class="timesheet-total">
+      <span>Fortnight total</span>
+      <strong>{{ summary.total|hours }}</strong>
+    </div>
+  </section>
+{% endblock %}

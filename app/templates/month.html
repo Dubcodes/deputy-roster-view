@@ -17,7 +17,7 @@
     <section class="roster-list" aria-label="Roster list">
       {% for day in active_days %}
         <article class="list-day{% if day.date == today %} today-list-day{% endif %}">
-          <a class="list-day-date" href="/day/{{ day.iso }}">
+          <a class="list-day-date" href="{% if day.timesheet and not day.shifts %}{{ day.timesheet.url }}{% else %}/day/{{ day.iso }}{% endif %}">
             <strong>{{ day.date.strftime("%a") }}</strong>
             <span>{{ day.date.day }}</span>
           </a>
@@ -53,6 +53,17 @@
                 {% endif %}
               </a>
             {% endfor %}
+            {% if day.timesheet %}
+              <a class="list-shift timesheet-list-card" href="{{ day.timesheet.url }}">
+                <span class="list-shift-main">
+                  <strong>Timesheet submission</strong>
+                  <span>{{ day.timesheet.period_start.strftime("%d %b") }}-{{ day.timesheet.period_end.strftime("%d %b") }}</span>
+                </span>
+                <span class="list-shift-meta">
+                  <span>Fortnight summary</span>
+                </span>
+              </a>
+            {% endif %}
           </div>
         </article>
       {% endfor %}
@@ -92,6 +103,11 @@
                   {% endif %}
                 </a>
               {% endfor %}
+              {% if day.timesheet %}
+                <a class="timesheet-dot" href="{{ day.timesheet.url }}" aria-label="Timesheet submission summary">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+                </a>
+              {% endif %}
             </div>
           </article>
         {% endfor %}
