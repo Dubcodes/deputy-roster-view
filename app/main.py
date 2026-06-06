@@ -295,6 +295,7 @@ def timesheet_marker(day_value: date) -> dict[str, object] | None:
         "label": "Timesheet submission",
         "period_start": period_start,
         "period_end": period_end,
+        "period_label": f"{period_start.strftime('%d %b')}-{period_end.strftime('%d %b')}",
         "url": f"/timesheet/{day_value.isoformat()}",
     }
 
@@ -960,6 +961,7 @@ def build_timesheet_summary(submission_date: date) -> dict[str, object]:
         day_rows.append(
             {
                 "date": day_item,
+                "date_label": day_item.strftime("%a %d %b"),
                 "iso": day_item.isoformat(),
                 "total": day_total,
                 "locations": ", ".join(locations) if locations else "-",
@@ -970,6 +972,7 @@ def build_timesheet_summary(submission_date: date) -> dict[str, object]:
         "submission_date": submission_date,
         "period_start": period_start,
         "period_end": period_end,
+        "period_label": f"{period_start.strftime('%d %b')}-{period_end.strftime('%d %b %Y')}",
         "days": day_rows,
         "total": total_hours,
     }
