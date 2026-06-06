@@ -32,7 +32,7 @@ The app is read-only against Deputy. It never writes back to Deputy.
    DEPUTY_API_TOKEN=your-deputy-api-token
    ```
 
-   If you do not have an API token, use Settings -> Capture Web Data after the app is running. It opens Deputy in a headless browser, logs in with your env credentials, and captures a local diagnostics summary of the JSON responses the Deputy web app receives. This is read-only and is intended to help identify where roster crew/role data lives before building it into the main views.
+   If you do not have an API token, use Settings -> Capture Web Data after the app is running. It opens Deputy in a headless browser, logs in with your env credentials, and captures a local diagnostics summary of the JSON responses the Deputy web app receives. This is read-only and is also used to save crew/role data locally when the login env is configured.
 
 5. Optional: set `APP_PORT` if port `8096` conflicts with another service.
 
@@ -70,7 +70,7 @@ If you changed `APP_PORT`, use that port instead.
 
 In Portainer, create a stack from this repository. Set `APP_PORT` to whichever host port you want exposed. You can provide `DEPUTY_ICAL_URL` as an environment variable, or leave it blank and paste the URL into Settings once the app is running. The app stores its SQLite database in the bind-mounted `./data` directory.
 
-If using Deputy web diagnostics, set `DEPUTY_LOGIN_EMAIL`, `DEPUTY_LOGIN_PASSWORD`, and `DEPUTY_DISPLAY_NAME` as Portainer environment variables. The app shows whether the login is configured, but never displays the password. Use Settings -> Capture Web Data to check whether the logged-in web app exposes richer roster data.
+If using Deputy web diagnostics, set `DEPUTY_LOGIN_EMAIL`, `DEPUTY_LOGIN_PASSWORD`, and `DEPUTY_DISPLAY_NAME` as Portainer environment variables. The app shows whether the login is configured, but never displays the password. Use Settings -> Capture Web Data to check whether the logged-in web app exposes richer roster data. Once configured, normal syncs also refresh this Deputy web crew data.
 
 If you do have a Deputy API token, set `DEPUTY_API_TOKEN` and use Settings -> Test Deputy API. Most normal users will not have this.
 
@@ -79,7 +79,8 @@ If you do have a Deputy API token, set `DEPUTY_API_TOKEN` and use Settings -> Te
 - Daily sync runs at `SYNC_AT_HOUR`, default `5`, in `TZ`, default `Pacific/Auckland`.
 - A pre-shift checker runs every 10 minutes and syncs once when the next shift is within `PRE_SHIFT_SYNC_MINUTES`, default `60`.
 - If that upcoming shift is marked as changed, the checker runs one more follow-up sync at `CHANGED_FOLLOWUP_SYNC_MINUTES`, default `30`.
-- Use the Sync Now button in the app to trigger a manual sync.
+- Each normal sync refreshes the iCal roster and, when Deputy web login env is configured, captures the logged-in Deputy schedule data for crew roles.
+- Use the Sync Now button in the app to trigger the same combined sync manually.
 
 The app redacts calendar details by design and does not display the configured calendar URL.
 

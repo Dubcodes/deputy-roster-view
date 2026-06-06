@@ -7,7 +7,8 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import Settings, get_settings
-from .database import get_next_upcoming_shift
+from .database import get_next_upcoming_shift, has_deputy_schedule_changes_for_date
+from .deputy_web import sync_deputy_web_schedule
 from .sync_ics import sync_deputy_calendar
 
 
@@ -28,7 +29,7 @@ def start_scheduler(settings: Settings | None = None) -> BackgroundScheduler:
 
     scheduler = BackgroundScheduler(timezone=settings.timezone)
     scheduler.add_job(
-        sync_deputy_calendar,
+        sync_roster_sources,
         trigger=CronTrigger(hour=settings.sync_at_hour, minute=0, timezone=settings.timezone),
         id="daily_sync",
         replace_existing=True,
@@ -66,11 +67,23 @@ def check_pre_shift_sync(settings: Settings | None = None) -> dict[str, object]:
     if not due_windows:
         return {"ran": False, "reason": status["reason"]}
 
-    result = sync_deputy_calendar(settings)
-    if result.get("status") == "ok":
+    result = sync_roster_sources(settings)
+    calendar_result = result.get("calendar") if isinstance(result.get("calendar"), dict) else {}
+    if calendar_result.get("status") == "ok":
         for window in due_windows:
             _last_pre_shift_keys.add(str(window["sync_key"]))
     return {"ran": True, "windows": due_windows, "result": result}
+
+
+def sync_roster_sources(settings: Settings | None = None) -> dict[str, object]:
+    settings = settings or get_settings()
+    calendar_result = sync_deputy_calendar(settings)
+    web_result = sync_deputy_web_schedule(settings)
+    return {
+        "status": calendar_result.get("status", "error"),
+        "calendar": calendar_result,
+        "web": web_result,
+    }
 
 
 def get_pre_shift_status(settings: Settings | None = None) -> dict[str, object]:
@@ -92,8 +105,9 @@ def get_pre_shift_status(settings: Settings | None = None) -> dict[str, object]:
     target_at = start_at - timedelta(minutes=settings.pre_shift_sync_minutes)
     followup_target_at = start_at - timedelta(minutes=settings.changed_followup_sync_minutes)
     primary_should_sync = target_at <= now <= start_at
+    crew_schedule_changed = has_deputy_schedule_changes_for_date(str(shift["date"]))
     followup_should_sync = (
-        bool(int(shift["changed_since_viewed"] or 0))
+        (bool(int(shift["changed_since_viewed"] or 0)) or crew_schedule_changed)
         and followup_target_at <= now <= start_at
     )
     primary_key = f"{shift['id']}:{shift['start_at']}:primary:{target_at.isoformat()}"
@@ -123,6 +137,7 @@ def get_pre_shift_status(settings: Settings | None = None) -> dict[str, object]:
         "shift": dict(shift),
         "target_at": target_at.isoformat(),
         "followup_target_at": followup_target_at.isoformat(),
+        "crew_schedule_changed": crew_schedule_changed,
         "should_sync": primary_should_sync or followup_should_sync,
         "sync_key": primary_key,
         "sync_windows": sync_windows,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass
@@ -7,8 +8,8 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from .config import Settings
-from .database import get_current_or_next_shift
+from .config import Settings, get_settings
+from .database import get_current_or_next_shift, save_deputy_web_schedule, update_app_settings
 
 
 SECRET_KEY_RE = re.compile(
@@ -584,6 +585,53 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
         message="No Deputy JSON responses were captured. The login may require MFA/SSO, or the page may not expose roster data through this path.",
         payload=payload,
     )
+
+
+async def capture_and_save_deputy_web(settings: Settings | None = None) -> dict[str, object]:
+    settings = settings or get_settings()
+    saved_schedule_rows = 0
+    try:
+        result = await run_deputy_web_capture(settings)
+    except Exception as exc:
+        message = f"Deputy web capture failed: {redacted_text(str(exc))[:220]}"
+        payload = {
+            "captured_at": datetime.now(settings.timezone).isoformat(timespec="seconds"),
+            "status": "error",
+            "events": [message],
+            "responses": [],
+        }
+        update_app_settings({"last_deputy_web_capture": json.dumps(payload, ensure_ascii=True)})
+        return {
+            "status": "error",
+            "message": message,
+            "saved_schedule_rows": 0,
+            "payload": payload,
+        }
+
+    if result.payload:
+        saved_schedule_rows = save_deputy_web_schedule(result.payload)
+        if saved_schedule_rows:
+            result.payload.setdefault("events", []).append(f"Saved {saved_schedule_rows} schedule rows locally.")
+        update_app_settings({"last_deputy_web_capture": json.dumps(result.payload, ensure_ascii=True)})
+
+    return {
+        "status": result.status,
+        "message": result.message,
+        "saved_schedule_rows": saved_schedule_rows,
+        "payload": result.payload,
+    }
+
+
+def sync_deputy_web_schedule(settings: Settings | None = None) -> dict[str, object]:
+    settings = settings or get_settings()
+    if not settings.deputy_login_configured:
+        return {
+            "status": "skipped",
+            "message": "Deputy web capture skipped because login env is incomplete.",
+            "saved_schedule_rows": 0,
+            "payload": {},
+        }
+    return asyncio.run(capture_and_save_deputy_web(settings))
 
 
 def format_capture_payload(value: str) -> dict[str, Any] | None:

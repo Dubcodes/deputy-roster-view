@@ -32,14 +32,12 @@ from .database import (
     get_recent_sync_logs,
     get_upcoming_shifts,
     init_db,
-    save_deputy_web_schedule,
     update_app_settings,
     update_shift_marks,
 )
 from .deputy_api import test_deputy_roster_api
-from .deputy_web import format_capture_payload, redacted_text, run_deputy_web_capture
-from .scheduler import get_pre_shift_status, shutdown_scheduler, start_scheduler
-from .sync_ics import sync_deputy_calendar
+from .deputy_web import capture_and_save_deputy_web, format_capture_payload
+from .scheduler import get_pre_shift_status, shutdown_scheduler, start_scheduler, sync_roster_sources
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -642,6 +640,8 @@ def decorate_schedule_row(row: object) -> dict[str, object]:
     item["duration_label"] = format_hours(item.get("duration"))
     item["area_sort_order"] = schedule_sort_value(item.get("area_roster_sort_order"))
     item["is_vehicle_area"] = schedule_area_is_vehicle(str(item.get("area_display") or ""))
+    item["changed"] = bool(int(item.get("changed_since_viewed") or 0))
+    item["change_summary"] = str(item.get("change_summary") or "")
     return item
 
 
@@ -667,6 +667,8 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
                     "position_label": "Open shift" if is_vehicle else area_label,
                     "vehicle_label": area_label if is_vehicle else "",
                     "sort_order": area_sort,
+                    "changed": bool(item.get("changed")),
+                    "change_summary": item.get("change_summary") or "",
                 }
             )
             continue
@@ -678,10 +680,15 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
                 "employee_name": employee_name,
                 "position_parts": [],
                 "vehicle_parts": [],
+                "change_parts": [],
+                "changed": False,
                 "position_sort": 999999,
                 "vehicle_sort": 999999,
             },
         )
+        if item.get("changed"):
+            person["changed"] = True
+            append_unique(person["change_parts"], str(item.get("change_summary") or "Changed"))
         if is_vehicle:
             append_unique(person["vehicle_parts"], area_label)
             person["vehicle_sort"] = min(schedule_sort_value(person.get("vehicle_sort")), area_sort)
@@ -702,6 +709,8 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
                 "position_label": ", ".join(position_parts) if position_parts else "Vehicle",
                 "vehicle_label": ", ".join(vehicle_parts),
                 "sort_order": sort_order,
+                "changed": bool(person.get("changed")),
+                "change_summary": "; ".join(list(person.get("change_parts") or [])),
             }
         )
     people.extend(open_entries)
@@ -859,12 +868,13 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             for change in changes_by_shift.get(shift_id, [])
         ]
     deputy_schedule_people = schedule_people(fetch_deputy_schedule_for_date(date_text))
+    deputy_schedule_changed = any(bool(person.get("changed")) for person in deputy_schedule_people)
     day_total = sum(
         float(shift.get("paid_hours") or 0)
         for shift in shifts
         if not int(shift.get("deleted_from_source") or 0)
     )
-    has_changed = any(int(shift.get("changed_since_viewed") or 0) for shift in shifts)
+    has_changed = any(int(shift.get("changed_since_viewed") or 0) for shift in shifts) or deputy_schedule_changed
     return templates.TemplateResponse(
         "day.html",
         {
@@ -876,6 +886,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             "month_number": day_date.month,
             "shifts": shifts,
             "deputy_schedule_people": deputy_schedule_people,
+            "deputy_schedule_changed": deputy_schedule_changed,
             "day_total": day_total,
             "has_changed": has_changed,
             "mark_fields": MARK_FIELDS,
@@ -1013,40 +1024,26 @@ def test_deputy_api() -> RedirectResponse:
 
 @app.post("/settings/deputy-web-capture")
 async def capture_deputy_web() -> RedirectResponse:
-    settings = get_settings()
-    try:
-        result = await run_deputy_web_capture(settings)
-    except Exception as exc:
-        message = f"Deputy web capture failed: {redacted_text(str(exc))[:220]}"
-        payload = {
-            "captured_at": datetime.now(settings.timezone).isoformat(timespec="seconds"),
-            "status": "error",
-            "events": [message],
-            "responses": [],
-        }
-        update_app_settings({"last_deputy_web_capture": json.dumps(payload, ensure_ascii=True)})
-        return RedirectResponse(url=notice_url("/settings", message), status_code=303)
-
-    if result.payload:
-        saved_schedule_rows = save_deputy_web_schedule(result.payload)
-        if saved_schedule_rows:
-            result.payload.setdefault("events", []).append(f"Saved {saved_schedule_rows} schedule rows locally.")
-        update_app_settings({"last_deputy_web_capture": json.dumps(result.payload, ensure_ascii=True)})
-    return RedirectResponse(url=notice_url("/settings", result.message), status_code=303)
+    result = await capture_and_save_deputy_web(get_settings())
+    return RedirectResponse(url=notice_url("/settings", str(result["message"])), status_code=303)
 
 
 @app.api_route("/sync-now", methods=["GET", "POST"])
 def sync_now(next: str | None = None) -> RedirectResponse:
-    summary = sync_deputy_calendar()
-    if summary.get("status") == "ok":
+    summary = sync_roster_sources()
+    calendar = summary.get("calendar") if isinstance(summary.get("calendar"), dict) else {}
+    web = summary.get("web") if isinstance(summary.get("web"), dict) else {}
+    if calendar.get("status") == "ok":
         message = (
             "Sync complete: "
-            f"{summary.get('events_created', 0)} new, "
-            f"{summary.get('events_updated', 0)} changed, "
-            f"{summary.get('events_marked_deleted', 0)} cancelled."
+            f"{calendar.get('events_created', 0)} new, "
+            f"{calendar.get('events_updated', 0)} changed, "
+            f"{calendar.get('events_marked_deleted', 0)} cancelled."
         )
+        if web.get("status") not in {None, "skipped"}:
+            message += f" Deputy crew captured: {web.get('saved_schedule_rows', 0)} rows."
     else:
-        message = f"Sync failed: {summary.get('message', 'Unknown error')}"
+        message = f"Sync failed: {calendar.get('message', 'Unknown error')}"
     redirect_path = next if next and next.startswith("/") and not next.startswith("//") else "/settings"
     return RedirectResponse(url=notice_url(redirect_path, message), status_code=303)
 

@@ -114,6 +114,9 @@ def init_db(settings: Settings | None = None) -> None:
                 duration REAL,
                 is_open INTEGER DEFAULT 0,
                 is_published INTEGER DEFAULT 0,
+                changed_since_viewed INTEGER DEFAULT 0,
+                last_changed_at TEXT,
+                change_summary TEXT,
                 note TEXT,
                 raw_payload TEXT
             );
@@ -134,6 +137,9 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "shift_marks", "timing_adjustment_day_finished", "INTEGER DEFAULT 0")
         _ensure_column(conn, "deputy_schedule_shifts", "area_name", "TEXT")
         _ensure_column(conn, "deputy_schedule_shifts", "area_roster_sort_order", "INTEGER")
+        _ensure_column(conn, "deputy_schedule_shifts", "changed_since_viewed", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "deputy_schedule_shifts", "last_changed_at", "TEXT")
+        _ensure_column(conn, "deputy_schedule_shifts", "change_summary", "TEXT")
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -249,11 +255,20 @@ def update_shift_marks(shift_id: int, values: dict[str, object]) -> bool:
 
 def clear_changed_for_date(date_text: str) -> int:
     with get_connection() as conn:
-        result = conn.execute(
+        shift_result = conn.execute(
             "UPDATE shifts SET changed_since_viewed = 0 WHERE date = ?",
             (date_text,),
         )
-        return result.rowcount
+        schedule_result = conn.execute(
+            """
+            UPDATE deputy_schedule_shifts
+            SET changed_since_viewed = 0,
+                change_summary = ''
+            WHERE date = ?
+            """,
+            (date_text,),
+        )
+        return shift_result.rowcount + schedule_result.rowcount
 
 
 def clear_changed_for_shift(shift_id: int) -> int:
@@ -310,6 +325,21 @@ def fetch_deputy_schedule_for_date(date_text: str) -> list[sqlite3.Row]:
             (date_text,),
         ).fetchall()
     return rows
+
+
+def has_deputy_schedule_changes_for_date(date_text: str) -> bool:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM deputy_schedule_shifts
+            WHERE date = ?
+              AND changed_since_viewed = 1
+            LIMIT 1
+            """,
+            (date_text,),
+        ).fetchone()
+    return row is not None
 
 
 def get_recent_source_payloads(limit: int = 6) -> list[sqlite3.Row]:
@@ -386,6 +416,46 @@ def update_app_settings(values: dict[str, str]) -> None:
             )
 
 
+SCHEDULE_COMPARE_FIELDS = (
+    ("area_name", "Position"),
+    ("employee_name", "Person"),
+    ("start_at", "Start"),
+    ("end_at", "End"),
+    ("duration", "Hours"),
+    ("is_open", "Open shift"),
+    ("is_published", "Published"),
+)
+
+
+def _schedule_values_equal(field_name: str, old_value: object, new_value: object) -> bool:
+    if field_name == "duration":
+        try:
+            return round(float(old_value or 0), 2) == round(float(new_value or 0), 2)
+        except (TypeError, ValueError):
+            return False
+    if field_name in {"is_open", "is_published"}:
+        return int(old_value or 0) == int(new_value or 0)
+    return str(old_value or "") == str(new_value or "")
+
+
+def _schedule_change_summary(existing: sqlite3.Row | None, values: dict[str, object]) -> str:
+    if existing is None:
+        return ""
+    changes = []
+    for field_name, label in SCHEDULE_COMPARE_FIELDS:
+        old_value = existing[field_name]
+        new_value = values[field_name]
+        if not _schedule_values_equal(field_name, old_value, new_value):
+            changes.append(f"{label}: {_display_change_value(old_value)} -> {_display_change_value(new_value)}")
+    return "; ".join(changes)
+
+
+def _display_change_value(value: object) -> str:
+    if value in (None, ""):
+        return "blank"
+    return str(value)
+
+
 def save_deputy_web_schedule(payload: dict[str, object]) -> int:
     captured_at = str(payload.get("captured_at") or datetime.now().isoformat(timespec="seconds"))
     areas = payload.get("areas") if isinstance(payload.get("areas"), list) else []
@@ -431,15 +501,38 @@ def save_deputy_web_schedule(payload: dict[str, object]) -> int:
                 area_sort = _optional_int(area.get("rosterSortOrder"))
             start_at = str(shift.get("start") or "")
             end_at = str(shift.get("end") or "")
+            source_shift_id = int(shift["id"])
+            values = {
+                "area_id": area_id,
+                "area_name": area_name,
+                "area_roster_sort_order": area_sort,
+                "employee_id": _optional_int(shift.get("employee")),
+                "employee_name": str(shift.get("employeeName") or ""),
+                "start_at": start_at,
+                "end_at": end_at,
+                "date": start_at[:10],
+                "duration": _optional_float(shift.get("duration")),
+                "is_open": 1 if shift.get("isOpen") else 0,
+                "is_published": 1 if shift.get("isPublished") else 0,
+                "note": str(shift.get("note") or ""),
+                "raw_payload": json_dumps(shift),
+            }
+            existing = conn.execute(
+                "SELECT * FROM deputy_schedule_shifts WHERE source_shift_id = ?",
+                (source_shift_id,),
+            ).fetchone()
+            change_summary = _schedule_change_summary(existing, values)
+            changed = bool(change_summary)
             conn.execute(
                 """
                 INSERT INTO deputy_schedule_shifts (
                     source_shift_id, captured_at, area_id, area_name,
                     area_roster_sort_order, employee_id, employee_name,
                     start_at, end_at, date, duration, is_open, is_published,
+                    changed_since_viewed, last_changed_at, change_summary,
                     note, raw_payload
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_shift_id) DO UPDATE SET
                     captured_at = excluded.captured_at,
                     area_id = excluded.area_id,
@@ -453,25 +546,36 @@ def save_deputy_web_schedule(payload: dict[str, object]) -> int:
                     duration = excluded.duration,
                     is_open = excluded.is_open,
                     is_published = excluded.is_published,
+                    changed_since_viewed = CASE WHEN ? THEN 1 ELSE deputy_schedule_shifts.changed_since_viewed END,
+                    last_changed_at = CASE WHEN ? THEN ? ELSE deputy_schedule_shifts.last_changed_at END,
+                    change_summary = CASE WHEN ? THEN ? ELSE deputy_schedule_shifts.change_summary END,
                     note = excluded.note,
                     raw_payload = excluded.raw_payload
                 """,
                 (
-                    int(shift["id"]),
+                    source_shift_id,
                     captured_at,
-                    area_id,
-                    area_name,
-                    area_sort,
-                    _optional_int(shift.get("employee")),
-                    str(shift.get("employeeName") or ""),
-                    start_at,
-                    end_at,
-                    start_at[:10],
-                    _optional_float(shift.get("duration")),
-                    1 if shift.get("isOpen") else 0,
-                    1 if shift.get("isPublished") else 0,
-                    str(shift.get("note") or ""),
-                    json_dumps(shift),
+                    values["area_id"],
+                    values["area_name"],
+                    values["area_roster_sort_order"],
+                    values["employee_id"],
+                    values["employee_name"],
+                    values["start_at"],
+                    values["end_at"],
+                    values["date"],
+                    values["duration"],
+                    values["is_open"],
+                    values["is_published"],
+                    0,
+                    None,
+                    "",
+                    values["note"],
+                    values["raw_payload"],
+                    1 if changed else 0,
+                    1 if changed else 0,
+                    captured_at,
+                    1 if changed else 0,
+                    change_summary,
                 ),
             )
             saved += 1
@@ -504,10 +608,18 @@ def json_dumps(value: object) -> str:
 
 def clear_all_changed_flags() -> int:
     with get_connection() as conn:
-        result = conn.execute(
+        shift_result = conn.execute(
             "UPDATE shifts SET changed_since_viewed = 0 WHERE changed_since_viewed = 1"
         )
-        return result.rowcount
+        schedule_result = conn.execute(
+            """
+            UPDATE deputy_schedule_shifts
+            SET changed_since_viewed = 0,
+                change_summary = ''
+            WHERE changed_since_viewed = 1
+            """
+        )
+        return shift_result.rowcount + schedule_result.rowcount
 
 
 def get_last_successful_sync() -> sqlite3.Row | None:

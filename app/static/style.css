@@ -895,6 +895,19 @@ a {
   word-break: normal;
 }
 
+.crew-name {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.crew-change-badge {
+  min-height: 18px;
+  padding: 1px 6px;
+  font-size: 0.66rem;
+}
+
 .marks-panel,
 .timing-panel,
 .change-panel,
