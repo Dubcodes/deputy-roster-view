@@ -3,12 +3,13 @@ from __future__ import annotations
 import calendar
 import json
 import re
+import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -241,6 +242,16 @@ app = FastAPI(
 )
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+_sync_worker_lock = threading.Lock()
+_sync_state_lock = threading.Lock()
+_manual_sync_status: dict[str, object] = {
+    "running": False,
+    "label": "Ready",
+    "message": "",
+    "started_at": "",
+    "finished_at": "",
+    "status": "ready",
+}
 
 
 def parse_iso_datetime(value: str | None) -> datetime | None:
@@ -933,6 +944,93 @@ def notice_url(path: str, message: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query_items), parts.fragment))
 
 
+def get_manual_sync_status() -> dict[str, object]:
+    with _sync_state_lock:
+        return dict(_manual_sync_status)
+
+
+def set_manual_sync_status(**values: object) -> None:
+    with _sync_state_lock:
+        _manual_sync_status.update(values)
+
+
+def sync_summary_message(summary: dict[str, object]) -> str:
+    calendar_result = summary.get("calendar") if isinstance(summary.get("calendar"), dict) else {}
+    web_result = summary.get("web") if isinstance(summary.get("web"), dict) else {}
+    if calendar_result.get("status") == "ok":
+        message = (
+            "Sync complete: "
+            f"{calendar_result.get('events_created', 0)} new, "
+            f"{calendar_result.get('events_updated', 0)} changed, "
+            f"{calendar_result.get('events_marked_deleted', 0)} cancelled."
+        )
+        if web_result.get("status") not in {None, "skipped"}:
+            message += f" Deputy crew captured: {web_result.get('saved_schedule_rows', 0)} rows."
+        return message
+    return f"Sync failed: {calendar_result.get('message', 'Unknown error')}"
+
+
+def run_manual_sync_job() -> None:
+    settings = get_settings()
+    if not _sync_worker_lock.acquire(blocking=False):
+        set_manual_sync_status(
+            running=True,
+            label="Sync already running",
+            message="Sync already running.",
+            status="running",
+        )
+        return
+    try:
+        started_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
+        set_manual_sync_status(
+            running=True,
+            label="Scanning Deputy page now",
+            message="Sync running.",
+            started_at=started_at,
+            finished_at="",
+            status="running",
+        )
+        summary = sync_roster_sources(settings)
+        finished_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
+        message = sync_summary_message(summary)
+        status = "ready" if summary.get("status") == "ok" else "error"
+        set_manual_sync_status(
+            running=False,
+            label="Ready" if status == "ready" else "Error",
+            message=message,
+            finished_at=finished_at,
+            status=status,
+        )
+    except Exception as exc:
+        finished_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
+        set_manual_sync_status(
+            running=False,
+            label="Error",
+            message=f"Sync failed: {exc.__class__.__name__}.",
+            finished_at=finished_at,
+            status="error",
+        )
+    finally:
+        _sync_worker_lock.release()
+
+
+def queue_manual_sync(background_tasks: BackgroundTasks) -> bool:
+    status = get_manual_sync_status()
+    if bool(status.get("running")):
+        return False
+    settings = get_settings()
+    set_manual_sync_status(
+        running=True,
+        label="Scanning Deputy page now",
+        message="Sync queued.",
+        started_at=datetime.now(settings.timezone).isoformat(timespec="seconds"),
+        finished_at="",
+        status="running",
+    )
+    background_tasks.add_task(run_manual_sync_job)
+    return True
+
+
 def build_timesheet_summary(submission_date: date) -> dict[str, object]:
     period_start, period_end = timesheet_period(submission_date)
     rows = fetch_shifts_between(period_start.isoformat(), period_end.isoformat())
@@ -1234,6 +1332,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "last_successful_sync": get_last_successful_sync(),
             "next_shift": decorate_shift(next_shift) if next_shift else None,
             "pre_shift": pre_shift,
+            "sync_status": get_manual_sync_status(),
             "sync_logs": get_recent_sync_logs(),
             "source_payload_shifts": [
                 decorate_shift(row)
@@ -1299,23 +1398,20 @@ async def capture_deputy_web() -> RedirectResponse:
 
 
 @app.api_route("/sync-now", methods=["GET", "POST"])
-def sync_now(next: str | None = None) -> RedirectResponse:
-    summary = sync_roster_sources()
-    calendar = summary.get("calendar") if isinstance(summary.get("calendar"), dict) else {}
-    web = summary.get("web") if isinstance(summary.get("web"), dict) else {}
-    if calendar.get("status") == "ok":
-        message = (
-            "Sync complete: "
-            f"{calendar.get('events_created', 0)} new, "
-            f"{calendar.get('events_updated', 0)} changed, "
-            f"{calendar.get('events_marked_deleted', 0)} cancelled."
-        )
-        if web.get("status") not in {None, "skipped"}:
-            message += f" Deputy crew captured: {web.get('saved_schedule_rows', 0)} rows."
-    else:
-        message = f"Sync failed: {calendar.get('message', 'Unknown error')}"
+def sync_now(request: Request, background_tasks: BackgroundTasks, next: str | None = None) -> JSONResponse | RedirectResponse:
+    started = queue_manual_sync(background_tasks)
+    status = get_manual_sync_status()
+    wants_json = request.headers.get("x-requested-with") == "fetch" or "application/json" in request.headers.get("accept", "")
+    if wants_json:
+        return JSONResponse({"started": started, **status})
+    message = "Sync started." if started else "Sync already running."
     redirect_path = next if next and next.startswith("/") and not next.startswith("//") else "/settings"
     return RedirectResponse(url=notice_url(redirect_path, message), status_code=303)
+
+
+@app.get("/sync-status")
+def sync_status() -> JSONResponse:
+    return JSONResponse(get_manual_sync_status())
 
 
 templates.env.filters["datetime"] = format_datetime

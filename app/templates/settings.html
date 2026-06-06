@@ -8,9 +8,9 @@
       <div class="section-heading">
         <h2>Roster Update</h2>
       </div>
-      <p class="sync-state" data-sync-status>{{ "Ready" if settings.deputy_login_configured else "Deputy login needed" }}</p>
+      <p class="sync-state" data-sync-status>{{ sync_status.label if settings.deputy_login_configured else "Deputy login needed" }}</p>
       <form action="/sync-now" method="post" data-progress-form>
-        <button class="button" type="submit" data-progress-button>Sync and Update</button>
+        <button class="button" type="submit" data-progress-button {% if sync_status.running %}disabled{% endif %}>Sync and Update</button>
       </form>
       <p class="muted">Auto sync runs at 5am, one hour before a shift, and again 30 minutes before start if changes were found.</p>
     </article>
@@ -166,20 +166,81 @@
         const button = form.querySelector("[data-progress-button]");
         const stages = [
           [0, "Scanning Deputy page now"],
-          [1600, "Processing roster"],
-          [3600, "Posting updates"],
-          [5600, "Live"],
-          [7200, "Ready"],
+          [5000, "Processing roster"],
+          [10000, "Posting updates"],
+          [15000, "Live"],
         ];
-        form.addEventListener("submit", () => {
-          if (button) button.disabled = true;
+
+        let stageTimers = [];
+        let pollTimer = null;
+
+        const clearTimers = () => {
+          stageTimers.forEach((timer) => window.clearTimeout(timer));
+          stageTimers = [];
+          if (pollTimer) window.clearInterval(pollTimer);
+          pollTimer = null;
+        };
+
+        const startStages = () => {
           stages.forEach(([delay, label]) => {
-            window.setTimeout(() => {
+            stageTimers.push(window.setTimeout(() => {
               if (state) state.textContent = label;
-              if (button) button.textContent = label;
-            }, delay);
+            }, delay));
           });
+        };
+
+        const pollStatus = async () => {
+          try {
+            const response = await fetch("/sync-status", { headers: { "Accept": "application/json" } });
+            if (!response.ok) return;
+            const data = await response.json();
+            if (data.running) return;
+            clearTimers();
+            if (state) state.textContent = data.label || "Ready";
+            if (button) button.disabled = false;
+          } catch (error) {
+            clearTimers();
+            if (state) state.textContent = "Ready";
+            if (button) button.disabled = false;
+          }
+        };
+
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          clearTimers();
+          if (button) button.disabled = true;
+          if (state) state.textContent = "Scanning Deputy page now";
+          startStages();
+
+          try {
+            const response = await fetch(form.action, {
+              method: "POST",
+              headers: {
+                "Accept": "application/json",
+                "X-Requested-With": "fetch",
+              },
+            });
+            const data = await response.json();
+            if (!data.running && !data.started) {
+              clearTimers();
+              if (state) state.textContent = data.label || "Ready";
+              if (button) button.disabled = false;
+              return;
+            }
+            pollTimer = window.setInterval(pollStatus, 2500);
+            window.setTimeout(pollStatus, 1500);
+          } catch (error) {
+            clearTimers();
+            if (state) state.textContent = "Ready";
+            if (button) button.disabled = false;
+          }
         });
+
+        if (button && button.disabled) {
+          startStages();
+          pollTimer = window.setInterval(pollStatus, 2500);
+          window.setTimeout(pollStatus, 1000);
+        }
       });
     })();
   </script>
