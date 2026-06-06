@@ -179,24 +179,23 @@
           </details>
         {% endif %}
 
-        {% if loop.first and deputy_schedule_groups %}
+        {% if loop.first and deputy_schedule_people %}
           <section class="race-day-panel deputy-schedule-panel">
             <div class="section-heading">
               <h3>Deputy Schedule</h3>
             </div>
-            <div class="schedule-grid">
-              {% for group in deputy_schedule_groups %}
-                <article class="schedule-role">
-                  <h4>{{ group.area_display }}</h4>
-                  <ul>
-                    {% for item in group.rows %}
-                      <li>
-                        <span>{{ item.time_range }}</span>
-                        <strong>{{ item.employee_name or "Open shift" }}</strong>
-                      </li>
-                    {% endfor %}
-                  </ul>
-                </article>
+            <div class="crew-roster" role="table" aria-label="Deputy schedule crew">
+              <div class="crew-roster-row crew-roster-head" role="row">
+                <span role="columnheader">Position</span>
+                <span role="columnheader">Name</span>
+                <span role="columnheader">Vehicle</span>
+              </div>
+              {% for person in deputy_schedule_people %}
+                <div class="crew-roster-row" role="row">
+                  <span role="cell">{{ person.position_label }}</span>
+                  <strong role="cell">{{ person.employee_name }}</strong>
+                  <span role="cell">{{ person.vehicle_label or "-" }}</span>
+                </div>
               {% endfor %}
             </div>
           </section>

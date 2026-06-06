@@ -127,7 +127,9 @@ VEHICLE_ROLE_LABELS = {
     "684",
     "685",
     "OB",
+    "RP1",
     "TENDER",
+    "TRANSIT",
     "RAV91",
 }
 
@@ -616,6 +618,19 @@ def display_schedule_area(value: str | None) -> str:
     return ROLE_NAMES.get(compact_key, ROLE_NAMES.get(value.upper(), value or "Role"))
 
 
+def schedule_area_is_vehicle(value: str | None) -> bool:
+    return role_is_vehicleish(value)
+
+
+def schedule_sort_value(value: object) -> int:
+    if value in (None, ""):
+        return 999999
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 999999
+
+
 def decorate_schedule_row(row: object) -> dict[str, object]:
     item = dict(row)
     start_at = parse_iso_datetime(item.get("start_at"))
@@ -625,36 +640,79 @@ def decorate_schedule_row(row: object) -> dict[str, object]:
     item["time_range"] = f"{item['start_label']}-{item['end_label']}" if item["start_label"] and item["end_label"] else ""
     item["area_display"] = display_schedule_area(str(item.get("area_name") or ""))
     item["duration_label"] = format_hours(item.get("duration"))
+    item["area_sort_order"] = schedule_sort_value(item.get("area_roster_sort_order"))
+    item["is_vehicle_area"] = schedule_area_is_vehicle(str(item.get("area_display") or ""))
     return item
 
 
-def schedule_groups(rows: list[object]) -> list[dict[str, object]]:
-    groups_by_key: dict[tuple[object, str], dict[str, object]] = {}
+def append_unique(items: list[str], value: str) -> None:
+    if value and value not in items:
+        items.append(value)
+
+
+def schedule_people(rows: list[object]) -> list[dict[str, object]]:
+    people_by_key: dict[str, dict[str, object]] = {}
+    open_entries: list[dict[str, object]] = []
     for row in rows:
         item = decorate_schedule_row(row)
-        key = (item.get("area_id"), str(item.get("area_name") or ""))
-        group = groups_by_key.setdefault(
+        area_label = str(item.get("area_display") or "Role")
+        area_sort = schedule_sort_value(item.get("area_sort_order"))
+        employee_name = str(item.get("employee_name") or "").strip()
+        is_vehicle = bool(item.get("is_vehicle_area"))
+
+        if not employee_name:
+            open_entries.append(
+                {
+                    "employee_name": "Open shift",
+                    "position_label": "Open shift" if is_vehicle else area_label,
+                    "vehicle_label": area_label if is_vehicle else "",
+                    "sort_order": area_sort,
+                }
+            )
+            continue
+
+        key = str(item.get("employee_id") or employee_name)
+        person = people_by_key.setdefault(
             key,
             {
-                "area_id": item.get("area_id"),
-                "area_name": item.get("area_name") or "Role",
-                "area_display": item.get("area_display") or "Role",
-                "sort_order": item.get("area_roster_sort_order") or 999999,
-                "rows": [],
+                "employee_name": employee_name,
+                "position_parts": [],
+                "vehicle_parts": [],
+                "position_sort": 999999,
+                "vehicle_sort": 999999,
             },
         )
-        group["rows"].append(item)
+        if is_vehicle:
+            append_unique(person["vehicle_parts"], area_label)
+            person["vehicle_sort"] = min(schedule_sort_value(person.get("vehicle_sort")), area_sort)
+        else:
+            append_unique(person["position_parts"], area_label)
+            person["position_sort"] = min(schedule_sort_value(person.get("position_sort")), area_sort)
 
-    groups = sorted(
-        groups_by_key.values(),
-        key=lambda group: (int(group.get("sort_order") or 999999), str(group.get("area_display") or "")),
-    )
-    for group in groups:
-        group["rows"] = sorted(
-            list(group.get("rows") or []),
-            key=lambda item: (str(item.get("start_at") or ""), str(item.get("employee_name") or "")),
+    people = []
+    for person in people_by_key.values():
+        position_parts = list(person.get("position_parts") or [])
+        vehicle_parts = list(person.get("vehicle_parts") or [])
+        sort_order = schedule_sort_value(person.get("position_sort"))
+        if sort_order == 999999:
+            sort_order = schedule_sort_value(person.get("vehicle_sort"))
+        people.append(
+            {
+                "employee_name": person.get("employee_name") or "Open shift",
+                "position_label": ", ".join(position_parts) if position_parts else "Vehicle",
+                "vehicle_label": ", ".join(vehicle_parts),
+                "sort_order": sort_order,
+            }
         )
-    return groups
+    people.extend(open_entries)
+    return sorted(
+        people,
+        key=lambda person: (
+            schedule_sort_value(person.get("sort_order")),
+            str(person.get("position_label") or ""),
+            str(person.get("employee_name") or ""),
+        ),
+    )
 
 
 def notice_url(path: str, message: str) -> str:
@@ -800,7 +858,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             for shift_id in combined_ids
             for change in changes_by_shift.get(shift_id, [])
         ]
-    deputy_schedule_groups = schedule_groups(fetch_deputy_schedule_for_date(date_text))
+    deputy_schedule_people = schedule_people(fetch_deputy_schedule_for_date(date_text))
     day_total = sum(
         float(shift.get("paid_hours") or 0)
         for shift in shifts
@@ -817,7 +875,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             "month_year": day_date.year,
             "month_number": day_date.month,
             "shifts": shifts,
-            "deputy_schedule_groups": deputy_schedule_groups,
+            "deputy_schedule_people": deputy_schedule_people,
             "day_total": day_total,
             "has_changed": has_changed,
             "mark_fields": MARK_FIELDS,
