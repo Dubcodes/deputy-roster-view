@@ -677,11 +677,79 @@ def format_capture_payload(value: str) -> dict[str, Any] | None:
         response["sample"] = _safe_json_sample(response.get("sample"), **sample_kwargs)
         if "request_sample" in response:
             response["request_sample"] = _safe_json_sample(response.get("request_sample"), **sample_kwargs)
+    payload["stats"] = _capture_stats(payload)
     payload["copy_text"] = _capture_copy_text(payload)
     return payload
 
 
+def _record_dates(records: Any) -> list[str]:
+    if not isinstance(records, list):
+        return []
+    dates = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        start_text = str(record.get("start") or record.get("start_at") or "")
+        match = re.match(r"^\d{4}-\d{2}-\d{2}", start_text)
+        if match:
+            dates.add(match.group(0))
+    return sorted(dates)
+
+
+def _short_date(value: str) -> str:
+    try:
+        date_value = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    return f"{date_value.day} {date_value.strftime('%b')}"
+
+
+def _date_coverage_label(dates: list[str]) -> str:
+    if not dates:
+        return "None"
+    if len(dates) == 1:
+        return _short_date(dates[0])
+    start_label = _short_date(dates[0])
+    end_label = _short_date(dates[-1])
+    return f"{start_label} to {end_label}"
+
+
+def _capture_stats(payload: dict[str, Any]) -> dict[str, Any]:
+    events = payload.get("events") if isinstance(payload.get("events"), list) else []
+    target_track = ""
+    saved_schedule_rows = None
+    for event in events:
+        event_text = str(event)
+        if event_text.startswith("Target schedule track:"):
+            target_track = event_text.split(":", 1)[1].strip().rstrip(".")
+        saved_match = re.search(r"Saved\s+(\d+)\s+schedule rows locally", event_text, re.IGNORECASE)
+        if saved_match:
+            saved_schedule_rows = int(saved_match.group(1))
+
+    own_shift_dates = _record_dates(payload.get("extracted_shifts"))
+    schedule_dates = _record_dates(payload.get("extracted_schedule_shifts"))
+    schedule_records = len(payload.get("extracted_schedule_shifts") or [])
+    shift_records = len(payload.get("extracted_shifts") or [])
+    response_count = len(payload.get("responses") or [])
+
+    return {
+        "target_track": target_track,
+        "responses": response_count,
+        "shift_records": shift_records,
+        "schedule_records": schedule_records,
+        "saved_schedule_rows": saved_schedule_rows if saved_schedule_rows is not None else schedule_records,
+        "own_shift_date_count": len(own_shift_dates),
+        "own_shift_date_label": _date_coverage_label(own_shift_dates),
+        "own_shift_dates": own_shift_dates,
+        "schedule_date_count": len(schedule_dates),
+        "schedule_date_label": _date_coverage_label(schedule_dates),
+        "schedule_dates": schedule_dates,
+        "coverage_warning": schedule_records > 0 and len(schedule_dates) <= 1,
+    }
+
+
 def _capture_copy_text(payload: dict[str, Any]) -> str:
+    stats = payload.get("stats") if isinstance(payload.get("stats"), dict) else _capture_stats(payload)
     lines = [
         "Deputy Web Capture",
         f"Captured: {payload.get('captured_at') or 'unknown'}",
@@ -689,6 +757,9 @@ def _capture_copy_text(payload: dict[str, Any]) -> str:
         f"Responses: {len(payload.get('responses') or [])}",
         f"Shift records: {len(payload.get('extracted_shifts') or [])}",
         f"Schedule shift records: {len(payload.get('extracted_schedule_shifts') or [])}",
+        f"Target schedule track: {stats.get('target_track') or 'unknown'}",
+        f"Own shift date coverage: {stats.get('own_shift_date_label') or 'None'} ({stats.get('own_shift_date_count') or 0} days)",
+        f"Crew schedule date coverage: {stats.get('schedule_date_label') or 'None'} ({stats.get('schedule_date_count') or 0} days)",
         "",
         "Run Log:",
     ]

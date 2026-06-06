@@ -91,9 +91,52 @@
       <form action="/settings/deputy-api-test" method="post">
         <button class="button button-secondary" type="submit">Test Deputy API</button>
       </form>
-      <form action="/settings/deputy-web-capture" method="post">
-        <button class="button button-secondary" type="submit">Capture Web Data</button>
-      </form>
+      <div class="capture-action-row">
+        <form action="/settings/deputy-web-capture" method="post">
+          <button class="button button-secondary" type="submit">Capture Web Data</button>
+        </form>
+        {% if deputy_web_capture %}
+          {% set web_stats = deputy_web_capture.stats %}
+          <div class="capture-quick-stats" aria-label="Latest Deputy web capture stats">
+            <div>
+              <span>Status</span>
+              <strong>{{ deputy_web_capture.status }}</strong>
+            </div>
+            <div>
+              <span>Responses</span>
+              <strong>{{ web_stats.responses }}</strong>
+            </div>
+            <div>
+              <span>My shifts</span>
+              <strong>{{ web_stats.shift_records }}</strong>
+            </div>
+            <div>
+              <span>Target</span>
+              <strong>{{ web_stats.target_track or "Unknown" }}</strong>
+            </div>
+            <div>
+              <span>Crew rows</span>
+              <strong>{{ web_stats.saved_schedule_rows }}</strong>
+            </div>
+            <div>
+              <span>Crew days</span>
+              <strong>{{ web_stats.schedule_date_count }} · {{ web_stats.schedule_date_label }}</strong>
+            </div>
+          </div>
+        {% endif %}
+      </div>
+      {% if deputy_web_capture %}
+        {% set web_stats = deputy_web_capture.stats %}
+        <p class="capture-summary">
+          Last capture {{ deputy_web_capture.captured_at or "unknown" }}.
+          My shifts covered {{ web_stats.own_shift_date_count }} day{% if web_stats.own_shift_date_count != 1 %}s{% endif %}: {{ web_stats.own_shift_date_label }}.
+        </p>
+        {% if web_stats.coverage_warning %}
+          <p class="capture-warning">
+            Crew data currently covers only {{ web_stats.schedule_date_label }}, so other days may not show everyone yet.
+          </p>
+        {% endif %}
+      {% endif %}
     </article>
 
     <article class="settings-panel">
