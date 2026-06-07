@@ -75,7 +75,7 @@
           </div>
           <div>
             <span>Hours</span>
-            <strong>{{ shift.paid_hours|hours }}</strong>
+            <strong>{{ shift.display_hours_label }}</strong>
           </div>
         </section>
 
@@ -223,11 +223,24 @@
                 {% endfor %}
               </dl>
             {% endif %}
-            <p>
-              {{ shift.timing_math.start_label }}-{{ shift.timing_math.end_label }}
-              = {{ shift.timing_math.raw_label }}.
-              {{ shift.timing_math.formula }}.
-            </p>
+            {% if shift.timing_math.race_day.available %}
+              <dl class="timeline-list maths-segments">
+                {% for line in shift.timing_math.race_day.lines %}
+                  <div>
+                    <dt>{{ line.value }}</dt>
+                    <dd>{{ line.label }}</dd>
+                  </div>
+                {% endfor %}
+              </dl>
+              <p>{{ shift.timing_math.race_day.formula }}</p>
+              <p class="muted">Deputy roster duration: {{ shift.timing_math.raw_label }}.</p>
+            {% else %}
+              <p>
+                {{ shift.timing_math.start_label }}-{{ shift.timing_math.end_label }}
+                = {{ shift.timing_math.raw_label }}.
+                {{ shift.timing_math.formula }}.
+              </p>
+            {% endif %}
           </div>
         </section>
 

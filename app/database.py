@@ -342,6 +342,56 @@ def has_deputy_schedule_changes_for_date(date_text: str) -> bool:
     return row is not None
 
 
+def get_deputy_schedule_snapshot() -> dict[str, object]:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total_rows,
+                SUM(CASE WHEN is_published = 1 THEN 1 ELSE 0 END) AS published_rows,
+                SUM(CASE WHEN is_open = 1 OR TRIM(COALESCE(employee_name, '')) = '' THEN 1 ELSE 0 END) AS open_rows,
+                SUM(CASE WHEN is_published = 0 THEN 1 ELSE 0 END) AS unpublished_rows,
+                SUM(CASE WHEN changed_since_viewed = 1 THEN 1 ELSE 0 END) AS changed_rows,
+                MIN(date) AS first_date,
+                MAX(date) AS last_date,
+                MAX(captured_at) AS captured_at
+            FROM deputy_schedule_shifts
+            """
+        ).fetchone()
+    if row is None:
+        return {}
+    return {
+        "total_rows": int(row["total_rows"] or 0),
+        "published_rows": int(row["published_rows"] or 0),
+        "open_rows": int(row["open_rows"] or 0),
+        "unpublished_rows": int(row["unpublished_rows"] or 0),
+        "changed_rows": int(row["changed_rows"] or 0),
+        "first_date": row["first_date"] or "",
+        "last_date": row["last_date"] or "",
+        "captured_at": row["captured_at"] or "",
+    }
+
+
+def fetch_open_deputy_schedule_shifts(limit: int = 8) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM deputy_schedule_shifts
+            WHERE is_open = 1
+               OR TRIM(COALESCE(employee_name, '')) = ''
+            ORDER BY
+                date ASC,
+                start_at ASC,
+                COALESCE(area_roster_sort_order, 999999),
+                area_name ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return rows
+
+
 def get_recent_source_payloads(limit: int = 6) -> list[sqlite3.Row]:
     with get_connection() as conn:
         rows = conn.execute(

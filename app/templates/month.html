@@ -31,7 +31,7 @@
                 </span>
                 <span class="list-shift-meta">
                   <span>{{ shift.time_range }}</span>
-                  <span>{{ shift.paid_label }}</span>
+                  <span>{{ shift.display_hours_label }}</span>
                   {% if shift.race_type_label %}
                     <span>{{ shift.race_type_label }}</span>
                   {% endif %}
@@ -91,7 +91,7 @@
                   <strong class="shift-track">{{ shift.track_label }}</strong>
                   <span class="shift-mini">{{ shift.role_chain_label or shift.role_label or shift.title or "Shift" }} · {{ shift.start_label }}</span>
                   {% if day.shifts|length == 1 %}
-                    <span class="shift-meta">{{ shift.paid_label }}</span>
+                    <span class="shift-meta">{{ shift.display_hours_label }}</span>
                   {% endif %}
                   {% if shift.deleted_from_source or shift.changed_since_viewed %}
                     <span class="badge-row">

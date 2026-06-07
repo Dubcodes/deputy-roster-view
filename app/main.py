@@ -19,9 +19,11 @@ from .database import (
     clear_all_changed_flags,
     clear_changed_for_date,
     clear_changed_for_shift,
+    fetch_open_deputy_schedule_shifts,
     fetch_deputy_schedule_for_date,
     get_calendar_url,
     get_calendar_url_source,
+    get_deputy_schedule_snapshot,
     get_shift_changes_for_date,
     get_last_deputy_web_capture,
     fetch_shift,
@@ -90,6 +92,8 @@ DEFAULT_RACE_TYPE_BY_CODE = {
     "CAM": "H",
 }
 TIMESHEET_ANCHOR_DATE = date(2026, 6, 7)
+RACE_RUN_MINUTES = 3
+PACKUP_MINUTES = 60
 CHANGE_FIELD_LABELS = {
     "title": "Roster title",
     "description": "Roster notes",
@@ -287,6 +291,12 @@ def format_hours(value: float | int | None) -> str:
     return f"{hours}h {minutes:02d}m"
 
 
+def format_minutes_duration(minutes: int | float | None) -> str:
+    if minutes is None:
+        return "0h"
+    return format_hours(float(minutes) / 60)
+
+
 def timesheet_due_date(day_value: date) -> bool:
     days_since_anchor = (day_value - TIMESHEET_ANCHOR_DATE).days
     return days_since_anchor >= 0 and days_since_anchor % 14 == 0
@@ -392,6 +402,54 @@ def clean_timing_value(value: str) -> str:
     value = value.strip().rstrip(".,")
     match = re.search(r"([0-9: ]{2,5}\s*(?:am|pm)?)", value, flags=re.IGNORECASE)
     return normalise_roster_time(match.group(1)) if match else value
+
+
+def timing_lookup(summary: dict[str, object]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for item in summary.get("timings") or []:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip().lower()
+        time_value = clean_time_value(str(item.get("time") or ""))
+        if label and time_value:
+            lookup[label] = time_value
+    return lookup
+
+
+def clock_datetime_for_shift(shift: dict[str, object], clock_value: str, after: datetime | None = None) -> datetime | None:
+    clock_value = clean_time_value(clock_value)
+    if not re.fullmatch(r"\d{2}:\d{2}", clock_value):
+        return None
+    start_at = parse_iso_datetime(str(shift.get("start_at") or ""))
+    if start_at is None:
+        try:
+            start_at = datetime.fromisoformat(str(shift.get("date") or ""))
+        except ValueError:
+            return None
+    hour, minute = (int(part) for part in clock_value.split(":"))
+    result = start_at.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if after is not None:
+        while result < after:
+            result += timedelta(days=1)
+    return result
+
+
+def ceil_datetime_to_quarter(value: datetime) -> datetime:
+    value = value.replace(second=0, microsecond=0)
+    remainder = value.minute % 15
+    if remainder == 0:
+        return value
+    return value + timedelta(minutes=15 - remainder)
+
+
+def shift_hours_value(shift: dict[str, object]) -> float:
+    value = shift.get("display_hours")
+    if value is None:
+        value = shift.get("paid_hours")
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def parse_roster_summary(lines: list[str]) -> dict[str, object]:
@@ -620,6 +678,107 @@ def duration_hours_between(start_text: str | None, end_text: str | None) -> floa
     return max(0.0, round((end_at - start_at).total_seconds() / 3600, 2))
 
 
+def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
+    summary = shift.get("roster_summary") if isinstance(shift.get("roster_summary"), dict) else {}
+    timings = timing_lookup(summary)
+    base_label = "Office" if timings.get("office") else "Clow Place"
+    base_clock = timings.get("office") or timings.get("clow place")
+    on_track_clock = timings.get("on track")
+    adjustment_time = clean_time_value(str(shift.get("timing_adjustment_time") or ""))
+    use_last_race_adjustment = bool(int(shift.get("timing_adjustment_last_race") or 0)) and adjustment_time
+    use_finished_adjustment = bool(int(shift.get("timing_adjustment_day_finished") or 0)) and adjustment_time
+    last_race_clock = adjustment_time if use_last_race_adjustment else timings.get("last race")
+
+    result: dict[str, object] = {
+        "available": False,
+        "lines": [],
+        "formula": "",
+    }
+    if not base_clock:
+        return result
+
+    start_at = clock_datetime_for_shift(shift, base_clock)
+    if start_at is None:
+        return result
+
+    if use_finished_adjustment:
+        finished_at = clock_datetime_for_shift(shift, adjustment_time, start_at)
+        if finished_at is None:
+            return result
+        rounded_end = ceil_datetime_to_quarter(finished_at)
+        hours = max(0.0, round((rounded_end - start_at).total_seconds() / 3600, 2))
+        result.update(
+            {
+                "available": True,
+                "source": "manual_finished",
+                "start_label": start_at.strftime("%H:%M"),
+                "end_label": rounded_end.strftime("%H:%M"),
+                "hours": hours,
+                "hours_label": format_hours(hours),
+                "lines": [
+                    {"label": base_label, "value": start_at.strftime("%H:%M")},
+                    {"label": "Finished/back", "value": finished_at.strftime("%H:%M")},
+                    {"label": "Rounded end", "value": rounded_end.strftime("%H:%M")},
+                    {"label": "Calculated total", "value": format_hours(hours)},
+                ],
+                "formula": (
+                    f"{base_label} {start_at.strftime('%H:%M')} to finished/back "
+                    f"{finished_at.strftime('%H:%M')}, rounded to {rounded_end.strftime('%H:%M')}."
+                ),
+            }
+        )
+        return result
+
+    if not on_track_clock or not last_race_clock:
+        return result
+
+    on_track_at = clock_datetime_for_shift(shift, on_track_clock, start_at)
+    last_race_at = clock_datetime_for_shift(shift, last_race_clock, on_track_at)
+    if on_track_at is None or last_race_at is None:
+        return result
+
+    travel_minutes = max(0, int(round((on_track_at - start_at).total_seconds() / 60)))
+    race_clear_at = ceil_datetime_to_quarter(last_race_at + timedelta(minutes=RACE_RUN_MINUTES))
+    packup_done_at = race_clear_at + timedelta(minutes=PACKUP_MINUTES)
+    calculated_end_at = packup_done_at + timedelta(minutes=travel_minutes)
+    hours = max(0.0, round((calculated_end_at - start_at).total_seconds() / 3600, 2))
+    result.update(
+        {
+            "available": True,
+            "source": "race_day",
+            "start_label": start_at.strftime("%H:%M"),
+            "on_track_label": on_track_at.strftime("%H:%M"),
+            "last_race_label": last_race_at.strftime("%H:%M"),
+            "race_clear_label": race_clear_at.strftime("%H:%M"),
+            "packup_done_label": packup_done_at.strftime("%H:%M"),
+            "end_label": calculated_end_at.strftime("%H:%M"),
+            "travel_label": format_minutes_duration(travel_minutes),
+            "hours": hours,
+            "hours_label": format_hours(hours),
+            "lines": [
+                {"label": base_label, "value": start_at.strftime("%H:%M")},
+                {"label": "On track", "value": on_track_at.strftime("%H:%M")},
+                {"label": "Travel each way", "value": format_minutes_duration(travel_minutes)},
+                {"label": "Last race", "value": last_race_at.strftime("%H:%M")},
+                {"label": "Race cleared", "value": race_clear_at.strftime("%H:%M")},
+                {"label": "Pack-up done", "value": packup_done_at.strftime("%H:%M")},
+                {"label": "Back at base", "value": calculated_end_at.strftime("%H:%M")},
+                {"label": "Calculated total", "value": format_hours(hours)},
+            ],
+            "formula": (
+                f"{base_label} {start_at.strftime('%H:%M')} to on track {on_track_at.strftime('%H:%M')} "
+                f"= {format_minutes_duration(travel_minutes)} travel each way. Last race "
+                f"{last_race_at.strftime('%H:%M')} + {RACE_RUN_MINUTES}m rounds to "
+                f"{race_clear_at.strftime('%H:%M')}; pack-up to {packup_done_at.strftime('%H:%M')}; "
+                f"return travel gives {calculated_end_at.strftime('%H:%M')}."
+            ),
+        }
+    )
+    if use_last_race_adjustment:
+        result["formula"] = f"Using changed last race time. {result['formula']}"
+    return result
+
+
 def apply_timing_math(shift: dict[str, object]) -> None:
     break_minutes = int(shift.get("break_minutes") or 0)
     segments = []
@@ -638,6 +797,17 @@ def apply_timing_math(shift: dict[str, object]) -> None:
         formula = f"Paid: {shift.get('raw_label')} - {break_minutes} min = {shift.get('paid_label')}"
     else:
         formula = f"Paid: {shift.get('paid_label')}"
+    race_day = build_race_day_calculation(shift)
+    if race_day.get("available"):
+        shift["calculated_hours"] = race_day.get("hours")
+        shift["calculated_label"] = race_day.get("hours_label")
+        shift["display_hours"] = race_day.get("hours")
+        shift["display_hours_label"] = race_day.get("hours_label")
+    else:
+        shift["calculated_hours"] = None
+        shift["calculated_label"] = ""
+        shift["display_hours"] = shift.get("paid_hours")
+        shift["display_hours_label"] = shift.get("paid_label") or format_hours(shift.get("paid_hours"))
     shift["timing_math"] = {
         "segments": segments,
         "start_label": shift.get("start_label") or "",
@@ -646,6 +816,7 @@ def apply_timing_math(shift: dict[str, object]) -> None:
         "paid_label": shift.get("paid_label") or format_hours(shift.get("paid_hours")),
         "break_minutes": break_minutes,
         "formula": formula,
+        "race_day": race_day,
     }
 
 
@@ -1049,7 +1220,7 @@ def build_timesheet_summary(submission_date: date) -> dict[str, object]:
             for shift in shifts_by_date.get(day_item.isoformat(), [])
             if not int(shift.get("deleted_from_source") or 0)
         ]
-        day_total = sum(float(shift.get("paid_hours") or 0) for shift in shifts)
+        day_total = sum(shift_hours_value(shift) for shift in shifts)
         total_hours += day_total
         locations = []
         for shift in shifts:
@@ -1130,7 +1301,7 @@ def month_view(
             day_shifts = shifts_by_date.get(day_item.isoformat(), [])
             timesheet = timesheet_marker(day_item)
             day_total = sum(
-                float(shift.get("paid_hours") or 0)
+                shift_hours_value(shift)
                 for shift in day_shifts
                 if not int(shift.get("deleted_from_source") or 0)
             )
@@ -1238,7 +1409,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
     deputy_schedule_people = schedule_people(fetch_deputy_schedule_for_date(date_text))
     deputy_schedule_changed = any(bool(person.get("changed")) for person in deputy_schedule_people)
     day_total = sum(
-        float(shift.get("paid_hours") or 0)
+        shift_hours_value(shift)
         for shift in shifts
         if not int(shift.get("deleted_from_source") or 0)
     )
@@ -1320,6 +1491,20 @@ def settings_view(request: Request, notice: str | None = None) -> object:
     next_shift = get_next_upcoming_shift(now.isoformat())
     pre_shift = get_pre_shift_status(settings)
     calendar_url = get_calendar_url(settings)
+    deputy_web_capture = format_capture_payload(get_last_deputy_web_capture())
+    schedule_snapshot = get_deputy_schedule_snapshot()
+    capture_stats = deputy_web_capture.get("stats", {}) if deputy_web_capture else {}
+    roster_snapshot = {
+        "status_label": "Ready" if settings.deputy_login_configured else "Deputy login needed",
+        "captured_at": (deputy_web_capture or {}).get("captured_at") or schedule_snapshot.get("captured_at") or "",
+        "target": capture_stats.get("target_track") or "All Locations",
+        "date_label": capture_stats.get("schedule_date_label") or "",
+        "published": int(capture_stats.get("published_count") or schedule_snapshot.get("published_rows") or 0),
+        "open": int(capture_stats.get("open_shift_count") or schedule_snapshot.get("open_rows") or 0),
+        "unavailable": int(capture_stats.get("unavailable_count") or 0),
+        "warnings": int(capture_stats.get("warning_count") or 0),
+        "changed": int(schedule_snapshot.get("changed_rows") or 0),
+    }
     return templates.TemplateResponse(
         "settings.html",
         {
@@ -1338,7 +1523,13 @@ def settings_view(request: Request, notice: str | None = None) -> object:
                 decorate_shift(row)
                 for row in get_recent_source_payloads()
             ],
-            "deputy_web_capture": format_capture_payload(get_last_deputy_web_capture()),
+            "deputy_web_capture": deputy_web_capture,
+            "deputy_schedule_snapshot": schedule_snapshot,
+            "roster_snapshot": roster_snapshot,
+            "open_schedule_shifts": [
+                decorate_schedule_row(row)
+                for row in fetch_open_deputy_schedule_shifts()
+            ],
         },
     )
 

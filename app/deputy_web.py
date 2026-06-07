@@ -29,6 +29,16 @@ SCHEDULE_SAMPLE_DEPTH = 8
 SCHEDULE_SAMPLE_LIST_ITEMS = 80
 SCHEDULE_SAMPLE_TEXT = 4000
 MAX_VISIBLE_TEXT = 16000
+ALL_LOCATIONS_SCHEDULE_TARGETS = ("All Locations", "All locations", "All locations schedule")
+SCHEDULE_COUNT_PATTERNS = {
+    "empty_count": re.compile(r"\b(\d+)\s+empty\b", re.IGNORECASE),
+    "unpublished_count": re.compile(r"\b(\d+)\s+unpublished\b", re.IGNORECASE),
+    "published_count": re.compile(r"\b(\d+)\s+published\b", re.IGNORECASE),
+    "require_confirmation_count": re.compile(r"\b(\d+)\s+require\s+confirmation\b", re.IGNORECASE),
+    "open_shift_count": re.compile(r"\b(\d+)\s+open\s+shifts?\b", re.IGNORECASE),
+    "warning_count": re.compile(r"\b(\d+)\s+warnings?\b", re.IGNORECASE),
+    "unavailable_count": re.compile(r"\b(\d+)\s+unavailable\b", re.IGNORECASE),
+}
 FULL_COPY_PATH_RE = re.compile(
     r"/api/(?:schedule/|management/v2/(?:shifts|custom-fields)|v1/my/roster)",
     re.IGNORECASE,
@@ -358,13 +368,14 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     events: list[str] = []
     page_texts: list[dict[str, Any]] = []
     target_track_groups = _target_schedule_track_groups(settings)
+    events.append("Target schedule view: All Locations.")
     if target_track_groups:
         target_labels = ", ".join(group[0] for group in target_track_groups[:8])
         extra_count = max(0, len(target_track_groups) - 8)
         suffix = f", +{extra_count} more" if extra_count else ""
-        events.append(f"Target schedule tracks: {target_labels}{suffix}.")
+        events.append(f"Fallback schedule tracks: {target_labels}{suffix}.")
     else:
-        events.append("No upcoming shift track found for schedule selection.")
+        events.append("No upcoming shift track found for fallback schedule selection.")
 
     try:
         async with async_playwright() as playwright:
@@ -555,7 +566,11 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
 
                 await open_schedule_page()
                 await capture_page_text("Deputy schedule page")
-                if target_track_groups:
+                selected_all_locations = await select_target_track(list(ALL_LOCATIONS_SCHEDULE_TARGETS))
+                if selected_all_locations:
+                    await capture_page_text("Deputy all locations schedule page")
+                elif target_track_groups:
+                    events.append("All Locations was not selectable; falling back to upcoming roster locations.")
                     for target_tracks in target_track_groups:
                         selected = await select_target_track(target_tracks)
                         if selected:
@@ -749,13 +764,28 @@ def _date_coverage_label(dates: list[str]) -> str:
     return f"{start_label} to {end_label}"
 
 
+def _schedule_page_counts(payload: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    page_texts = payload.get("page_texts") if isinstance(payload.get("page_texts"), list) else []
+    for page_text in page_texts:
+        if not isinstance(page_text, dict):
+            continue
+        text = str(page_text.get("text") or "")
+        for key, pattern in SCHEDULE_COUNT_PATTERNS.items():
+            for match in pattern.finditer(text):
+                counts[key] = int(match.group(1))
+    return counts
+
+
 def _capture_stats(payload: dict[str, Any]) -> dict[str, Any]:
     events = payload.get("events") if isinstance(payload.get("events"), list) else []
     target_track = ""
     saved_schedule_rows = None
     for event in events:
         event_text = str(event)
-        if event_text.startswith("Target schedule tracks:"):
+        if event_text.startswith("Target schedule view:"):
+            target_track = event_text.split(":", 1)[1].strip().rstrip(".")
+        elif event_text.startswith("Target schedule tracks:"):
             target_track = event_text.split(":", 1)[1].strip().rstrip(".")
         elif event_text.startswith("Target schedule track:"):
             target_track = event_text.split(":", 1)[1].strip().rstrip(".")
@@ -768,13 +798,23 @@ def _capture_stats(payload: dict[str, Any]) -> dict[str, Any]:
     schedule_records = len(payload.get("extracted_schedule_shifts") or [])
     shift_records = len(payload.get("extracted_shifts") or [])
     response_count = len(payload.get("responses") or [])
+    schedule_rows = payload.get("extracted_schedule_shifts") if isinstance(payload.get("extracted_schedule_shifts"), list) else []
+    row_open_records = sum(
+        1
+        for row in schedule_rows
+        if isinstance(row, dict) and (row.get("isOpen") or not str(row.get("employeeName") or "").strip())
+    )
+    row_published_records = sum(1 for row in schedule_rows if isinstance(row, dict) and row.get("isPublished"))
+    page_counts = _schedule_page_counts(payload)
 
-    return {
+    stats = {
         "target_track": target_track,
         "responses": response_count,
         "shift_records": shift_records,
         "schedule_records": schedule_records,
         "saved_schedule_rows": saved_schedule_rows if saved_schedule_rows is not None else schedule_records,
+        "row_open_records": row_open_records,
+        "row_published_records": row_published_records,
         "own_shift_date_count": len(own_shift_dates),
         "own_shift_date_label": _date_coverage_label(own_shift_dates),
         "own_shift_dates": own_shift_dates,
@@ -783,6 +823,12 @@ def _capture_stats(payload: dict[str, Any]) -> dict[str, Any]:
         "schedule_dates": schedule_dates,
         "coverage_warning": schedule_records > 0 and len(schedule_dates) <= 1,
     }
+    stats.update(page_counts)
+    if "open_shift_count" not in stats:
+        stats["open_shift_count"] = row_open_records
+    if "published_count" not in stats:
+        stats["published_count"] = row_published_records
+    return stats
 
 
 def _capture_copy_text(payload: dict[str, Any]) -> str:
@@ -794,7 +840,14 @@ def _capture_copy_text(payload: dict[str, Any]) -> str:
         f"Responses: {len(payload.get('responses') or [])}",
         f"Shift records: {len(payload.get('extracted_shifts') or [])}",
         f"Schedule shift records: {len(payload.get('extracted_schedule_shifts') or [])}",
-        f"Target schedule track: {stats.get('target_track') or 'unknown'}",
+        f"Target schedule view: {stats.get('target_track') or 'unknown'}",
+        (
+            "Schedule counts: "
+            f"{stats.get('published_count', 0)} published, "
+            f"{stats.get('open_shift_count', 0)} open, "
+            f"{stats.get('unavailable_count', 0)} unavailable, "
+            f"{stats.get('warning_count', 0)} warnings"
+        ),
         f"Own shift date coverage: {stats.get('own_shift_date_label') or 'None'} ({stats.get('own_shift_date_count') or 0} days)",
         f"Crew schedule date coverage: {stats.get('schedule_date_label') or 'None'} ({stats.get('schedule_date_count') or 0} days)",
         "",

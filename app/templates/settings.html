@@ -3,7 +3,7 @@
 {% block title %}Settings - Deputy Roster View{% endblock %}
 
 {% block content %}
-  <section class="settings-grid settings-grid-wide settings-quiet">
+  <section class="settings-grid settings-grid-three settings-quiet">
     <article class="settings-panel sync-panel">
       <div class="section-heading">
         <h2>Roster Update</h2>
@@ -25,7 +25,42 @@
       {% endif %}
       <p class="muted">Last sync: {{ last_successful_sync.finished_at|datetime if last_successful_sync else "Never" }}</p>
     </article>
+
+    <article class="settings-panel roster-snapshot-panel">
+      <span class="summary-label">Roster snapshot</span>
+      <strong>{{ roster_snapshot.status_label }}</strong>
+      <p>
+        {{ roster_snapshot.published }} published · {{ roster_snapshot.open }} open ·
+        {{ roster_snapshot.unavailable }} unavailable · {{ roster_snapshot.warnings }} warnings
+      </p>
+      <p class="muted">
+        {{ roster_snapshot.target }}{% if roster_snapshot.date_label %} · {{ roster_snapshot.date_label }}{% endif %}
+        {% if roster_snapshot.changed %} · {{ roster_snapshot.changed }} changed{% endif %}
+      </p>
+    </article>
   </section>
+
+  <details class="table-panel open-shifts-panel" {% if open_schedule_shifts %}open{% endif %}>
+    <summary>Available / Open Shifts</summary>
+    <div class="diagnostics-content">
+      {% if not open_schedule_shifts %}
+        <div class="empty-state">No open shifts found in the latest schedule capture.</div>
+      {% else %}
+        <div class="open-shift-list">
+          {% for shift in open_schedule_shifts %}
+            <a class="open-shift-row{% if shift.changed %} has-change{% endif %}" href="/day/{{ shift.date }}">
+              <span>{{ shift.date|day_short }}</span>
+              <strong>{{ shift.area_display }}</strong>
+              <span>{{ shift.time_range or "Time TBC" }}</span>
+              {% if shift.changed %}
+                <span class="badge badge-warn">Changed</span>
+              {% endif %}
+            </a>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+  </details>
 
   <details class="table-panel diagnostics-panel">
     <summary>iCal Backup Feed</summary>

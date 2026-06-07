@@ -1319,6 +1319,38 @@ textarea {
   align-items: stretch;
 }
 
+.roster-snapshot-panel strong {
+  display: block;
+}
+
+.open-shifts-panel {
+  margin-bottom: 12px;
+}
+
+.open-shift-list {
+  display: grid;
+  gap: 8px;
+}
+
+.open-shift-row {
+  display: grid;
+  grid-template-columns: minmax(76px, 0.8fr) minmax(0, 1.2fr) minmax(72px, 0.8fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.open-shift-row strong,
+.open-shift-row span {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
 .sync-panel {
   display: grid;
   align-content: start;
@@ -1552,6 +1584,10 @@ th {
 
   .capture-action-row,
   .capture-quick-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .open-shift-row {
     grid-template-columns: 1fr;
   }
 
