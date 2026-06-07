@@ -9,6 +9,12 @@
         <h2>Roster Update</h2>
       </div>
       <p class="sync-state" data-sync-status>{{ sync_status.label if settings.deputy_login_configured else "Deputy login needed" }}</p>
+      <div class="sync-progress{% if sync_status.running %} is-active{% endif %}" data-sync-activity {% if not sync_status.running %}hidden{% endif %}>
+        <span class="sync-spinner" aria-hidden="true"></span>
+        <div class="sync-progress-track" role="progressbar" aria-label="Sync progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{% if sync_status.running %}15{% else %}0{% endif %}" data-sync-progress>
+          <span data-sync-progress-fill style="width: {% if sync_status.running %}15{% else %}0{% endif %}%;"></span>
+        </div>
+      </div>
       <form action="/sync-now" method="post" data-progress-form>
         <button class="button" type="submit" data-progress-button {% if sync_status.running %}disabled{% endif %}>Sync and Update</button>
       </form>
@@ -198,16 +204,45 @@
 
       document.querySelectorAll("[data-progress-form]").forEach((form) => {
         const state = document.querySelector("[data-sync-status]");
+        const activity = document.querySelector("[data-sync-activity]");
+        const progress = document.querySelector("[data-sync-progress]");
+        const progressFill = document.querySelector("[data-sync-progress-fill]");
         const button = form.querySelector("[data-progress-button]");
         const stages = [
-          [0, "Scanning Deputy page now"],
-          [5000, "Processing roster"],
-          [10000, "Posting updates"],
-          [15000, "Live"],
+          [0, "Scanning Deputy page now", 15],
+          [5000, "Processing roster", 45],
+          [10000, "Posting updates", 75],
+          [15000, "Live", 92],
         ];
 
         let stageTimers = [];
         let pollTimer = null;
+
+        const setProgress = (value) => {
+          const safeValue = Math.max(0, Math.min(100, Number(value) || 0));
+          if (progress) progress.setAttribute("aria-valuenow", String(Math.round(safeValue)));
+          if (progressFill) progressFill.style.width = `${safeValue}%`;
+        };
+
+        const setWorking = (working) => {
+          if (!activity) return;
+          if (working) {
+            activity.hidden = false;
+            activity.classList.add("is-active");
+          } else {
+            activity.classList.remove("is-active");
+            activity.hidden = true;
+            setProgress(0);
+          }
+        };
+
+        const finishWorking = (label) => {
+          clearTimers();
+          setProgress(100);
+          if (state) state.textContent = label || "Ready";
+          if (button) button.disabled = false;
+          window.setTimeout(() => setWorking(false), 500);
+        };
 
         const clearTimers = () => {
           stageTimers.forEach((timer) => window.clearTimeout(timer));
@@ -217,9 +252,11 @@
         };
 
         const startStages = () => {
-          stages.forEach(([delay, label]) => {
+          setWorking(true);
+          stages.forEach(([delay, label, progressValue]) => {
             stageTimers.push(window.setTimeout(() => {
               if (state) state.textContent = label;
+              setProgress(progressValue);
             }, delay));
           });
         };
@@ -230,13 +267,9 @@
             if (!response.ok) return;
             const data = await response.json();
             if (data.running) return;
-            clearTimers();
-            if (state) state.textContent = data.label || "Ready";
-            if (button) button.disabled = false;
+            finishWorking(data.label || "Ready");
           } catch (error) {
-            clearTimers();
-            if (state) state.textContent = "Ready";
-            if (button) button.disabled = false;
+            finishWorking("Ready");
           }
         };
 
@@ -257,17 +290,13 @@
             });
             const data = await response.json();
             if (!data.running && !data.started) {
-              clearTimers();
-              if (state) state.textContent = data.label || "Ready";
-              if (button) button.disabled = false;
+              finishWorking(data.label || "Ready");
               return;
             }
             pollTimer = window.setInterval(pollStatus, 2500);
             window.setTimeout(pollStatus, 1500);
           } catch (error) {
-            clearTimers();
-            if (state) state.textContent = "Ready";
-            if (button) button.disabled = false;
+            finishWorking("Ready");
           }
         });
 

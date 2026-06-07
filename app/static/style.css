@@ -1364,6 +1364,52 @@ textarea {
   font-weight: 950;
 }
 
+.sync-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sync-progress[hidden] {
+  display: none;
+}
+
+.sync-spinner {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+  animation: sync-spin 0.85s linear infinite;
+}
+
+.sync-progress-track {
+  position: relative;
+  height: 8px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-raised);
+}
+
+.sync-progress-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), #64d2ff, var(--ok));
+  transition: width 0.45s ease;
+}
+
+@keyframes sync-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .sync-log-heading {
   margin-top: 18px;
 }
