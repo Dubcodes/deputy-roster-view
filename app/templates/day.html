@@ -182,7 +182,10 @@
                   <strong class="crew-name" role="cell">
                     <span>{{ person.employee_name }}</span>
                     {% if person.changed %}
-                      <span class="badge badge-warn crew-change-badge" title="{{ person.change_summary }}">Changed</span>
+                      <details class="crew-change-details">
+                        <summary class="badge badge-warn crew-change-badge">Changed</summary>
+                        <p>{{ person.change_summary or "Changed from the previous capture." }}</p>
+                      </details>
                     {% endif %}
                   </strong>
                   <span role="cell">{{ person.vehicle_label or "-" }}</span>
@@ -238,7 +241,6 @@
               <p>
                 {{ shift.timing_math.start_label }}-{{ shift.timing_math.end_label }}
                 = {{ shift.timing_math.raw_label }}.
-                {{ shift.timing_math.formula }}.
               </p>
             {% endif %}
           </div>

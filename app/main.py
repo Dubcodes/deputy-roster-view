@@ -19,6 +19,7 @@ from .database import (
     clear_all_changed_flags,
     clear_changed_for_date,
     clear_changed_for_shift,
+    fetch_open_deputy_schedule_between,
     fetch_open_deputy_schedule_shifts,
     fetch_deputy_schedule_for_date,
     get_calendar_url,
@@ -237,6 +238,9 @@ SCHEDULE_POSITION_ORDER = {
     "ccu2": 260,
     "fm": 270,
     "eng": 280,
+}
+HIDDEN_SCHEDULE_POSITION_KEYS = {
+    "outofregion",
 }
 
 
@@ -993,6 +997,10 @@ def schedule_area_is_vehicle(value: str | None) -> bool:
     return role_is_vehicleish(value)
 
 
+def schedule_area_is_hidden(value: str | None) -> bool:
+    return schedule_label_key(value) in HIDDEN_SCHEDULE_POSITION_KEYS
+
+
 def schedule_sort_value(value: object) -> int:
     if value in (None, ""):
         return 999999
@@ -1040,6 +1048,8 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
     for row in rows:
         item = decorate_schedule_row(row)
         area_label = str(item.get("area_display") or "Role")
+        if schedule_area_is_hidden(area_label):
+            continue
         area_sort = schedule_sort_value(item.get("display_sort_order"))
         employee_name = str(item.get("employee_name") or "").strip()
         is_vehicle = bool(item.get("is_vehicle_area"))
@@ -1106,6 +1116,26 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
             str(person.get("employee_name") or ""),
         ),
     )
+
+
+def open_schedule_by_date(start_date: str, end_date: str) -> dict[str, list[dict[str, object]]]:
+    by_date: dict[str, list[dict[str, object]]] = {}
+    for row in fetch_open_deputy_schedule_between(start_date, end_date):
+        item = decorate_schedule_row(row)
+        if schedule_area_is_hidden(str(item.get("area_display") or "")):
+            continue
+        by_date.setdefault(str(item.get("date") or ""), []).append(item)
+    return by_date
+
+
+def visible_open_schedule_shifts(limit: int = 8) -> list[dict[str, object]]:
+    shifts = []
+    for row in fetch_open_deputy_schedule_shifts(limit=limit):
+        item = decorate_schedule_row(row)
+        if schedule_area_is_hidden(str(item.get("area_display") or "")):
+            continue
+        shifts.append(item)
+    return shifts
 
 
 def notice_url(path: str, message: str) -> str:
@@ -1284,6 +1314,7 @@ def month_view(
     grid_start = month_weeks[0][0].isoformat()
     grid_end = month_weeks[-1][-1].isoformat()
     rows = fetch_shifts_between(grid_start, grid_end)
+    open_shifts_by_date = open_schedule_by_date(grid_start, grid_end)
 
     shifts_by_date: dict[str, list[dict[str, object]]] = {}
     for row in rows:
@@ -1299,6 +1330,7 @@ def month_view(
         week_total = 0.0
         for day_item in week:
             day_shifts = shifts_by_date.get(day_item.isoformat(), [])
+            day_open_shifts = open_shifts_by_date.get(day_item.isoformat(), [])
             timesheet = timesheet_marker(day_item)
             day_total = sum(
                 shift_hours_value(shift)
@@ -1316,16 +1348,18 @@ def month_view(
                     "in_month": day_item.month == month,
                     "is_today": day_item == today,
                     "shifts": day_shifts,
+                    "open_shifts": day_open_shifts,
                     "total": day_total,
                     "timesheet": timesheet,
                 }
             )
-            if day_item.month == month and (day_shifts or timesheet):
+            if day_item.month == month and (day_shifts or timesheet or day_open_shifts):
                 active_days.append(
                     {
                         "date": day_item,
                         "iso": day_item.isoformat(),
                         "shifts": day_shifts,
+                        "open_shifts": day_open_shifts,
                         "total": day_total,
                         "timesheet": timesheet,
                     }
@@ -1526,10 +1560,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "deputy_web_capture": deputy_web_capture,
             "deputy_schedule_snapshot": schedule_snapshot,
             "roster_snapshot": roster_snapshot,
-            "open_schedule_shifts": [
-                decorate_schedule_row(row)
-                for row in fetch_open_deputy_schedule_shifts()
-            ],
+            "open_schedule_shifts": visible_open_schedule_shifts(),
         },
     )
 

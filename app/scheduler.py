@@ -102,17 +102,26 @@ def get_pre_shift_status(settings: Settings | None = None) -> dict[str, object]:
         }
 
     start_at = datetime.fromisoformat(shift["start_at"])
+    early_target_at = start_at - timedelta(hours=settings.early_pre_shift_sync_hours)
     target_at = start_at - timedelta(minutes=settings.pre_shift_sync_minutes)
     followup_target_at = start_at - timedelta(minutes=settings.changed_followup_sync_minutes)
+    early_should_sync = early_target_at <= now <= start_at
     primary_should_sync = target_at <= now <= start_at
     crew_schedule_changed = has_deputy_schedule_changes_for_date(str(shift["date"]))
     followup_should_sync = (
         (bool(int(shift["changed_since_viewed"] or 0)) or crew_schedule_changed)
         and followup_target_at <= now <= start_at
     )
+    early_key = f"{shift['id']}:{shift['start_at']}:early:{early_target_at.isoformat()}"
     primary_key = f"{shift['id']}:{shift['start_at']}:primary:{target_at.isoformat()}"
     followup_key = f"{shift['id']}:{shift['start_at']}:changed-followup:{followup_target_at.isoformat()}"
     sync_windows = [
+        {
+            "name": "12-hour pre-shift",
+            "target_at": early_target_at.isoformat(),
+            "should_sync": early_should_sync,
+            "sync_key": early_key,
+        },
         {
             "name": "pre-shift",
             "target_at": target_at.isoformat(),
@@ -126,20 +135,23 @@ def get_pre_shift_status(settings: Settings | None = None) -> dict[str, object]:
             "sync_key": followup_key,
         },
     ]
-    if primary_should_sync:
-        reason = "inside pre-shift sync window"
-    elif followup_should_sync:
+    if followup_should_sync:
         reason = "inside changed follow-up sync window"
+    elif primary_should_sync:
+        reason = "inside pre-shift sync window"
+    elif early_should_sync:
+        reason = "inside 12-hour pre-shift sync window"
     else:
         reason = "waiting for pre-shift window"
 
     return {
         "shift": dict(shift),
+        "early_target_at": early_target_at.isoformat(),
         "target_at": target_at.isoformat(),
         "followup_target_at": followup_target_at.isoformat(),
         "crew_schedule_changed": crew_schedule_changed,
-        "should_sync": primary_should_sync or followup_should_sync,
-        "sync_key": primary_key,
+        "should_sync": early_should_sync or primary_should_sync or followup_should_sync,
+        "sync_key": early_key,
         "sync_windows": sync_windows,
         "reason": reason,
     }

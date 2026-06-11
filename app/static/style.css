@@ -436,6 +436,28 @@ a {
   stroke-width: 2;
 }
 
+.available-shift-dot {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 5px;
+  padding: 2px 7px;
+  border: 1px solid #5f4721;
+  border-radius: 999px;
+  background: #2a2115;
+  color: var(--warn);
+  font-size: 0.66rem;
+  font-weight: 950;
+  text-decoration: none;
+}
+
+.available-shift-card {
+  border-color: #5f4721;
+  border-left-color: var(--warn);
+  background: #241f15;
+}
+
 .has-change {
   box-shadow: inset 0 0 0 1px rgba(255, 206, 107, 0.28);
 }
@@ -935,6 +957,40 @@ a {
   min-height: 18px;
   padding: 1px 6px;
   font-size: 0.66rem;
+}
+
+.crew-change-details {
+  display: inline-grid;
+  gap: 4px;
+}
+
+.crew-change-details summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.crew-change-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.crew-change-details p {
+  display: none;
+  max-width: min(270px, 76vw);
+  margin: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.crew-change-details[open] p,
+.crew-change-details:hover p,
+.crew-change-details:focus-within p {
+  display: block;
 }
 
 .marks-panel,
@@ -1725,6 +1781,13 @@ th {
     width: 22px;
     height: 22px;
     margin-top: 3px;
+  }
+
+  .available-shift-dot {
+    min-height: 20px;
+    margin-top: 3px;
+    padding: 1px 5px;
+    font-size: 0.58rem;
   }
 
   .timesheet-dot svg {

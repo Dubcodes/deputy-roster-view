@@ -77,7 +77,8 @@ If you do have a Deputy API token, set `DEPUTY_API_TOKEN` and use Settings -> Te
 ## Syncing
 
 - Daily sync runs at `SYNC_AT_HOUR`, default `5`, in `TZ`, default `Pacific/Auckland`.
-- A pre-shift checker runs every 10 minutes and syncs once when the next shift is within `PRE_SHIFT_SYNC_MINUTES`, default `60`.
+- A pre-shift checker runs every 10 minutes and syncs once around `EARLY_PRE_SHIFT_SYNC_HOURS`, default `12`, before the next shift.
+- It syncs again when the next shift is within `PRE_SHIFT_SYNC_MINUTES`, default `60`.
 - If that upcoming shift is marked as changed, the checker runs one more follow-up sync at `CHANGED_FOLLOWUP_SYNC_MINUTES`, default `30`.
 - Each normal sync refreshes the iCal roster and, when Deputy web login env is configured, captures the logged-in Deputy schedule data for crew roles.
 - Use the Sync Now button in the app to trigger the same combined sync manually.

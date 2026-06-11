@@ -392,6 +392,28 @@ def fetch_open_deputy_schedule_shifts(limit: int = 8) -> list[sqlite3.Row]:
     return rows
 
 
+def fetch_open_deputy_schedule_between(start_date: str, end_date: str) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM deputy_schedule_shifts
+            WHERE date BETWEEN ? AND ?
+              AND (
+                is_open = 1
+                OR TRIM(COALESCE(employee_name, '')) = ''
+              )
+            ORDER BY
+                date ASC,
+                start_at ASC,
+                COALESCE(area_roster_sort_order, 999999),
+                area_name ASC
+            """,
+            (start_date, end_date),
+        ).fetchall()
+    return rows
+
+
 def get_recent_source_payloads(limit: int = 6) -> list[sqlite3.Row]:
     with get_connection() as conn:
         rows = conn.execute(

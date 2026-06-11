@@ -54,6 +54,18 @@
                 {% endif %}
               </a>
             {% endfor %}
+            {% for open_shift in day.open_shifts %}
+              <a class="list-shift available-shift-card" href="/sync-now?next=/day/{{ day.iso }}">
+                <span class="list-shift-main">
+                  <strong>Available shift</strong>
+                  <span>{{ open_shift.area_display }}</span>
+                </span>
+                <span class="list-shift-meta">
+                  <span>{{ open_shift.time_range or "Time TBC" }}</span>
+                  <span>Tap to refresh</span>
+                </span>
+              </a>
+            {% endfor %}
             {% if timesheet %}
               <a class="list-shift timesheet-list-card" href="{{ timesheet.url }}">
                 <span class="list-shift-main">
@@ -105,6 +117,11 @@
                   {% endif %}
                 </a>
               {% endfor %}
+              {% if day.open_shifts %}
+                <a class="available-shift-dot" href="/sync-now?next=/day/{{ day.iso }}" aria-label="{{ day.open_shifts|length }} available shifts. Sync and open day.">
+                  <span>Open</span>
+                </a>
+              {% endif %}
               {% if timesheet %}
                 <a class="timesheet-dot" href="{{ timesheet.url }}" aria-label="Timesheet submission summary">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
