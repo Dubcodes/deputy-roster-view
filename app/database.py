@@ -335,6 +335,11 @@ def has_deputy_schedule_changes_for_date(date_text: str) -> bool:
             FROM deputy_schedule_shifts
             WHERE date = ?
               AND changed_since_viewed = 1
+              AND (
+                change_summary LIKE '%Person:%'
+                OR change_summary LIKE '%Position:%'
+                OR change_summary LIKE '%Open shift:%'
+              )
             LIMIT 1
             """,
             (date_text,),

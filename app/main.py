@@ -1034,7 +1034,26 @@ def decorate_schedule_row(row: object) -> dict[str, object]:
     item["is_vehicle_area"] = schedule_area_is_vehicle(str(item.get("area_display") or ""))
     item["changed"] = bool(int(item.get("changed_since_viewed") or 0))
     item["change_summary"] = str(item.get("change_summary") or "")
+    item["assignment_changed"] = schedule_assignment_changed(item["change_summary"])
+    item["assignment_change_summary"] = schedule_assignment_change_summary(item["change_summary"])
     return item
+
+
+def schedule_assignment_changed(change_summary: str | None) -> bool:
+    change_summary = str(change_summary or "")
+    return any(
+        marker in change_summary
+        for marker in ("Person:", "Position:", "Open shift:")
+    )
+
+
+def schedule_assignment_change_summary(change_summary: str | None) -> str:
+    parts = []
+    for part in str(change_summary or "").split(";"):
+        clean_part = part.strip()
+        if clean_part.startswith(("Person:", "Position:", "Open shift:")):
+            parts.append(clean_part)
+    return "; ".join(parts)
 
 
 def append_unique(items: list[str], value: str) -> None:
@@ -1061,8 +1080,8 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
                     "position_label": "Open shift" if is_vehicle else area_label,
                     "vehicle_label": area_label if is_vehicle else "",
                     "sort_order": area_sort,
-                    "changed": bool(item.get("changed")),
-                    "change_summary": item.get("change_summary") or "",
+                    "changed": bool(item.get("assignment_changed")),
+                    "change_summary": item.get("assignment_change_summary") or "",
                 }
             )
             continue
@@ -1080,9 +1099,9 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
                 "vehicle_sort": 999999,
             },
         )
-        if item.get("changed"):
+        if item.get("assignment_changed"):
             person["changed"] = True
-            append_unique(person["change_parts"], str(item.get("change_summary") or "Changed"))
+            append_unique(person["change_parts"], str(item.get("assignment_change_summary") or "Changed"))
         if is_vehicle:
             append_unique(person["vehicle_parts"], area_label)
             person["vehicle_sort"] = min(schedule_sort_value(person.get("vehicle_sort")), area_sort)
@@ -1136,6 +1155,17 @@ def visible_open_schedule_shifts(limit: int = 8) -> list[dict[str, object]]:
             continue
         shifts.append(item)
     return shifts
+
+
+def is_overnight_travel_day(shifts: list[dict[str, object]]) -> bool:
+    for shift in shifts:
+        haystack = " ".join(
+            str(shift.get(key) or "")
+            for key in ("title", "role_label", "role_full_label", "display_title")
+        ).lower()
+        if "travel then overnighter" in haystack or "overnighter" in haystack:
+            return True
+    return False
 
 
 def notice_url(path: str, message: str) -> str:
@@ -1440,7 +1470,13 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             for shift_id in combined_ids
             for change in changes_by_shift.get(shift_id, [])
         ]
+    deputy_schedule_label = "Deputy Schedule"
     deputy_schedule_people = schedule_people(fetch_deputy_schedule_for_date(date_text))
+    if not deputy_schedule_people and is_overnight_travel_day(shifts):
+        next_day_text = (day_date + timedelta(days=1)).isoformat()
+        deputy_schedule_people = schedule_people(fetch_deputy_schedule_for_date(next_day_text))
+        if deputy_schedule_people:
+            deputy_schedule_label = "Deputy Schedule - Next Day Crew"
     deputy_schedule_changed = any(bool(person.get("changed")) for person in deputy_schedule_people)
     day_total = sum(
         shift_hours_value(shift)
@@ -1459,6 +1495,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             "month_number": day_date.month,
             "shifts": shifts,
             "deputy_schedule_people": deputy_schedule_people,
+            "deputy_schedule_label": deputy_schedule_label,
             "deputy_schedule_changed": deputy_schedule_changed,
             "day_total": day_total,
             "has_changed": has_changed,

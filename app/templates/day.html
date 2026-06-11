@@ -168,7 +168,7 @@
         {% if loop.first and deputy_schedule_people %}
           <section class="race-day-panel deputy-schedule-panel">
             <div class="section-heading">
-              <h3>Deputy Schedule</h3>
+              <h3>{{ deputy_schedule_label or "Deputy Schedule" }}</h3>
             </div>
             <div class="crew-roster" role="table" aria-label="Deputy schedule crew">
               <div class="crew-roster-row crew-roster-head" role="row">
