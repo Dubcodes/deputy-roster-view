@@ -34,6 +34,7 @@ Template compile check, if Jinja is not installed locally:
 ```powershell
 python -m pip install --target .codex_tmp_jinja jinja2==3.1.5
 $env:PYTHONPATH='.codex_tmp_jinja'; python -c "from jinja2 import Environment, FileSystemLoader; env=Environment(loader=FileSystemLoader('app/templates')); env.filters.update(datetime=lambda v, fmt='%a %d %b %H:%M': str(v), time=str, day_short=str, hours=str, urlencode=str); [env.get_template(t) for t in ['base.html','month.html','day.html','settings.html','timesheet.html']]; print('templates ok')"
+$env:PYTHONPATH='.codex_tmp_jinja'; python scripts\smoke_render_templates.py
 ```
 
 Remove `.codex_tmp_jinja` after the check.

@@ -99,7 +99,7 @@
               <h3>Race Day</h3>
             </div>
             <div class="race-day-strip">
-              {% for item in shift.race_day_summary.items %}
+              {% for item in shift.race_day_summary["items"] %}
                 <div class="race-day-chip{% if item.important %} is-important{% endif %}">
                   <span>{{ item.label }}</span>
                   <strong>{{ item.value }}</strong>
