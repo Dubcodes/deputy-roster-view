@@ -886,7 +886,9 @@ a {
 
 .race-day-rows {
   display: grid;
-  gap: 4px;
+  grid-template-columns: max-content max-content;
+  column-gap: 16px;
+  row-gap: 4px;
   margin: 0;
   padding: 0;
   color: var(--text);
@@ -897,10 +899,7 @@ a {
 }
 
 .race-day-rows div {
-  display: grid;
-  grid-template-columns: max-content max-content;
-  gap: 16px;
-  align-items: baseline;
+  display: contents;
 }
 
 .race-day-rows dt,
