@@ -102,24 +102,16 @@ CHANGE_FIELD_LABELS = {
     "title": "Roster title",
     "description": "Roster notes",
     "location": "Location",
-    "start_at": "Deputy roster start",
-    "end_at": "Deputy roster end",
-    "raw_hours": "Deputy roster duration",
+    "start_at": "Roster start",
+    "end_at": "Roster finish",
+    "raw_hours": "Rostered hours",
     "break_minutes": "Break",
-    "paid_hours": "Roster hours",
+    "paid_hours": "Rostered hours",
     "source_link": "Deputy link",
     "source_status": "Status",
     "deleted_from_source": "Cancelled",
 }
-CHANGE_FIELD_HELP = {
-    "start_at": "The start time Deputy has on the roster item.",
-    "end_at": "The end time Deputy has on the roster item.",
-    "raw_hours": "The roster duration between Deputy start and end.",
-    "paid_hours": "The roster hours stored from Deputy after any break rule.",
-    "description": "The roster note text from Deputy.",
-    "title": "The role/location summary from Deputy.",
-    "location": "The Deputy location/address field.",
-}
+HIDDEN_CHANGE_FIELDS = {"break_minutes", "paid_hours"}
 TIMING_LINE_PATTERNS = (
     ("Trucks", re.compile(r"^trucks?\s+(.+)$", re.IGNORECASE)),
     ("Office", re.compile(r"^office\s+(.+)$", re.IGNORECASE)),
@@ -684,7 +676,6 @@ def decorate_change(row: object) -> dict[str, object]:
     change = dict(row)
     field_name = str(change.get("field_name") or "")
     change["field_label"] = CHANGE_FIELD_LABELS.get(field_name, field_name.replace("_", " ").title())
-    change["field_help"] = CHANGE_FIELD_HELP.get(field_name, "")
     change["old_display"] = format_change_value(field_name, str(change.get("old_value") or ""))
     change["new_display"] = format_change_value(field_name, str(change.get("new_value") or ""))
     return change
@@ -706,6 +697,10 @@ def build_shift_change_summary(changes: list[dict[str, object]]) -> str:
     if len(changes) > 4:
         parts.append(f"+{len(changes) - 4} more")
     return "; ".join(parts)
+
+
+def compact_shift_changes(changes: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [change for change in changes if str(change.get("field_name") or "") not in HIDDEN_CHANGE_FIELDS]
 
 
 def duration_hours_between(start_text: str | None, end_text: str | None) -> float:
@@ -817,37 +812,27 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     return result
 
 
-def build_race_day_summary(shift: dict[str, object], race_day: dict[str, object]) -> dict[str, object]:
-    summary = shift.get("roster_summary") if isinstance(shift.get("roster_summary"), dict) else {}
-    timings = timing_lookup(summary)
-    items: list[dict[str, object]] = []
+def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object]) -> dict[str, object]:
+    lines: list[str] = []
+    wanted_patterns = (
+        re.compile(r"^(trucks?|office|clow\s+place|on\s+track|first\s+cross)\b", re.IGNORECASE),
+        re.compile(r"\b(records|live|first race|last race|\d+\s+races?)\b", re.IGNORECASE),
+    )
 
-    def add_item(label: str, value: object, important: bool = False) -> None:
-        value_text = str(value or "").strip()
-        if value_text and not any(item["label"] == label and item["value"] == value_text for item in items):
-            items.append({"label": label, "value": value_text, "important": important})
-
-    for note in summary.get("production_notes") or []:
-        note_text = str(note or "").strip()
-        if "race" in note_text.lower():
-            add_item("Races", note_text, True)
-            break
-
-    base_label = "Office" if timings.get("office") else "Clow Place" if timings.get("clow place") else "Start"
-    add_item("Trucks", timings.get("trucks"))
-    add_item(base_label, timings.get("office") or timings.get("clow place"), True)
-    add_item("On track", timings.get("on track"), True)
-    add_item("First cross", timings.get("first cross") or timings.get("live"))
-    add_item("First race", timings.get("first race"), True)
-    add_item("Last race", timings.get("last race"), True)
-
-    if race_day.get("available"):
-        add_item("Travel back", race_day.get("travel_label"))
-        add_item("Back at base", race_day.get("end_label"), True)
+    for line in shift.get("description_lines") or []:
+        line_text = str(line or "").strip()
+        if not line_text:
+            continue
+        if not any(pattern.search(line_text) for pattern in wanted_patterns):
+            continue
+        if re.match(r"^(trucks?|office|clow\s+place|on\s+track)\b", line_text, re.IGNORECASE):
+            line_text = re.split(r"\s+[-–]\s+", line_text, maxsplit=1)[0].strip()
+        if line_text and line_text not in lines:
+            lines.append(line_text)
 
     return {
-        "items": items,
-        "has_items": bool(items),
+        "lines": lines,
+        "has_items": bool(lines),
     }
 
 
@@ -1539,6 +1524,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             for shift_id in combined_ids
             for change in changes_by_shift.get(shift_id, [])
         ]
+        shift["changes"] = compact_shift_changes(list(shift.get("changes") or []))
         shift["change_summary_text"] = build_shift_change_summary(list(shift.get("changes") or []))
     deputy_schedule_label = "Deputy Schedule"
     deputy_schedule_people = schedule_people(fetch_deputy_schedule_for_date(date_text))
@@ -1581,6 +1567,12 @@ def mark_day_viewed(date_text: str) -> RedirectResponse:
         url=notice_url(f"/day/{date_text}", "Changed flags cleared for this day."),
         status_code=303,
     )
+
+
+@app.post("/day/{date_text}/mark-viewed.json")
+def mark_day_viewed_json(date_text: str) -> JSONResponse:
+    cleared = clear_changed_for_date(date_text)
+    return JSONResponse({"ok": True, "cleared": cleared})
 
 
 @app.get("/shift/{shift_id}")

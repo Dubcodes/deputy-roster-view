@@ -29,6 +29,7 @@ def render_day_template() -> None:
     html = template.render(
         request={},
         notice=None,
+        date_text="2026-06-13",
         day_date=date(2026, 6, 13),
         month_year=2026,
         month_number=6,
@@ -49,7 +50,7 @@ def render_day_template() -> None:
                 "race_type_label": "Thoroughbred racing",
                 "location": "12 Sir Tristram Avenue",
                 "changed_since_viewed": 1,
-                "change_summary_text": "Deputy roster duration changed",
+                "change_summary_text": "Rostered hours changed",
                 "source_status": "",
                 "timing_adjustment_labels": [],
                 "start_at": "2026-06-13T08:30:00+12:00",
@@ -58,10 +59,11 @@ def render_day_template() -> None:
                 "source_link": "",
                 "race_day_summary": {
                     "has_items": True,
-                    "items": [
-                        {"label": "Races", "value": "10 races", "important": True},
-                        {"label": "Clow Place", "value": "08:30", "important": True},
-                        {"label": "Last race", "value": "16:24", "important": True},
+                    "lines": [
+                        "Clow Place 0830",
+                        "On track 0845",
+                        "Records 1030 Live 1100",
+                        "10 races 1110 | 1624",
                     ],
                 },
                 "description_lines": ["10 races 1110 | 1624"],
@@ -88,7 +90,7 @@ def render_day_template() -> None:
             }
         ],
     )
-    if "Race Day" not in html or "Last race" not in html:
+    if "Race Day" not in html or "10 races 1110 | 1624" not in html:
         raise AssertionError("Day template did not render expected race-day content.")
 
 

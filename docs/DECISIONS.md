@@ -31,13 +31,12 @@ Applying for shifts is not implemented.
 
 ## Race-Day UI
 
-The day page should show a compact Race Day strip:
+The day page should keep Race Day close to the Deputy roster-note wording, not split it into lots of boxes. Show a short plain list, such as:
 
-- race count
-- trucks/base start/on-track
-- first cross if present
-- first race
-- last race
-- travel back / back at base when calculable
+- `Trucks 0815`
+- `Clow Place 0830`
+- `On track 0845`
+- `Records 1030 Live 1100`
+- `10 races 1110 | 1624`
 
 Free-text roster note remains available behind Raw roster note.

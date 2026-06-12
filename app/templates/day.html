@@ -28,6 +28,7 @@
               {{ shift.track_label }}
               {% if shift.race_type_label %} · {{ shift.race_type_label }}{% endif %}
               {% if shift.location and shift.location != shift.track_label %} · {{ shift.location }}{% endif %}
+              · {{ shift.display_hours_label }}
             </p>
           </div>
           <div class="badge-row">
@@ -55,57 +56,16 @@
           </div>
         </div>
 
-        <section class="shift-facts shift-facts-compact" aria-label="Shift facts">
-          <div>
-            <span>Track</span>
-            <strong>{{ shift.track_label }}</strong>
-          </div>
-          <div>
-            <span>Role</span>
-            <strong>{{ shift.role_chain_label or shift.role_full_label or shift.role_label or "Shift" }}</strong>
-          </div>
-          <div>
-            <span>Type</span>
-            <strong>{{ shift.race_type_label or "Rostered" }}</strong>
-          </div>
-          <div>
-            <span>Start</span>
-            <strong>{{ shift.start_at|datetime }}</strong>
-          </div>
-          <div>
-            <span>End</span>
-            <strong>{{ shift.end_at|datetime }}</strong>
-          </div>
-          <div>
-            <span>Hours</span>
-            <strong>{{ shift.display_hours_label }}</strong>
-          </div>
-        </section>
-
-        <div class="shift-actions">
-          {% if shift.source_link %}
-            <a class="button" href="{{ shift.source_link }}" target="_blank" rel="noopener noreferrer">Open in Deputy</a>
-          {% endif %}
-          {% if shift.changed_since_viewed %}
-            <form action="/shift/{{ shift.id }}/mark-viewed" method="post">
-              <button class="button button-secondary" type="submit">Mark Viewed</button>
-            </form>
-          {% endif %}
-        </div>
-
         {% if shift.race_day_summary.has_items %}
-          <section class="race-day-panel race-day-panel-compact">
+          <section class="race-day-panel race-day-panel-plain">
             <div class="section-heading">
               <h3>Race Day</h3>
             </div>
-            <div class="race-day-strip">
-              {% for item in shift.race_day_summary["items"] %}
-                <div class="race-day-chip{% if item.important %} is-important{% endif %}">
-                  <span>{{ item.label }}</span>
-                  <strong>{{ item.value }}</strong>
-                </div>
+            <ul class="race-day-lines">
+              {% for line in shift.race_day_summary["lines"] %}
+                <li>{{ line }}</li>
               {% endfor %}
-            </div>
+            </ul>
           </section>
         {% elif shift.description_lines %}
           <section class="description-block">
@@ -146,7 +106,7 @@
                   <strong class="crew-name" role="cell">
                     <span>{{ person.employee_name }}</span>
                     {% if person.changed %}
-                      <details class="crew-change-details">
+                      <details class="crew-change-details" data-mark-viewed-url="/day/{{ date_text }}/mark-viewed.json">
                         <summary class="badge badge-warn crew-change-badge">Changed</summary>
                         <p>{{ person.change_summary or "Changed from the previous capture." }}</p>
                       </details>
@@ -160,28 +120,30 @@
         {% endif %}
 
         {% if shift.changes %}
-          <details class="change-panel" {% if shift.changed_since_viewed %}open{% endif %}>
+          <details class="change-panel" data-mark-viewed-url="/day/{{ date_text }}/mark-viewed.json">
             <summary>Change History</summary>
-            <div class="change-list">
+            <ul class="change-lines">
               {% for change in shift.changes[:12] %}
-                <article class="change-item">
-                  <strong>{{ change.field_label }}</strong>
-                  {% if change.field_help %}
-                    <p class="change-help">{{ change.field_help }}</p>
-                  {% endif %}
-                  <div class="change-values">
-                    <p><span>Was</span>{{ change.old_display }}</p>
-                    <p><span>Now</span>{{ change.new_display }}</p>
-                  </div>
+                <li>
+                  <span>
+                    <strong>{{ change.field_label }}</strong>
+                    {{ change.old_display }} -> {{ change.new_display }}
+                  </span>
                   <small>{{ change.changed_at|datetime }}</small>
-                </article>
+                </li>
               {% endfor %}
-            </div>
+            </ul>
           </details>
         {% endif %}
 
-        <section class="maths-panel">
-          <h3>Maths</h3>
+        <details class="maths-panel maths-panel-compact">
+          <summary>
+            {% if shift.timing_math.race_day.available %}
+              Start {{ shift.timing_math.race_day.start_label }}, finish {{ shift.timing_math.race_day.end_label }} = {{ shift.timing_math.race_day.hours_label }}
+            {% else %}
+              Start {{ shift.timing_math.start_label }}, finish {{ shift.timing_math.end_label }} = {{ shift.timing_math.raw_label }}
+            {% endif %}
+          </summary>
           <div class="maths-card">
             {% if shift.timing_math.segments|length > 1 and not shift.timing_math.race_day.available %}
               <dl class="timeline-list maths-segments">
@@ -203,7 +165,7 @@
                 {% endfor %}
               </dl>
               <p>{{ shift.timing_math.race_day.formula }}</p>
-              <p class="muted">Deputy roster duration: {{ shift.timing_math.raw_label }}.</p>
+              <p class="muted">Roster shows {{ shift.timing_math.raw_label }}.</p>
             {% else %}
               <p>
                 {{ shift.timing_math.start_label }}-{{ shift.timing_math.end_label }}
@@ -211,7 +173,7 @@
               </p>
             {% endif %}
           </div>
-        </section>
+        </details>
 
         <section class="timing-panel">
           <h3>Notes and timing</h3>
@@ -245,4 +207,30 @@
       </article>
     {% endfor %}
   </section>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    document.querySelectorAll("[data-mark-viewed-url]").forEach((panel) => {
+      panel.addEventListener("toggle", () => {
+        if (!panel.open || panel.dataset.viewed === "1") return;
+        panel.dataset.viewed = "1";
+        fetch(panel.dataset.markViewedUrl, { method: "POST", credentials: "same-origin" })
+          .then((response) => {
+            if (!response.ok) throw new Error("mark viewed failed");
+            const card = panel.closest(".detail-card");
+            card?.querySelectorAll(".badge-warn").forEach((badge) => {
+              const badgeText = badge.textContent.trim();
+              if (badgeText === "Changed" || badgeText === "Crew changed") {
+                badge.closest("details")?.remove();
+                badge.remove();
+              }
+            });
+          })
+          .catch(() => {
+            panel.dataset.viewed = "0";
+          });
+      });
+    });
+  </script>
 {% endblock %}

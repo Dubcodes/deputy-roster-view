@@ -880,6 +880,27 @@ a {
   margin-bottom: 8px;
 }
 
+.race-day-panel-plain .section-heading {
+  margin-bottom: 6px;
+}
+
+.race-day-lines {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text);
+  font-size: 0.98rem;
+  font-weight: 780;
+  line-height: 1.3;
+}
+
+.race-day-lines li {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
 .race-day-strip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
@@ -1085,6 +1106,7 @@ a {
 
 .marks-panel summary,
 .change-panel summary,
+.maths-panel summary,
 .source-panel summary {
   cursor: pointer;
   font-weight: 900;
@@ -1095,6 +1117,41 @@ a {
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.35;
+}
+
+.change-lines {
+  display: grid;
+  gap: 7px;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.change-lines li {
+  display: grid;
+  gap: 3px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+}
+
+.change-lines li:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.change-lines span {
+  min-width: 0;
+  overflow-wrap: break-word;
+  line-height: 1.35;
+}
+
+.change-lines strong {
+  margin-right: 4px;
+}
+
+.change-lines small {
+  color: var(--muted);
+  font-weight: 750;
 }
 
 .timing-panel h3 {
@@ -1230,6 +1287,15 @@ textarea {
 
 .maths-panel h3 {
   margin: 0 0 10px;
+}
+
+.maths-panel-compact summary {
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.maths-panel-compact .maths-card {
+  margin-top: 10px;
 }
 
 .maths-card {
