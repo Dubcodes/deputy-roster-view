@@ -59,11 +59,12 @@ def render_day_template() -> None:
                 "source_link": "",
                 "race_day_summary": {
                     "has_items": True,
-                    "lines": [
-                        "Clow Place 0830",
-                        "On track 0845",
-                        "Records 1030 Live 1100",
-                        "10 races 1110 | 1624",
+                    "rows": [
+                        {"label": "Clow Place", "value": "08:30"},
+                        {"label": "On track", "value": "08:45"},
+                        {"label": "Records", "value": "10:30"},
+                        {"label": "Live", "value": "11:00"},
+                        {"label": "10 races", "value": "11:10 | 16:24"},
                     ],
                 },
                 "description_lines": ["10 races 1110 | 1624"],
@@ -90,7 +91,7 @@ def render_day_template() -> None:
             }
         ],
     )
-    if "Race Day" not in html or "10 races 1110 | 1624" not in html:
+    if "Race Day" not in html or "11:10 | 16:24" not in html:
         raise AssertionError("Day template did not render expected race-day content.")
 
 

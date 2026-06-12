@@ -364,7 +364,7 @@ def description_lines(description: str) -> list[str]:
         clean_line = line.strip()
         if not clean_line:
             continue
-        clean_line = re.split(r"(?i)\bbreaks:\s*", clean_line)[0].strip()
+        clean_line = re.split(r"(?i)\s*breaks:\s*", clean_line)[0].strip()
         if not clean_line:
             continue
         lower_line = clean_line.lower()
@@ -813,11 +813,44 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
 
 
 def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object]) -> dict[str, object]:
-    lines: list[str] = []
+    rows: list[dict[str, str]] = []
     wanted_patterns = (
-        re.compile(r"^(trucks?|office|clow\s+place|on\s+track|first\s+cross)\b", re.IGNORECASE),
+        re.compile(r"^(trucks?|office|clow\s+place|on\s+track|first\s+cross|fx)\b", re.IGNORECASE),
         re.compile(r"\b(records|live|first race|last race|\d+\s+races?)\b", re.IGNORECASE),
     )
+    simple_timing_re = re.compile(
+        r"^(trucks?|office|clow\s+place|on\s+track|first\s+cross|fx)\s+(.+)$",
+        re.IGNORECASE,
+    )
+    paired_timing_re = re.compile(
+        r"\b(records|live|first\s+cross|first\s+race|last\s+race|fx)\s+([0-9: ]{2,5}\s*(?:am|pm)?)",
+        re.IGNORECASE,
+    )
+
+    def add_row(label: str, value: str) -> None:
+        label_text = label.strip()
+        value_text = value.strip()
+        if label_text and value_text and {"label": label_text, "value": value_text} not in rows:
+            rows.append({"label": label_text, "value": value_text})
+
+    def display_label(label: str) -> str:
+        label_key = re.sub(r"\s+", " ", label.strip().lower())
+        return {
+            "truck": "Trucks",
+            "trucks": "Trucks",
+            "office": "Office",
+            "clow place": "Clow Place",
+            "on track": "On track",
+            "first cross": "First cross",
+            "first race": "First race",
+            "last race": "Last race",
+            "records": "Records",
+            "live": "Live",
+            "fx": "FX",
+        }.get(label_key, label.strip())
+
+    def display_time(value: str) -> str:
+        return clean_timing_value(value)
 
     for line in shift.get("description_lines") or []:
         line_text = str(line or "").strip()
@@ -827,12 +860,28 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
             continue
         if re.match(r"^(trucks?|office|clow\s+place|on\s+track)\b", line_text, re.IGNORECASE):
             line_text = re.split(r"\s+[-–]\s+", line_text, maxsplit=1)[0].strip()
-        if line_text and line_text not in lines:
-            lines.append(line_text)
+
+        race_times = RACE_COUNT_WITH_TIMES_RE.search(line_text)
+        if race_times:
+            add_row(
+                f"{race_times.group(1)} races",
+                f"{display_time(race_times.group(2))} | {display_time(race_times.group(3))}",
+            )
+            continue
+
+        paired_timings = list(paired_timing_re.finditer(line_text))
+        if paired_timings:
+            for match in paired_timings:
+                add_row(display_label(match.group(1)), display_time(match.group(2)))
+            continue
+
+        simple_timing = simple_timing_re.match(line_text)
+        if simple_timing:
+            add_row(display_label(simple_timing.group(1)), display_time(simple_timing.group(2)))
 
     return {
-        "lines": lines,
-        "has_items": bool(lines),
+        "rows": rows,
+        "has_items": bool(rows),
     }
 
 
@@ -1580,7 +1629,7 @@ def shift_view(shift_id: int) -> RedirectResponse:
     shift = fetch_shift(shift_id)
     if shift is None:
         raise HTTPException(status_code=404, detail="Shift not found")
-    return RedirectResponse(url=f"/day/{shift['date']}#shift-{shift_id}", status_code=303)
+    return RedirectResponse(url=f"/day/{shift['date']}", status_code=303)
 
 
 @app.post("/shift/{shift_id}/marks")

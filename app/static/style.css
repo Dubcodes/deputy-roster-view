@@ -884,21 +884,40 @@ a {
   margin-bottom: 6px;
 }
 
-.race-day-lines {
+.race-day-rows {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   margin: 0;
   padding: 0;
-  list-style: none;
   color: var(--text);
-  font-size: 0.98rem;
-  font-weight: 780;
+  font-size: 0.96rem;
   line-height: 1.3;
+  width: fit-content;
+  max-width: 100%;
 }
 
-.race-day-lines li {
+.race-day-rows div {
+  display: grid;
+  grid-template-columns: max-content max-content;
+  gap: 16px;
+  align-items: baseline;
+}
+
+.race-day-rows dt,
+.race-day-rows dd {
   min-width: 0;
+  margin: 0;
   overflow-wrap: break-word;
+}
+
+.race-day-rows dt {
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.race-day-rows dd {
+  color: var(--text);
+  font-weight: 650;
 }
 
 .race-day-strip {

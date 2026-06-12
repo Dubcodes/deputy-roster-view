@@ -24,7 +24,7 @@
           </a>
           <div class="list-day-shifts">
             {% for shift in day.shifts %}
-              <a class="list-shift{% if shift.deleted_from_source %} is-deleted{% endif %}{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}#shift-{{ shift.id }}" style="{{ shift.colour_style }}">
+              <a class="list-shift{% if shift.deleted_from_source %} is-deleted{% endif %}{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}" style="{{ shift.colour_style }}">
                 <span class="list-shift-main">
                   <strong>{{ shift.track_label }}</strong>
                   <span>{{ shift.role_chain_label or shift.role_label or shift.title or "Shift" }}</span>
@@ -99,7 +99,7 @@
 
             <div class="shift-list">
               {% for shift in day.shifts %}
-                <a id="shift-card-{{ shift.id }}" class="shift-card{% if shift.deleted_from_source %} is-deleted{% endif %}{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}#shift-{{ shift.id }}" style="{{ shift.colour_style }}">
+                <a id="shift-card-{{ shift.id }}" class="shift-card{% if shift.deleted_from_source %} is-deleted{% endif %}{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}" style="{{ shift.colour_style }}">
                   <strong class="shift-track">{{ shift.track_label }}</strong>
                   <span class="shift-mini">{{ shift.role_chain_label or shift.role_label or shift.title or "Shift" }} · {{ shift.start_label }}</span>
                   {% if day.shifts|length == 1 %}
@@ -146,7 +146,7 @@
       {% if upcoming_shifts %}
         <div class="upcoming-list">
           {% for shift in upcoming_shifts %}
-            <a class="upcoming-card" href="/day/{{ shift.date }}#shift-{{ shift.id }}" style="{{ shift.colour_style }}">
+            <a class="upcoming-card" href="/day/{{ shift.date }}" style="{{ shift.colour_style }}">
               <span>{{ shift.start_at|day_short }}</span>
               <strong>{{ shift.track_label }}</strong>
               <span>{{ shift.role_chain_label or shift.role_label or shift.title or "Shift" }} · {{ shift.start_label }}{% if shift.race_type_label %} · {{ shift.race_type_label }}{% endif %}</span>

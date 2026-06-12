@@ -61,11 +61,14 @@
             <div class="section-heading">
               <h3>Race Day</h3>
             </div>
-            <ul class="race-day-lines">
-              {% for line in shift.race_day_summary["lines"] %}
-                <li>{{ line }}</li>
+            <dl class="race-day-rows">
+              {% for row in shift.race_day_summary["rows"] %}
+                <div>
+                  <dt>{{ row.label }}</dt>
+                  <dd>{{ row.value }}</dd>
+                </div>
               {% endfor %}
-            </ul>
+            </dl>
           </section>
         {% elif shift.description_lines %}
           <section class="description-block">
