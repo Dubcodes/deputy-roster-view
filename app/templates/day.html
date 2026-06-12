@@ -32,7 +32,10 @@
           </div>
           <div class="badge-row">
             {% if shift.changed_since_viewed %}
-              <span class="badge badge-warn">Changed</span>
+              <details class="change-badge-details">
+                <summary class="badge badge-warn">Changed</summary>
+                <p>{{ shift.change_summary_text or "Roster details changed since last viewed." }}</p>
+              </details>
             {% endif %}
             {% if loop.first and deputy_schedule_changed %}
               <span class="badge badge-warn">Crew changed</span>
@@ -90,58 +93,19 @@
           {% endif %}
         </div>
 
-        {% if shift.roster_summary.has_structured %}
-          <section class="race-day-panel">
+        {% if shift.race_day_summary.has_items %}
+          <section class="race-day-panel race-day-panel-compact">
             <div class="section-heading">
               <h3>Race Day</h3>
             </div>
-            <div class="race-day-grid">
-              {% if shift.roster_summary.timings %}
-                <div class="race-day-block">
-                  <h4>Timings</h4>
-                  <dl class="timeline-list">
-                    {% for timing in shift.roster_summary.timings %}
-                      <div>
-                        <dt>{{ timing.time }}</dt>
-                        <dd>{{ timing.label }}</dd>
-                      </div>
-                    {% endfor %}
-                  </dl>
+            <div class="race-day-strip">
+              {% for item in shift.race_day_summary.items %}
+                <div class="race-day-chip{% if item.important %} is-important{% endif %}">
+                  <span>{{ item.label }}</span>
+                  <strong>{{ item.value }}</strong>
                 </div>
-              {% endif %}
-
-              {% if shift.roster_summary.production_notes %}
-                <div class="race-day-block">
-                  <h4>Production</h4>
-                  <ul class="compact-list">
-                    {% for note in shift.roster_summary.production_notes %}
-                      <li>{{ note }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-              {% endif %}
-
-              {% if shift.roster_summary.crew_allocations %}
-                <div class="race-day-block race-day-block-wide">
-                  <h4>Crew / Vehicles</h4>
-                  <dl class="crew-list">
-                    {% for allocation in shift.roster_summary.crew_allocations %}
-                      <div>
-                        <dt>{{ allocation.vehicle }}</dt>
-                        <dd>{{ allocation.people }}</dd>
-                      </div>
-                    {% endfor %}
-                  </dl>
-                </div>
-              {% endif %}
+              {% endfor %}
             </div>
-            {% if shift.roster_summary.other_lines %}
-              <ul class="roster-lines roster-lines-compact">
-                {% for line in shift.roster_summary.other_lines %}
-                  <li>{{ line }}</li>
-                {% endfor %}
-              </ul>
-            {% endif %}
           </section>
         {% elif shift.description_lines %}
           <section class="description-block">
@@ -202,6 +166,9 @@
               {% for change in shift.changes[:12] %}
                 <article class="change-item">
                   <strong>{{ change.field_label }}</strong>
+                  {% if change.field_help %}
+                    <p class="change-help">{{ change.field_help }}</p>
+                  {% endif %}
                   <div class="change-values">
                     <p><span>Was</span>{{ change.old_display }}</p>
                     <p><span>Now</span>{{ change.new_display }}</p>
@@ -216,7 +183,7 @@
         <section class="maths-panel">
           <h3>Maths</h3>
           <div class="maths-card">
-            {% if shift.timing_math.segments|length > 1 %}
+            {% if shift.timing_math.segments|length > 1 and not shift.timing_math.race_day.available %}
               <dl class="timeline-list maths-segments">
                 {% for segment in shift.timing_math.segments %}
                   <div>

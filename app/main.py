@@ -71,6 +71,8 @@ TRACK_NAMES = {
     "PUKE-T": "Pukekohe",
     "R": "Rotorua",
     "ROTORUA": "Rotorua",
+    "RUAK": "Ruakaka",
+    "RUAK-T": "Ruakaka",
     "TARO": "Te Aroha",
     "TARO-T": "Te Aroha",
     "TAUR": "Tauranga",
@@ -78,6 +80,7 @@ TRACK_NAMES = {
     "TRAP": "Te Rapa",
     "TRAP-T": "Te Rapa",
     "T-R": "Rotorua",
+    "8PE": "Out of Region",
     "VEH": "Vehicles",
 }
 RACE_TYPES = {
@@ -99,14 +102,23 @@ CHANGE_FIELD_LABELS = {
     "title": "Roster title",
     "description": "Roster notes",
     "location": "Location",
-    "start_at": "Start time",
-    "end_at": "End time",
-    "raw_hours": "Raw hours",
+    "start_at": "Deputy roster start",
+    "end_at": "Deputy roster end",
+    "raw_hours": "Deputy roster duration",
     "break_minutes": "Break",
-    "paid_hours": "Hours",
+    "paid_hours": "Roster hours",
     "source_link": "Deputy link",
     "source_status": "Status",
     "deleted_from_source": "Cancelled",
+}
+CHANGE_FIELD_HELP = {
+    "start_at": "The start time Deputy has on the roster item.",
+    "end_at": "The end time Deputy has on the roster item.",
+    "raw_hours": "The roster duration between Deputy start and end.",
+    "paid_hours": "The roster hours stored from Deputy after any break rule.",
+    "description": "The roster note text from Deputy.",
+    "title": "The role/location summary from Deputy.",
+    "location": "The Deputy location/address field.",
 }
 TIMING_LINE_PATTERNS = (
     ("Trucks", re.compile(r"^trucks?\s+(.+)$", re.IGNORECASE)),
@@ -115,14 +127,17 @@ TIMING_LINE_PATTERNS = (
     ("On track", re.compile(r"^on\s+track\s+(.+)$", re.IGNORECASE)),
     ("First cross", re.compile(r"^first\s+cross\s+(.+)$", re.IGNORECASE)),
 )
-INLINE_TIMING_RE = re.compile(r"\b(first race|last race|first cross)\s+([0-9: ]{3,5}\s*(?:am|pm)?)", re.IGNORECASE)
+INLINE_TIMING_RE = re.compile(
+    r"\b(first race|last race|first cross|live)\s+([0-9: ]{3,5}\s*(?:am|pm)?)",
+    re.IGNORECASE,
+)
 RACE_COUNT_RE = re.compile(r"\b(\d+)\s+races?\b", re.IGNORECASE)
 RACE_COUNT_WITH_TIMES_RE = re.compile(
-    r"\b(\d+)\s+races?\s+([0-9: ]{3,5}\s*(?:am|pm)?)\s*[-–]\s*([0-9: ]{3,5}\s*(?:am|pm)?)",
+    r"\b(\d+)\s+races?\s+([0-9: ]{3,5}\s*(?:am|pm)?)\s*(?:[-–]|\|)\s*([0-9: ]{3,5}\s*(?:am|pm)?)",
     re.IGNORECASE,
 )
 CREW_LINE_RE = re.compile(r"^([A-Za-z]{1,8}\d{0,3}|\d{3,4})\s+(.+)$")
-NON_CREW_LABELS = {"office", "trucks", "truck", "clow", "on", "first", "last", "race", "races", "breaks"}
+NON_CREW_LABELS = {"office", "trucks", "truck", "clow", "on", "first", "last", "race", "races", "breaks", "records"}
 TIMING_LABELS = {
     "first cross": "First cross",
     "first race": "First race",
@@ -669,9 +684,28 @@ def decorate_change(row: object) -> dict[str, object]:
     change = dict(row)
     field_name = str(change.get("field_name") or "")
     change["field_label"] = CHANGE_FIELD_LABELS.get(field_name, field_name.replace("_", " ").title())
+    change["field_help"] = CHANGE_FIELD_HELP.get(field_name, "")
     change["old_display"] = format_change_value(field_name, str(change.get("old_value") or ""))
     change["new_display"] = format_change_value(field_name, str(change.get("new_value") or ""))
     return change
+
+
+def build_shift_change_summary(changes: list[dict[str, object]]) -> str:
+    parts = []
+    for change in changes[:4]:
+        label = str(change.get("field_label") or "Change")
+        field_name = str(change.get("field_name") or "")
+        old_value = str(change.get("old_display") or "blank")
+        new_value = str(change.get("new_display") or "blank")
+        if field_name == "description":
+            parts.append("Roster notes changed")
+        elif len(old_value) > 48 or len(new_value) > 48:
+            parts.append(f"{label} changed")
+        else:
+            parts.append(f"{label}: {old_value} -> {new_value}")
+    if len(changes) > 4:
+        parts.append(f"+{len(changes) - 4} more")
+    return "; ".join(parts)
 
 
 def duration_hours_between(start_text: str | None, end_text: str | None) -> float:
@@ -783,6 +817,40 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     return result
 
 
+def build_race_day_summary(shift: dict[str, object], race_day: dict[str, object]) -> dict[str, object]:
+    summary = shift.get("roster_summary") if isinstance(shift.get("roster_summary"), dict) else {}
+    timings = timing_lookup(summary)
+    items: list[dict[str, object]] = []
+
+    def add_item(label: str, value: object, important: bool = False) -> None:
+        value_text = str(value or "").strip()
+        if value_text and not any(item["label"] == label and item["value"] == value_text for item in items):
+            items.append({"label": label, "value": value_text, "important": important})
+
+    for note in summary.get("production_notes") or []:
+        note_text = str(note or "").strip()
+        if "race" in note_text.lower():
+            add_item("Races", note_text, True)
+            break
+
+    base_label = "Office" if timings.get("office") else "Clow Place" if timings.get("clow place") else "Start"
+    add_item("Trucks", timings.get("trucks"))
+    add_item(base_label, timings.get("office") or timings.get("clow place"), True)
+    add_item("On track", timings.get("on track"), True)
+    add_item("First cross", timings.get("first cross") or timings.get("live"))
+    add_item("First race", timings.get("first race"), True)
+    add_item("Last race", timings.get("last race"), True)
+
+    if race_day.get("available"):
+        add_item("Travel back", race_day.get("travel_label"))
+        add_item("Back at base", race_day.get("end_label"), True)
+
+    return {
+        "items": items,
+        "has_items": bool(items),
+    }
+
+
 def apply_timing_math(shift: dict[str, object]) -> None:
     break_minutes = int(shift.get("break_minutes") or 0)
     segments = []
@@ -822,6 +890,7 @@ def apply_timing_math(shift: dict[str, object]) -> None:
         "formula": formula,
         "race_day": race_day,
     }
+    shift["race_day_summary"] = build_race_day_summary(shift, race_day)
 
 
 def decorate_shift(row: object) -> dict[str, object]:
@@ -1470,6 +1539,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             for shift_id in combined_ids
             for change in changes_by_shift.get(shift_id, [])
         ]
+        shift["change_summary_text"] = build_shift_change_summary(list(shift.get("changes") or []))
     deputy_schedule_label = "Deputy Schedule"
     deputy_schedule_people = schedule_people(fetch_deputy_schedule_for_date(date_text))
     if not deputy_schedule_people and is_overnight_travel_day(shifts):
