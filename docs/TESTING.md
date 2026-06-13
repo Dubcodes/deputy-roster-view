@@ -5,7 +5,7 @@
 Run before committing:
 
 ```powershell
-python -m py_compile app\main.py app\database.py app\deputy_web.py app\scheduler.py app\sync_ics.py app\config.py
+python -m py_compile app\main.py app\database.py app\deputy_web.py app\scheduler.py app\sync_ics.py app\config.py app\auth.py app\security.py app\user_credentials.py
 git -C \\192.168.0.238\storage\projects\deputy-recalender diff --check
 ```
 
@@ -37,6 +37,10 @@ After Portainer redeploy:
 - Open `/settings`.
 - Run Sync and Update.
 - Confirm spinner/progress appears and then hides.
+- Confirm a failed sync shows a useful message below the status.
+- Open `/admin`.
+- Confirm each user shows next planned sync and last sync status.
+- If using the temporary tunnel, confirm the `cloudflared` container logs show a `trycloudflare.com` URL.
 
 ## Known Test Gaps
 

@@ -45,6 +45,7 @@ from .database import (
     list_app_users,
     update_app_settings,
     update_shift_marks,
+    user_has_deputy_credentials,
 )
 from .deputy_api import test_deputy_roster_api
 from .deputy_web import capture_and_save_deputy_web, format_capture_payload
@@ -1307,20 +1308,31 @@ def set_manual_sync_status(**values: object) -> None:
 def sync_summary_message(summary: dict[str, object]) -> str:
     calendar_result = summary.get("calendar") if isinstance(summary.get("calendar"), dict) else {}
     web_result = summary.get("web") if isinstance(summary.get("web"), dict) else {}
+    parts = []
     if calendar_result.get("status") == "ok":
-        message = (
-            "Sync complete: "
+        parts.append(
+            "iCal roster: "
             f"{calendar_result.get('events_created', 0)} new, "
             f"{calendar_result.get('events_updated', 0)} changed, "
             f"{calendar_result.get('events_marked_deleted', 0)} cancelled."
         )
-        if web_result.get("status") not in {None, "skipped"}:
-            message += f" Deputy crew captured: {web_result.get('saved_schedule_rows', 0)} rows."
-        return message
-    return f"Sync failed: {calendar_result.get('message', 'Unknown error')}"
+    elif calendar_result.get("status") == "skipped":
+        parts.append(str(calendar_result.get("message") or "iCal skipped."))
+    elif calendar_result:
+        parts.append(str(calendar_result.get("message") or "iCal sync failed."))
+
+    if web_result.get("status") == "ok":
+        parts.append(f"Deputy web capture saved {web_result.get('saved_schedule_rows', 0)} schedule rows.")
+    elif web_result.get("status") == "skipped":
+        parts.append(str(web_result.get("message") or "Deputy web capture skipped."))
+    elif web_result:
+        parts.append(str(web_result.get("message") or "Deputy web capture failed."))
+
+    message = " ".join(part for part in parts if part).strip()
+    return message or "No sync source ran. Add a Deputy login or backup iCal URL."
 
 
-def run_manual_sync_job() -> None:
+def run_manual_sync_job(user_id: int | None = None) -> None:
     settings = get_settings()
     if not _sync_worker_lock.acquire(blocking=False):
         set_manual_sync_status(
@@ -1340,7 +1352,7 @@ def run_manual_sync_job() -> None:
             finished_at="",
             status="running",
         )
-        summary = sync_roster_sources(settings)
+        summary = sync_roster_sources(settings, user_id=user_id)
         finished_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
         message = sync_summary_message(summary)
         status = "ready" if summary.get("status") == "ok" else "error"
@@ -1356,7 +1368,7 @@ def run_manual_sync_job() -> None:
         set_manual_sync_status(
             running=False,
             label="Error",
-            message=f"Sync failed: {exc.__class__.__name__}.",
+            message=f"Sync failed: {exc.__class__.__name__}. Check the app logs if this repeats.",
             finished_at=finished_at,
             status="error",
         )
@@ -1364,7 +1376,7 @@ def run_manual_sync_job() -> None:
         _sync_worker_lock.release()
 
 
-def queue_manual_sync(background_tasks: BackgroundTasks) -> bool:
+def queue_manual_sync(background_tasks: BackgroundTasks, user_id: int | None = None) -> bool:
     status = get_manual_sync_status()
     if bool(status.get("running")):
         return False
@@ -1377,7 +1389,7 @@ def queue_manual_sync(background_tasks: BackgroundTasks) -> bool:
         finished_at="",
         status="running",
     )
-    background_tasks.add_task(run_manual_sync_job)
+    background_tasks.add_task(run_manual_sync_job, user_id)
     return True
 
 
@@ -1574,6 +1586,7 @@ def logout_view(request: Request) -> RedirectResponse:
 @app.get("/admin")
 def admin_view(request: Request, notice: str | None = None) -> object:
     user = require_admin_user(request)
+    settings = get_settings()
     return templates.TemplateResponse(
         "admin.html",
         {
@@ -1581,6 +1594,7 @@ def admin_view(request: Request, notice: str | None = None) -> object:
             "notice": notice,
             "header_mode": "settings",
             "current_user": user,
+            "settings": settings,
             "users": list_app_users(),
             "overrides": list_admin_overrides(),
         },
@@ -1855,6 +1869,8 @@ def mark_shift_viewed(shift_id: int) -> RedirectResponse:
 @app.get("/settings")
 def settings_view(request: Request, notice: str | None = None) -> object:
     settings = get_settings()
+    user = current_user(request)
+    user_can_sync = bool(user and user_has_deputy_credentials(int(user["id"])))
     now = datetime.now(settings.timezone).replace(microsecond=0)
     next_shift = get_next_upcoming_shift(now.isoformat())
     pre_shift = get_pre_shift_status(settings)
@@ -1863,7 +1879,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
     schedule_snapshot = get_deputy_schedule_snapshot()
     capture_stats = deputy_web_capture.get("stats", {}) if deputy_web_capture else {}
     roster_snapshot = {
-        "status_label": "Ready" if settings.deputy_login_configured else "Deputy login needed",
+        "status_label": "Ready" if (settings.deputy_login_configured or user_can_sync) else "Deputy login needed",
         "captured_at": (deputy_web_capture or {}).get("captured_at") or schedule_snapshot.get("captured_at") or "",
         "target": capture_stats.get("target_track") or "All Locations",
         "date_label": capture_stats.get("schedule_date_label") or "",
@@ -1878,9 +1894,11 @@ def settings_view(request: Request, notice: str | None = None) -> object:
         {
             "request": request,
             "notice": notice,
-            "current_user": current_user(request),
+            "current_user": user,
             "header_mode": "settings",
             "settings": settings,
+            "can_sync": settings.deputy_login_configured or user_can_sync,
+            "trusted_device_days": settings.trusted_device_days,
             "calendar_url_configured": bool(calendar_url),
             "calendar_url_source": get_calendar_url_source(settings),
             "last_successful_sync": get_last_successful_sync(),
@@ -1956,7 +1974,9 @@ async def capture_deputy_web() -> RedirectResponse:
 
 @app.api_route("/sync-now", methods=["GET", "POST"], response_model=None)
 def sync_now(request: Request, background_tasks: BackgroundTasks, next: str | None = None) -> object:
-    started = queue_manual_sync(background_tasks)
+    user = current_user(request)
+    user_id = int(user["id"]) if user and user.get("id") is not None else None
+    started = queue_manual_sync(background_tasks, user_id=user_id)
     status = get_manual_sync_status()
     wants_json = request.headers.get("x-requested-with") == "fetch" or "application/json" in request.headers.get("accept", "")
     if wants_json:

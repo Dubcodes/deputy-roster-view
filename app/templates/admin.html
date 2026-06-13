@@ -10,11 +10,16 @@
     </div>
   </section>
 
-  <section class="settings-grid settings-grid-two">
+  <section class="settings-grid settings-grid-three">
     <article class="settings-panel">
       <span class="summary-label">Users</span>
       <strong>{{ users|length }}</strong>
       <p class="muted">First signup becomes admin. Device sessions can be revoked in a later admin pass.</p>
+    </article>
+    <article class="settings-panel">
+      <span class="summary-label">Sync queue</span>
+      <strong>{{ settings.user_sync_stagger_minutes }} min spacing</strong>
+      <p class="muted">One batch handles {{ settings.user_sync_batch_size }} account{% if settings.user_sync_batch_size != 1 %}s{% endif %}; jitter up to {{ settings.user_sync_jitter_minutes }} min.</p>
     </article>
     <article class="settings-panel">
       <span class="summary-label">Manual overrides</span>
@@ -39,8 +44,15 @@
               <span class="badge">Admin</span>
             {% endif %}
             <span class="badge">{{ user.active_devices }} trusted device{% if user.active_devices != 1 %}s{% endif %}</span>
+            {% if user.sync_in_progress %}
+              <span class="badge badge-warn">Syncing</span>
+            {% elif user.last_status %}
+              <span class="badge {% if user.last_status == 'error' %}badge-danger{% endif %}">{{ user.last_status }}</span>
+            {% endif %}
           </div>
           <small>Last seen {{ user.last_seen_at|datetime if user.last_seen_at else "Never" }}</small>
+          <small>Next sync {{ user.next_sync_after|datetime if user.next_sync_after else "Not planned" }}</small>
+          <small>Last sync {{ user.last_sync_at|datetime if user.last_sync_at else "Never" }}{% if user.last_message %} · {{ user.last_message }}{% endif %}</small>
         </article>
       {% endfor %}
     </div>
@@ -64,7 +76,13 @@
       <div class="form-grid-two">
         <label class="form-row">
           <span>Type</span>
-          <input type="text" name="override_type" placeholder="timing / position / note" required>
+          <select name="override_type" required>
+            <option value="">Choose type</option>
+            <option value="timing">Timing</option>
+            <option value="position">Position</option>
+            <option value="vehicle">Vehicle</option>
+            <option value="note">Note</option>
+          </select>
         </label>
         <label class="form-row">
           <span>Label</span>

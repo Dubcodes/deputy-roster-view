@@ -1,0 +1,7 @@
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url http://deputy-roster-view:8000
+    depends_on:
+      - deputy-roster-view
+    restart: unless-stopped

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import threading
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -7,13 +9,25 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import Settings, get_settings
-from .database import get_next_upcoming_shift, has_deputy_schedule_changes_for_date
+from .database import (
+    get_calendar_url,
+    get_due_user_syncs,
+    get_next_upcoming_shift,
+    has_deputy_schedule_changes_for_date,
+    list_syncable_app_users,
+    mark_user_sync_finished,
+    mark_user_sync_started,
+    set_user_next_sync,
+    write_sync_log,
+)
 from .deputy_web import sync_deputy_web_schedule
 from .sync_ics import sync_deputy_calendar
+from .user_credentials import settings_for_user
 
 
 _scheduler: BackgroundScheduler | None = None
 _last_pre_shift_keys: set[str] = set()
+_user_sync_runner_lock = threading.Lock()
 
 
 def _now(settings: Settings) -> datetime:
@@ -29,7 +43,7 @@ def start_scheduler(settings: Settings | None = None) -> BackgroundScheduler:
 
     scheduler = BackgroundScheduler(timezone=settings.timezone)
     scheduler.add_job(
-        sync_roster_sources,
+        daily_sync_dispatch,
         trigger=CronTrigger(hour=settings.sync_at_hour, minute=0, timezone=settings.timezone),
         id="daily_sync",
         replace_existing=True,
@@ -44,7 +58,16 @@ def start_scheduler(settings: Settings | None = None) -> BackgroundScheduler:
         max_instances=1,
         coalesce=True,
     )
+    scheduler.add_job(
+        run_due_user_syncs,
+        trigger=IntervalTrigger(minutes=5, timezone=settings.timezone),
+        id="staggered_user_sync_runner",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
+    plan_staggered_user_syncs(settings, reason="startup", start_at=_now(settings) + timedelta(minutes=1))
     _scheduler = scheduler
     return scheduler
 
@@ -67,6 +90,12 @@ def check_pre_shift_sync(settings: Settings | None = None) -> dict[str, object]:
     if not due_windows:
         return {"ran": False, "reason": status["reason"]}
 
+    if list_syncable_app_users():
+        planned = plan_staggered_user_syncs(settings, reason=status["reason"], start_at=_now(settings))
+        for window in due_windows:
+            _last_pre_shift_keys.add(str(window["sync_key"]))
+        return {"ran": True, "planned": planned, "windows": due_windows}
+
     result = sync_roster_sources(settings)
     calendar_result = result.get("calendar") if isinstance(result.get("calendar"), dict) else {}
     if calendar_result.get("status") == "ok":
@@ -75,15 +104,179 @@ def check_pre_shift_sync(settings: Settings | None = None) -> dict[str, object]:
     return {"ran": True, "windows": due_windows, "result": result}
 
 
-def sync_roster_sources(settings: Settings | None = None) -> dict[str, object]:
+def daily_sync_dispatch(settings: Settings | None = None) -> dict[str, object]:
     settings = settings or get_settings()
-    calendar_result = sync_deputy_calendar(settings)
-    web_result = sync_deputy_web_schedule(settings)
+    if list_syncable_app_users():
+        return plan_staggered_user_syncs(settings, reason="daily")
+    return sync_roster_sources(settings)
+
+
+def plan_staggered_user_syncs(
+    settings: Settings | None = None,
+    *,
+    reason: str,
+    start_at: datetime | None = None,
+) -> dict[str, object]:
+    settings = settings or get_settings()
+    users = list_syncable_app_users()
+    if not users:
+        return {"planned": 0, "reason": "no users with saved Deputy credentials"}
+
+    start_at = (start_at or _now(settings)).replace(microsecond=0)
+    stagger_minutes = max(1, settings.user_sync_stagger_minutes)
+    jitter_minutes = max(0, settings.user_sync_jitter_minutes)
+    planned_times: list[str] = []
+
+    for index, user in enumerate(users):
+        jitter = _stable_jitter_minutes(int(user["id"]), start_at.date().isoformat(), reason, jitter_minutes)
+        next_sync = start_at + timedelta(minutes=(index * stagger_minutes) + jitter)
+        next_sync_text = next_sync.isoformat()
+        set_user_next_sync(int(user["id"]), next_sync_text, reason)
+        planned_times.append(next_sync_text)
+
     return {
-        "status": calendar_result.get("status", "error"),
+        "planned": len(users),
+        "reason": reason,
+        "first_at": planned_times[0],
+        "last_at": planned_times[-1],
+        "stagger_minutes": stagger_minutes,
+        "jitter_minutes": jitter_minutes,
+    }
+
+
+def run_due_user_syncs(settings: Settings | None = None) -> dict[str, object]:
+    settings = settings or get_settings()
+    if not _user_sync_runner_lock.acquire(blocking=False):
+        return {"ran": False, "reason": "user sync runner already active"}
+
+    try:
+        now = _now(settings).isoformat()
+        due_users = get_due_user_syncs(now, limit=max(1, settings.user_sync_batch_size))
+        results = []
+        for user in due_users:
+            user_id = int(user["id"])
+            started_at = _now(settings).isoformat()
+            if not mark_user_sync_started(user_id, started_at):
+                continue
+            try:
+                summary = sync_roster_sources(settings, user_id=user_id)
+                status = "ok" if summary.get("status") == "ok" else "error"
+                message = sync_summary_message(summary)
+            except Exception as exc:
+                status = "error"
+                message = f"User sync failed: {exc.__class__.__name__}."
+            finished_at = _now(settings).isoformat()
+            mark_user_sync_finished(
+                user_id,
+                finished_at=finished_at,
+                status=status,
+                message=message,
+            )
+            results.append({"user_id": user_id, "status": status, "message": message})
+        return {"ran": bool(results), "count": len(results), "results": results}
+    finally:
+        _user_sync_runner_lock.release()
+
+
+def sync_roster_sources(settings: Settings | None = None, user_id: int | None = None) -> dict[str, object]:
+    settings = settings or get_settings()
+    runtime_settings = settings
+    credential_error = ""
+    if user_id is not None:
+        try:
+            user_settings = settings_for_user(user_id, settings)
+            if user_settings is None:
+                credential_error = "Saved Deputy login is missing for this user."
+            else:
+                runtime_settings = user_settings
+        except Exception as exc:
+            credential_error = f"Saved Deputy login could not be decrypted: {exc.__class__.__name__}."
+
+    started_at = _now(settings).isoformat()
+    calendar_result = _skipped_calendar_result("iCal backup feed is not configured.")
+    if get_calendar_url(settings):
+        calendar_result = sync_deputy_calendar(settings)
+
+    if credential_error:
+        web_result = {"status": "error", "message": credential_error, "saved_schedule_rows": 0, "payload": {}}
+    else:
+        web_result = sync_deputy_web_schedule(runtime_settings)
+
+    status = _combined_sync_status(calendar_result, web_result)
+    finished_at = _now(settings).isoformat()
+    if calendar_result.get("status") == "skipped":
+        write_sync_log(
+            {
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "status": status,
+                "message": sync_summary_message({"status": status, "calendar": calendar_result, "web": web_result}),
+                "events_seen": 0,
+                "events_created": 0,
+                "events_updated": 0,
+                "events_marked_deleted": 0,
+            }
+        )
+
+    return {
+        "status": status,
         "calendar": calendar_result,
         "web": web_result,
+        "user_id": user_id,
     }
+
+
+def sync_summary_message(summary: dict[str, object]) -> str:
+    calendar_result = summary.get("calendar") if isinstance(summary.get("calendar"), dict) else {}
+    web_result = summary.get("web") if isinstance(summary.get("web"), dict) else {}
+    parts = []
+    if calendar_result.get("status") == "ok":
+        parts.append(
+            "iCal roster: "
+            f"{calendar_result.get('events_created', 0)} new, "
+            f"{calendar_result.get('events_updated', 0)} changed, "
+            f"{calendar_result.get('events_marked_deleted', 0)} cancelled."
+        )
+    elif calendar_result.get("status") == "skipped":
+        parts.append(str(calendar_result.get("message") or "iCal skipped."))
+    elif calendar_result:
+        parts.append(str(calendar_result.get("message") or "iCal sync failed."))
+
+    if web_result.get("status") == "ok":
+        parts.append(f"Deputy web capture saved {web_result.get('saved_schedule_rows', 0)} schedule rows.")
+    elif web_result.get("status") == "skipped":
+        parts.append(str(web_result.get("message") or "Deputy web capture skipped."))
+    elif web_result:
+        parts.append(str(web_result.get("message") or "Deputy web capture failed."))
+
+    message = " ".join(part for part in parts if part).strip()
+    if message:
+        return message
+    return "No sync source ran. Add a Deputy login or backup iCal URL."
+
+
+def _combined_sync_status(calendar_result: dict[str, object], web_result: dict[str, object]) -> str:
+    if calendar_result.get("status") == "ok" or web_result.get("status") == "ok":
+        return "ok"
+    return "error"
+
+
+def _skipped_calendar_result(message: str) -> dict[str, object]:
+    return {
+        "status": "skipped",
+        "message": message,
+        "events_seen": 0,
+        "events_created": 0,
+        "events_updated": 0,
+        "events_marked_deleted": 0,
+    }
+
+
+def _stable_jitter_minutes(user_id: int, date_seed: str, reason: str, jitter_minutes: int) -> int:
+    if jitter_minutes <= 0:
+        return 0
+    digest = hashlib.sha256(f"{date_seed}:{reason}:{user_id}".encode("utf-8")).hexdigest()
+    return int(digest[:8], 16) % (jitter_minutes + 1)
 
 
 def get_pre_shift_status(settings: Settings | None = None) -> dict[str, object]:

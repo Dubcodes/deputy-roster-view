@@ -4,7 +4,7 @@ Start here when picking up work on this repo.
 
 ## Project
 
-Deputy Roster View is a private FastAPI/Jinja/SQLite app that re-presents a Deputy roster in a clearer calendar/day view. It is designed for a single-user homelab deployment through Docker Compose / Portainer.
+Deputy Roster View is a private FastAPI/Jinja/SQLite app that re-presents Deputy roster data in a clearer calendar/day view. The current branch is evolving from the archived `single-user-v1` tag into a small multi-user Portainer deployment with trusted devices and staggered Deputy syncs.
 
 ## Read First
 
@@ -26,7 +26,7 @@ Deputy Roster View is a private FastAPI/Jinja/SQLite app that re-presents a Depu
 ## Useful Commands
 
 ```powershell
-python -m py_compile app\main.py app\database.py app\deputy_web.py app\scheduler.py app\sync_ics.py app\config.py
+python -m py_compile app\main.py app\database.py app\deputy_web.py app\scheduler.py app\sync_ics.py app\config.py app\auth.py app\security.py app\user_credentials.py
 git -C \\192.168.0.238\storage\projects\deputy-recalender diff --check
 ```
 

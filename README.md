@@ -1,6 +1,6 @@
 # Deputy Roster View
 
-Deputy Roster View is a small private web app that mirrors a Deputy iCal roster feed into SQLite and shows it as a cleaner month calendar with shift details, calculated paid hours, local notes, timing adjustments, and sync history.
+Deputy Roster View is a small private web app that mirrors Deputy roster data into SQLite and shows it as a cleaner month calendar with shift details, crew assignments, local notes, timing adjustments, and sync history.
 
 The app is read-only against Deputy. It never writes back to Deputy.
 
@@ -12,9 +12,9 @@ The app is read-only against Deputy. It never writes back to Deputy.
    cp .env.example .env
    ```
 
-2. Either open `.env` and set `DEPUTY_ICAL_URL` to your Deputy calendar/iCal subscription URL, or paste the URL into Settings after the app starts.
+2. Optional: open `.env` and set `DEPUTY_ICAL_URL` to your Deputy calendar/iCal subscription URL, or paste the URL into Settings after the app starts.
 
-   Keep this URL private. It can grant access to your roster feed. Do not commit `.env`, paste it into logs, or share screenshots that reveal it.
+   The iCal URL is now a backup feed. Keep it private. It can grant access to a roster feed. Do not commit `.env`, paste it into logs, or share screenshots that reveal it.
 
 3. Optional: set a stable `APP_SECRET_KEY`.
 
@@ -34,7 +34,7 @@ The app is read-only against Deputy. It never writes back to Deputy.
    COOKIE_SECURE=false
    ```
 
-5. Optional: set Deputy web env values if you want to keep using the old single-user enrichment fallback while the multi-user capture path is being built. Do not put these in Git.
+5. Optional: set Deputy web env values if you want a server-level fallback account. Normal multi-user sync uses the encrypted credentials entered at `/signup`. Do not put secrets in Git.
 
    ```env
    DEPUTY_WEB_URL=https://your-business.au.deputy.com/#/
@@ -44,7 +44,7 @@ The app is read-only against Deputy. It never writes back to Deputy.
    DEPUTY_API_TOKEN=your-deputy-api-token
    ```
 
-   If you do not have an API token, use Settings -> Capture Web Data after the app is running. It opens Deputy in a headless browser, logs in with the configured credentials, and captures a local diagnostics summary of the JSON responses the Deputy web app receives. This is read-only and is also used to save crew/role data locally when the login env is configured.
+   The app does not require a Deputy API token. If an API token is present, the settings page can test it, but the main path uses logged-in Deputy web capture.
 
 5. Optional: set `APP_PORT` if port `8096` conflicts with another service.
 
@@ -88,16 +88,37 @@ If using the older Deputy web diagnostics fallback, set `DEPUTY_LOGIN_EMAIL`, `D
 
 If you do have a Deputy API token, set `DEPUTY_API_TOKEN` and use Settings -> Test Deputy API. Most normal users will not have this.
 
+## Temporary Trycloudflared URL
+
+For temporary testing, deploy the normal compose file plus the tunnel overlay:
+
+```text
+docker-compose.yml
+docker-compose.tunnel.yml
+```
+
+In Portainer's Git stack screen, set `docker-compose.yml` as the main compose path and add `docker-compose.tunnel.yml` under Additional paths. The `cloudflared` container will print a temporary `trycloudflare.com` URL in its logs.
+
+The tunnel points to the app over the internal Docker network at `http://deputy-roster-view:8000`. Do not put Deputy passwords or app secrets in the tunnel compose file.
+
 ## Syncing
 
 - Daily sync runs at `SYNC_AT_HOUR`, default `5`, in `TZ`, default `Pacific/Auckland`.
 - A pre-shift checker runs every 10 minutes and syncs once around `EARLY_PRE_SHIFT_SYNC_HOURS`, default `12`, before the next shift.
 - It syncs again when the next shift is within `PRE_SHIFT_SYNC_MINUTES`, default `60`.
 - If that upcoming shift is marked as changed, the checker runs one more follow-up sync at `CHANGED_FOLLOWUP_SYNC_MINUTES`, default `30`.
-- Each normal sync refreshes the iCal roster and, when Deputy web login env is configured, captures the logged-in Deputy schedule data for crew roles.
-- Use the Sync Now button in the app to trigger the same combined sync manually.
+- For multi-user scheduled syncs, users are queued and staggered with `USER_SYNC_STAGGER_MINUTES`, default `7`, plus `USER_SYNC_JITTER_MINUTES`, default `2`.
+- `USER_SYNC_BATCH_SIZE` defaults to `1`, so only one account is captured per runner pass.
+- Manual Sync and Update uses the currently logged-in user's saved Deputy login immediately.
+- iCal is optional backup. If no iCal URL is configured, the sync will skip that source and still use Deputy web capture.
 
 The app redacts calendar details by design and does not display the configured calendar URL.
+
+## Trusted Devices
+
+`TRUSTED_DEVICE_DAYS` controls how long a phone/browser is trusted after activity. The default is `730`.
+
+The app refreshes the trusted-device expiry on each authenticated request, so the timer effectively resets while the user keeps using the app. Admin revocation, logout, clearing browser cookies, changing the app secret, or browser cookie limits can still require login again.
 
 ## Navigation
 

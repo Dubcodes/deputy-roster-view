@@ -4,13 +4,21 @@
 
 Use FastAPI, Jinja, SQLite, APScheduler, requests, icalendar, and Playwright only where needed for Deputy web capture. Avoid a heavy frontend framework.
 
-## iCal Is The Base Roster Source
+## iCal Is A Backup Roster Source
 
-iCal is stable enough for the user's own shifts and does not need Deputy API access. It is kept as the base/fallback data source.
+iCal is stable enough for backup roster data and does not need Deputy API access, but multi-user signup is based on Deputy login credentials. A missing iCal URL should not fail a web-capture sync.
 
 ## Deputy Web Capture Adds Crew Context
 
 The user does not have an official API token. The app uses logged-in web capture to read the same schedule data Deputy shows in the browser. This remains read-only.
+
+## Stagger User Syncs
+
+Multiple users should not all hit Deputy at 5am or at the same pre-shift window. The scheduler plans per-user sync windows with configurable spacing and small deterministic jitter, then runs due accounts in a small batch, default one account at a time.
+
+## Trusted Devices Are Long-Lived And Sliding
+
+The user wants phone access without repeated logins. Trusted-device tokens are stored hashed in the database and refreshed on each authenticated request. `TRUSTED_DEVICE_DAYS` is the per-activity expiry window, while admin revocation and logout still end access.
 
 ## Change Visibility
 

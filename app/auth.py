@@ -6,6 +6,7 @@ from urllib.parse import quote
 from fastapi import HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response
 
+from .config import get_settings
 from .database import (
     count_app_users,
     get_trusted_device,
@@ -13,7 +14,7 @@ from .database import (
     update_app_user_seen,
     update_trusted_device_seen,
 )
-from .security import SESSION_COOKIE_NAME, hash_session_token
+from .security import SESSION_COOKIE_NAME, hash_session_token, session_expires_at
 
 
 PUBLIC_PATHS = {
@@ -61,6 +62,8 @@ async def trusted_device_middleware(
     if token:
         device = get_trusted_device(hash_session_token(token))
         if device:
+            settings = get_settings()
+            expires_at = session_expires_at(settings)
             request.state.trusted_device = device
             request.state.current_user = {
                 "id": device["user_id"],
@@ -68,9 +71,19 @@ async def trusted_device_middleware(
                 "deputy_email": device["deputy_email"],
                 "is_admin": device["is_admin"],
             }
-            update_trusted_device_seen(int(device["id"]))
+            update_trusted_device_seen(int(device["id"]), expires_at)
             update_app_user_seen(int(device["user_id"]))
-            return await call_next(request)
+            response = await call_next(request)
+            response.set_cookie(
+                SESSION_COOKIE_NAME,
+                token,
+                max_age=settings.trusted_device_days * 24 * 60 * 60,
+                httponly=True,
+                samesite="lax",
+                secure=settings.cookie_secure,
+                path="/",
+            )
+            return response
 
     if user_count == 0:
         return RedirectResponse(url=f"/signup?next={quote(str(request.url.path))}", status_code=303)

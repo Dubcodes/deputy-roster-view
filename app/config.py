@@ -27,6 +27,9 @@ class Settings:
     early_pre_shift_sync_hours: int
     pre_shift_sync_minutes: int
     changed_followup_sync_minutes: int
+    user_sync_stagger_minutes: int
+    user_sync_jitter_minutes: int
+    user_sync_batch_size: int
     data_dir: str
     db_path: str
 
@@ -97,6 +100,9 @@ def get_settings() -> Settings:
         early_pre_shift_sync_hours=_int_env("EARLY_PRE_SHIFT_SYNC_HOURS", 12),
         pre_shift_sync_minutes=_int_env("PRE_SHIFT_SYNC_MINUTES", 60),
         changed_followup_sync_minutes=_int_env("CHANGED_FOLLOWUP_SYNC_MINUTES", 30),
+        user_sync_stagger_minutes=_int_env("USER_SYNC_STAGGER_MINUTES", 7),
+        user_sync_jitter_minutes=_int_env("USER_SYNC_JITTER_MINUTES", 2),
+        user_sync_batch_size=_int_env("USER_SYNC_BATCH_SIZE", 1),
         data_dir=data_dir,
         db_path=db_path,
     )

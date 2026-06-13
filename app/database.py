@@ -127,6 +127,18 @@ def init_db(settings: Settings | None = None) -> None:
                 FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS user_sync_state (
+                user_id INTEGER PRIMARY KEY,
+                last_sync_at TEXT,
+                next_sync_after TEXT,
+                last_status TEXT,
+                last_message TEXT,
+                sync_in_progress INTEGER DEFAULT 0,
+                last_planned_reason TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS admin_overrides (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at TEXT,
@@ -196,6 +208,7 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_trusted_devices_token ON trusted_devices(token_hash);
             CREATE INDEX IF NOT EXISTS idx_admin_overrides_date ON admin_overrides(target_date);
             CREATE INDEX IF NOT EXISTS idx_capture_coverage_date ON capture_coverage(date);
+            CREATE INDEX IF NOT EXISTS idx_user_sync_state_next ON user_sync_state(next_sync_after, sync_in_progress);
             """
         )
         _ensure_column(conn, "shifts", "source_link", "TEXT")
@@ -236,6 +249,12 @@ def list_app_users() -> list[sqlite3.Row]:
             """
             SELECT
                 u.*,
+                s.next_sync_after,
+                s.last_sync_at,
+                s.last_status,
+                s.last_message,
+                s.sync_in_progress,
+                s.last_planned_reason,
                 (
                     SELECT COUNT(*)
                     FROM trusted_devices d
@@ -244,6 +263,7 @@ def list_app_users() -> list[sqlite3.Row]:
                       AND d.expires_at > ?
                 ) AS active_devices
             FROM app_users u
+            LEFT JOIN user_sync_state s ON s.user_id = u.id
             ORDER BY u.is_admin DESC, LOWER(u.display_name), LOWER(u.deputy_email)
             """,
             (datetime.now(get_settings().timezone).isoformat(timespec="seconds"),),
@@ -265,6 +285,162 @@ def get_app_user_by_email(email: str) -> sqlite3.Row | None:
             "SELECT * FROM app_users WHERE LOWER(deputy_email) = LOWER(?)",
             (email.strip(),),
         ).fetchone()
+
+
+def get_deputy_user_secret(user_id: int) -> sqlite3.Row | None:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT s.*, u.deputy_web_url, u.display_name, u.deputy_email, u.is_active
+            FROM deputy_user_secrets s
+            JOIN app_users u ON u.id = s.user_id
+            WHERE s.user_id = ?
+              AND u.is_active = 1
+            """,
+            (user_id,),
+        ).fetchone()
+
+
+def user_has_deputy_credentials(user_id: int) -> bool:
+    row = get_deputy_user_secret(user_id)
+    return bool(row and row["encrypted_email"] and row["encrypted_password"])
+
+
+def list_syncable_app_users() -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                u.*,
+                s.last_sync_at,
+                s.next_sync_after,
+                s.last_status,
+                s.last_message,
+                s.sync_in_progress,
+                s.last_planned_reason
+            FROM app_users u
+            JOIN deputy_user_secrets secret ON secret.user_id = u.id
+            LEFT JOIN user_sync_state s ON s.user_id = u.id
+            WHERE u.is_active = 1
+              AND TRIM(COALESCE(secret.encrypted_email, '')) != ''
+              AND TRIM(COALESCE(secret.encrypted_password, '')) != ''
+            ORDER BY u.id ASC
+            """
+        ).fetchall()
+    return rows
+
+
+def ensure_user_sync_state(user_id: int) -> None:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO user_sync_state (
+                user_id, last_sync_at, next_sync_after, last_status, last_message,
+                sync_in_progress, last_planned_reason, updated_at
+            )
+            VALUES (?, '', '', 'new', 'Waiting for first sync.', 0, '', ?)
+            """,
+            (user_id, now),
+        )
+
+
+def set_user_next_sync(user_id: int, next_sync_after: str, reason: str) -> None:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_sync_state (
+                user_id, last_sync_at, next_sync_after, last_status, last_message,
+                sync_in_progress, last_planned_reason, updated_at
+            )
+            VALUES (?, '', ?, 'planned', ?, 0, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                next_sync_after = excluded.next_sync_after,
+                last_status = CASE
+                    WHEN user_sync_state.sync_in_progress = 1 THEN user_sync_state.last_status
+                    ELSE excluded.last_status
+                END,
+                last_message = CASE
+                    WHEN user_sync_state.sync_in_progress = 1 THEN user_sync_state.last_message
+                    ELSE excluded.last_message
+                END,
+                last_planned_reason = excluded.last_planned_reason,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, next_sync_after, f"Planned {reason} sync.", reason, now),
+        )
+
+
+def get_due_user_syncs(now_iso: str, limit: int = 1) -> list[sqlite3.Row]:
+    safe_limit = max(1, int(limit or 1))
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                u.*,
+                s.next_sync_after,
+                s.last_planned_reason
+            FROM user_sync_state s
+            JOIN app_users u ON u.id = s.user_id
+            JOIN deputy_user_secrets secret ON secret.user_id = u.id
+            WHERE u.is_active = 1
+              AND s.sync_in_progress = 0
+              AND TRIM(COALESCE(s.next_sync_after, '')) != ''
+              AND s.next_sync_after <= ?
+              AND TRIM(COALESCE(secret.encrypted_email, '')) != ''
+              AND TRIM(COALESCE(secret.encrypted_password, '')) != ''
+            ORDER BY s.next_sync_after ASC, u.id ASC
+            LIMIT ?
+            """,
+            (now_iso, safe_limit),
+        ).fetchall()
+    return rows
+
+
+def mark_user_sync_started(user_id: int, started_at: str) -> bool:
+    with get_connection() as conn:
+        result = conn.execute(
+            """
+            UPDATE user_sync_state
+            SET sync_in_progress = 1,
+                last_status = 'running',
+                last_message = 'Sync running.',
+                updated_at = ?
+            WHERE user_id = ?
+              AND sync_in_progress = 0
+            """,
+            (started_at, user_id),
+        )
+    return result.rowcount > 0
+
+
+def mark_user_sync_finished(
+    user_id: int,
+    *,
+    finished_at: str,
+    status: str,
+    message: str,
+    next_sync_after: str = "",
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_sync_state (
+                user_id, last_sync_at, next_sync_after, last_status, last_message,
+                sync_in_progress, last_planned_reason, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 0, '', ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                last_sync_at = excluded.last_sync_at,
+                next_sync_after = excluded.next_sync_after,
+                last_status = excluded.last_status,
+                last_message = excluded.last_message,
+                sync_in_progress = 0,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, finished_at, next_sync_after, status, message[:500], finished_at),
+        )
 
 
 def create_app_user(
@@ -298,6 +474,16 @@ def create_app_user(
             VALUES (?, ?, ?, '', ?)
             """,
             (user_id, encrypted_email, encrypted_password, now),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO user_sync_state (
+                user_id, last_sync_at, next_sync_after, last_status, last_message,
+                sync_in_progress, last_planned_reason, updated_at
+            )
+            VALUES (?, '', '', 'new', 'Waiting for first sync.', 0, 'signup', ?)
+            """,
+            (user_id, now),
         )
         return conn.execute("SELECT * FROM app_users WHERE id = ?", (user_id,)).fetchone()
 
@@ -355,12 +541,17 @@ def get_trusted_device(token_hash: str, now: str | None = None) -> sqlite3.Row |
         ).fetchone()
 
 
-def update_trusted_device_seen(device_id: int) -> None:
+def update_trusted_device_seen(device_id: int, expires_at: str | None = None) -> None:
     now = datetime.now().isoformat(timespec="seconds")
     with get_connection() as conn:
         conn.execute(
-            "UPDATE trusted_devices SET last_seen_at = ? WHERE id = ?",
-            (now, device_id),
+            """
+            UPDATE trusted_devices
+            SET last_seen_at = ?,
+                expires_at = COALESCE(?, expires_at)
+            WHERE id = ?
+            """,
+            (now, expires_at, device_id),
         )
 
 

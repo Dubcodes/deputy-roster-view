@@ -8,7 +8,8 @@
       <div class="section-heading">
         <h2>Roster Update</h2>
       </div>
-      <p class="sync-state" data-sync-status>{{ sync_status.label if settings.deputy_login_configured else "Deputy login needed" }}</p>
+      <p class="sync-state" data-sync-status>{{ sync_status.label if can_sync else "Deputy login needed" }}</p>
+      <p class="muted sync-message" data-sync-message>{{ sync_status.message }}</p>
       <div class="sync-progress{% if sync_status.running %} is-active{% endif %}" data-sync-activity {% if not sync_status.running %}hidden{% endif %}>
         <span class="sync-spinner" aria-hidden="true"></span>
         <div class="sync-progress-track" role="progressbar" aria-label="Sync progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{% if sync_status.running %}15{% else %}0{% endif %}" data-sync-progress>
@@ -18,7 +19,7 @@
       <form action="/sync-now" method="post" data-progress-form>
         <button class="button" type="submit" data-progress-button {% if sync_status.running %}disabled{% endif %}>Sync and Update</button>
       </form>
-      <p class="muted">Auto sync runs at 5am, 12 hours before a shift, one hour before start, and again 30 minutes before start if changes were found.</p>
+      <p class="muted">Auto sync runs at 5am, 12 hours before a shift, one hour before start, and again 30 minutes before start if changes were found. User accounts are staggered so Deputy is not hit all at once.</p>
     </article>
 
     <article class="settings-panel">
@@ -205,6 +206,7 @@
       document.querySelectorAll("[data-progress-form]").forEach((form) => {
         const state = document.querySelector("[data-sync-status]");
         const activity = document.querySelector("[data-sync-activity]");
+        const message = document.querySelector("[data-sync-message]");
         const progress = document.querySelector("[data-sync-progress]");
         const progressFill = document.querySelector("[data-sync-progress-fill]");
         const button = form.querySelector("[data-progress-button]");
@@ -267,6 +269,7 @@
             if (!response.ok) return;
             const data = await response.json();
             if (data.running) return;
+            if (message) message.textContent = data.message || "";
             finishWorking(data.label || "Ready");
           } catch (error) {
             finishWorking("Ready");
@@ -278,6 +281,7 @@
           clearTimers();
           if (button) button.disabled = true;
           if (state) state.textContent = "Scanning Deputy page now";
+          if (message) message.textContent = "";
           startStages();
 
           try {
@@ -289,6 +293,7 @@
               },
             });
             const data = await response.json();
+            if (message) message.textContent = data.message || "";
             if (!data.running && !data.started) {
               finishWorking(data.label || "Ready");
               return;

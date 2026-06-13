@@ -17,6 +17,7 @@ Recommended deployment:
 - One trycloudflared URL while testing.
 - Per-user pages and trusted-device sessions.
 - Shared roster/schedule capture data so one user's Deputy account can fill gaps for everyone.
+- Staggered Deputy syncs so accounts are captured one at a time instead of all at once.
 
 ## User Flow
 
@@ -43,6 +44,7 @@ Trusted-device tokens:
 
 - Long-lived cookie on the user's phone.
 - Store only a hash of the token in the database.
+- Refresh the cookie/database expiry on each authenticated request.
 - Admin can revoke device sessions.
 
 ## Shared Data Model
@@ -82,6 +84,14 @@ The app should track capture coverage by date and location:
 
 Background jobs should prioritize upcoming days with missing or partial crew data. If one user's account cannot see a day clearly, another user's account may fill the gap.
 
+Daily and pre-shift sync triggers should plan per-user windows, not run every account immediately. Current defaults:
+
+- `USER_SYNC_STAGGER_MINUTES=7`
+- `USER_SYNC_JITTER_MINUTES=2`
+- `USER_SYNC_BATCH_SIZE=1`
+
+Manual Sync and Update is immediate for the user who pressed the button.
+
 ## Admin Panel
 
 Admin should be able to:
@@ -107,11 +117,13 @@ Show a small note in the app:
 
 - Archive the current single-user version. Done: `single-user-v1`.
 - Design the shared schema.
-- Add Postgres support for multi-user deployment.
-- Add user signup and trusted-device auth.
-- Add encrypted Deputy session storage.
-- Add shared schedule capture coverage.
-- Add admin panel and override audit trail.
+- Add Postgres support for multi-user deployment. Deferred; SQLite remains acceptable for the current small group.
+- Add user signup and trusted-device auth. Initial version done.
+- Add encrypted Deputy session storage. Credentials done; reusable Deputy browser session storage still future.
+- Add staggered per-user sync queue. Initial version done.
+- Add shared schedule capture coverage. Initial table exists; prioritization still future.
+- Add admin panel and override audit trail. Initial audit recording done; applying overrides still future.
+- Add optional trycloudflared compose overlay. Done.
 - Test with the current user first.
 - Add a second test user.
 - Run both old and new systems briefly.
