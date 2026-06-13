@@ -202,7 +202,6 @@ def init_db(settings: Settings | None = None) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_shifts_date ON shifts(date);
             CREATE INDEX IF NOT EXISTS idx_shifts_start_at ON shifts(start_at);
-            CREATE INDEX IF NOT EXISTS idx_shifts_owner ON shifts(owner_user_id);
             CREATE INDEX IF NOT EXISTS idx_shifts_changed ON shifts(changed_since_viewed);
             CREATE INDEX IF NOT EXISTS idx_shift_changes_shift ON shift_changes(shift_id, changed_at);
             CREATE INDEX IF NOT EXISTS idx_sync_log_started_at ON sync_log(started_at);
@@ -217,6 +216,7 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "shifts", "source_link", "TEXT")
         _ensure_column(conn, "shifts", "source_status", "TEXT")
         _ensure_column(conn, "shifts", "owner_user_id", "INTEGER")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_shifts_owner ON shifts(owner_user_id)")
         _ensure_column(conn, "shift_marks", "timing_adjustment_time", "TEXT")
         _ensure_column(conn, "shift_marks", "timing_adjustment_last_race", "INTEGER DEFAULT 0")
         _ensure_column(conn, "shift_marks", "timing_adjustment_day_finished", "INTEGER DEFAULT 0")
