@@ -183,6 +183,7 @@ def init_db(settings: Settings | None = None) -> None:
                 captured_at TEXT,
                 area_id INTEGER,
                 area_name TEXT,
+                area_location_id INTEGER,
                 area_roster_sort_order INTEGER,
                 employee_id INTEGER,
                 employee_name TEXT,
@@ -220,11 +221,26 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "shift_marks", "timing_adjustment_last_race", "INTEGER DEFAULT 0")
         _ensure_column(conn, "shift_marks", "timing_adjustment_day_finished", "INTEGER DEFAULT 0")
         _ensure_column(conn, "deputy_schedule_shifts", "area_name", "TEXT")
+        _ensure_column(conn, "deputy_schedule_shifts", "area_location_id", "INTEGER")
         _ensure_column(conn, "deputy_schedule_shifts", "area_roster_sort_order", "INTEGER")
         _ensure_column(conn, "deputy_schedule_shifts", "changed_since_viewed", "INTEGER DEFAULT 0")
         _ensure_column(conn, "deputy_schedule_shifts", "last_changed_at", "TEXT")
         _ensure_column(conn, "deputy_schedule_shifts", "change_summary", "TEXT")
         _ensure_column(conn, "app_users", "deputy_web_url", "TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_location ON deputy_schedule_shifts(date, area_location_id)"
+        )
+        conn.execute(
+            """
+            UPDATE deputy_schedule_shifts
+            SET area_location_id = (
+                SELECT location_id
+                FROM deputy_schedule_areas a
+                WHERE a.area_id = deputy_schedule_shifts.area_id
+            )
+            WHERE area_location_id IS NULL
+            """
+        )
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -770,40 +786,84 @@ def get_shift_changes_for_date(date_text: str) -> list[sqlite3.Row]:
     return rows
 
 
-def fetch_deputy_schedule_for_date(date_text: str) -> list[sqlite3.Row]:
+def _normalise_int_list(values: list[int] | tuple[int, ...] | set[int] | None) -> list[int]:
+    if not values:
+        return []
+    normalised = []
+    seen = set()
+    for value in values:
+        try:
+            int_value = int(value)
+        except (TypeError, ValueError):
+            continue
+        if int_value in seen:
+            continue
+        seen.add(int_value)
+        normalised.append(int_value)
+    return normalised
+
+
+def fetch_deputy_schedule_for_date(
+    date_text: str,
+    location_ids: list[int] | tuple[int, ...] | set[int] | None = None,
+) -> list[sqlite3.Row]:
+    location_ids = _normalise_int_list(location_ids)
+    location_sql = ""
+    params: list[object] = [date_text]
+    if location_ids:
+        placeholders = ", ".join("?" for _ in location_ids)
+        location_sql = f"AND COALESCE(s.area_location_id, a.location_id) IN ({placeholders})"
+        params.extend(location_ids)
+
     with get_connection() as conn:
         rows = conn.execute(
-            """
-            SELECT *
-            FROM deputy_schedule_shifts
-            WHERE date = ?
+            f"""
+            SELECT s.*,
+                   COALESCE(s.area_location_id, a.location_id) AS schedule_location_id
+            FROM deputy_schedule_shifts s
+            LEFT JOIN deputy_schedule_areas a ON a.area_id = s.area_id
+            WHERE s.date = ?
+              {location_sql}
             ORDER BY
-                COALESCE(area_roster_sort_order, 999999),
-                area_name,
-                start_at,
-                employee_name
+                COALESCE(s.area_roster_sort_order, 999999),
+                s.area_name,
+                s.start_at,
+                s.employee_name
             """,
-            (date_text,),
+            params,
         ).fetchall()
     return rows
 
 
-def has_deputy_schedule_changes_for_date(date_text: str) -> bool:
+def has_deputy_schedule_changes_for_date(
+    date_text: str,
+    location_ids: list[int] | tuple[int, ...] | set[int] | None = None,
+) -> bool:
+    location_ids = _normalise_int_list(location_ids)
+    location_sql = ""
+    params: list[object] = [date_text]
+    if location_ids:
+        placeholders = ", ".join("?" for _ in location_ids)
+        location_sql = f"AND COALESCE(s.area_location_id, a.location_id) IN ({placeholders})"
+        params.extend(location_ids)
+
     with get_connection() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT 1
-            FROM deputy_schedule_shifts
-            WHERE date = ?
-              AND changed_since_viewed = 1
+            FROM deputy_schedule_shifts s
+            LEFT JOIN deputy_schedule_areas a ON a.area_id = s.area_id
+            WHERE s.date = ?
+              {location_sql}
+              AND s.changed_since_viewed = 1
               AND (
-                change_summary LIKE '%Person:%'
-                OR change_summary LIKE '%Position:%'
-                OR change_summary LIKE '%Open shift:%'
+                s.change_summary LIKE '%Person:%'
+                OR s.change_summary LIKE '%Position:%'
+                OR s.change_summary LIKE '%Open shift:%'
               )
             LIMIT 1
             """,
-            (date_text,),
+            params,
         ).fetchone()
     return row is not None
 
@@ -1069,6 +1129,9 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
             area_id = _optional_int(shift.get("area"))
             area = area_lookup.get(str(area_id)) if area_id is not None else None
             area_name = str(shift.get("areaName") or (area or {}).get("name") or area_id or "")
+            area_location_id = _optional_int(shift.get("areaLocationId"))
+            if area_location_id is None and area:
+                area_location_id = _optional_int(area.get("locationId"))
             area_sort = _optional_int(shift.get("areaRosterSortOrder"))
             if area_sort is None and area:
                 area_sort = _optional_int(area.get("rosterSortOrder"))
@@ -1078,6 +1141,7 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
             values = {
                 "area_id": area_id,
                 "area_name": area_name,
+                "area_location_id": area_location_id,
                 "area_roster_sort_order": area_sort,
                 "employee_id": _optional_int(shift.get("employee")),
                 "employee_name": str(shift.get("employeeName") or ""),
@@ -1100,16 +1164,17 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                 """
                 INSERT INTO deputy_schedule_shifts (
                     source_shift_id, captured_at, area_id, area_name,
-                    area_roster_sort_order, employee_id, employee_name,
+                    area_location_id, area_roster_sort_order, employee_id, employee_name,
                     start_at, end_at, date, duration, is_open, is_published,
                     changed_since_viewed, last_changed_at, change_summary,
                     note, raw_payload
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_shift_id) DO UPDATE SET
                     captured_at = excluded.captured_at,
                     area_id = excluded.area_id,
                     area_name = excluded.area_name,
+                    area_location_id = excluded.area_location_id,
                     area_roster_sort_order = excluded.area_roster_sort_order,
                     employee_id = excluded.employee_id,
                     employee_name = excluded.employee_name,
@@ -1130,6 +1195,7 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                     captured_at,
                     values["area_id"],
                     values["area_name"],
+                    values["area_location_id"],
                     values["area_roster_sort_order"],
                     values["employee_id"],
                     values["employee_name"],

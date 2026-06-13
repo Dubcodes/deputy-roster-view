@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
 from datetime import datetime, timedelta
 
@@ -282,6 +283,27 @@ def _skipped_calendar_result(message: str) -> dict[str, object]:
     }
 
 
+def _shift_schedule_location_ids(shift: object) -> list[int]:
+    try:
+        source_payload = str(shift["source_payload"] or "")  # type: ignore[index]
+    except (KeyError, TypeError):
+        return []
+    if not source_payload:
+        return []
+    try:
+        payload = json.loads(source_payload)
+    except (TypeError, ValueError):
+        return []
+    normalised = payload.get("normalised", {}) if isinstance(payload, dict) else {}
+    if not isinstance(normalised, dict):
+        return []
+    location_id = normalised.get("area_location_id")
+    try:
+        return [int(location_id)] if location_id not in (None, "") else []
+    except (TypeError, ValueError):
+        return []
+
+
 def _stable_jitter_minutes(user_id: int, date_seed: str, reason: str, jitter_minutes: int) -> int:
     if jitter_minutes <= 0:
         return 0
@@ -310,7 +332,10 @@ def get_pre_shift_status(settings: Settings | None = None) -> dict[str, object]:
     followup_target_at = start_at - timedelta(minutes=settings.changed_followup_sync_minutes)
     early_should_sync = early_target_at <= now <= start_at
     primary_should_sync = target_at <= now <= start_at
-    crew_schedule_changed = has_deputy_schedule_changes_for_date(str(shift["date"]))
+    crew_schedule_changed = has_deputy_schedule_changes_for_date(
+        str(shift["date"]),
+        location_ids=_shift_schedule_location_ids(shift),
+    )
     followup_should_sync = (
         (bool(int(shift["changed_since_viewed"] or 0)) or crew_schedule_changed)
         and followup_target_at <= now <= start_at

@@ -51,6 +51,8 @@ The parser should accept both dash and pipe separators for first/last race short
 
 The reliable crew list should come from Deputy web schedule rows where possible, not from free-text roster notes.
 
+Crew data must be scoped by date and Deputy location/track, not only by date. Multiple race meetings or work groups can happen on the same day, so each user should see the crew list for the location attached to their own shift.
+
 Hide `Out of Region` from the normal on-track crew list. It is noise for race-day crew display.
 
 Crew changed badges should only mean the person/position/open-slot assignment changed. Do not badge timing-only crew schedule changes.

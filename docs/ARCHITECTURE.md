@@ -26,6 +26,8 @@
 
 It should prefer an All Locations schedule capture. If that is not selectable, it falls back to upcoming known roster locations.
 
+Schedule display is scoped by both date and Deputy location ID. This keeps split-crew days clean when two meetings or work groups happen at once.
+
 ### Multi-User Sync Queue
 
 `user_sync_state` stores the next planned sync time, last result, and running flag for each active user with saved Deputy credentials.

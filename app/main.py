@@ -557,6 +557,40 @@ def pretty_source_payload(value: str | None) -> str:
     return redact_secret_text(rendered)
 
 
+def safe_int(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def unique_ints(values: list[object]) -> list[int]:
+    result = []
+    seen = set()
+    for value in values:
+        int_value = safe_int(value)
+        if int_value is None or int_value in seen:
+            continue
+        seen.add(int_value)
+        result.append(int_value)
+    return result
+
+
+def source_payload_normalised(value: str | None) -> dict[str, object]:
+    if not value:
+        return {}
+    try:
+        payload = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    normalised = payload.get("normalised", {})
+    return normalised if isinstance(normalised, dict) else {}
+
+
 def source_payload_diagnostics(value: str | None) -> dict[str, object]:
     if not value:
         return {"fields": [], "description_lines": [], "hidden_links": []}
@@ -948,6 +982,8 @@ def apply_timing_math(shift: dict[str, object]) -> None:
 def decorate_shift(row: object) -> dict[str, object]:
     shift = dict(row)
     parsed_title = parse_shift_title(str(shift.get("title") or ""))
+    normalised_payload = source_payload_normalised(str(shift.get("source_payload") or ""))
+    schedule_location_id = safe_int(normalised_payload.get("area_location_id"))
     start_at = parse_iso_datetime(shift.get("start_at"))
     end_at = parse_iso_datetime(shift.get("end_at"))
     shift["start_label"] = start_at.strftime("%H:%M") if start_at else ""
@@ -990,6 +1026,8 @@ def decorate_shift(row: object) -> dict[str, object]:
     shift["timing_adjustment_time"] = timing_time
     shift["timing_adjustment_labels"] = timing_notes
     shift["combined_shift_ids"] = [int(shift["id"])]
+    shift["schedule_location_id"] = schedule_location_id
+    shift["schedule_location_ids"] = [schedule_location_id] if schedule_location_id is not None else []
     apply_timing_math(shift)
     return shift
 
@@ -1066,6 +1104,12 @@ def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[
     merged["combined_shift_ids"] = list(left.get("combined_shift_ids") or [left["id"]]) + list(
         right.get("combined_shift_ids") or [right["id"]]
     )
+    merged["schedule_location_ids"] = unique_ints(
+        list(left.get("schedule_location_ids") or [])
+        + list(right.get("schedule_location_ids") or [])
+        + [left.get("schedule_location_id"), right.get("schedule_location_id")]
+    )
+    merged["schedule_location_id"] = merged["schedule_location_ids"][0] if merged["schedule_location_ids"] else None
     apply_timing_math(merged)
     return merged
 
@@ -1256,6 +1300,26 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
             str(person.get("employee_name") or ""),
         ),
     )
+
+
+def shift_schedule_location_ids(shifts: list[dict[str, object]]) -> list[int]:
+    values = []
+    for shift in shifts:
+        values.extend(list(shift.get("schedule_location_ids") or []))
+        values.append(shift.get("schedule_location_id"))
+    return unique_ints(values)
+
+
+def deputy_schedule_label_for_shifts(base_label: str, shifts: list[dict[str, object]]) -> str:
+    labels = []
+    for shift in shifts:
+        track_label = str(shift.get("track_label") or "").strip()
+        if not track_label or track_label in labels:
+            continue
+        labels.append(track_label)
+    if not labels:
+        return base_label
+    return f"{base_label} - {', '.join(labels)}"
 
 
 def open_schedule_by_date(start_date: str, end_date: str) -> dict[str, list[dict[str, object]]]:
@@ -1791,13 +1855,28 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
         ]
         shift["changes"] = compact_shift_changes(list(shift.get("changes") or []))
         shift["change_summary_text"] = build_shift_change_summary(list(shift.get("changes") or []))
-    deputy_schedule_label = "Deputy Schedule"
-    deputy_schedule_people = schedule_people(fetch_deputy_schedule_for_date(date_text))
+    schedule_location_ids = shift_schedule_location_ids(shifts)
+    deputy_schedule_label = deputy_schedule_label_for_shifts("Deputy Schedule", shifts)
+    deputy_schedule_people = schedule_people(
+        fetch_deputy_schedule_for_date(
+            date_text,
+            location_ids=schedule_location_ids or None,
+        )
+    )
     if not deputy_schedule_people and is_overnight_travel_day(shifts):
         next_day_text = (day_date + timedelta(days=1)).isoformat()
-        deputy_schedule_people = schedule_people(fetch_deputy_schedule_for_date(next_day_text))
+        next_day_shifts = combine_adjacent_shifts(
+            [decorate_shift(row) for row in fetch_shifts_for_date(next_day_text, owner_user_id=owner_user_id)]
+        )
+        next_day_location_ids = shift_schedule_location_ids(next_day_shifts) or schedule_location_ids
+        deputy_schedule_people = schedule_people(
+            fetch_deputy_schedule_for_date(
+                next_day_text,
+                location_ids=next_day_location_ids or None,
+            )
+        )
         if deputy_schedule_people:
-            deputy_schedule_label = "Deputy Schedule - Next Day Crew"
+            deputy_schedule_label = deputy_schedule_label_for_shifts("Deputy Schedule - Next Day Crew", next_day_shifts)
     deputy_schedule_changed = any(bool(person.get("changed")) for person in deputy_schedule_people)
     day_total = sum(
         shift_hours_value(shift)
