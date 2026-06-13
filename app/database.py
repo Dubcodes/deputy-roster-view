@@ -1631,6 +1631,7 @@ def mark_missing_future_shifts_deleted(
     seen_uids: Iterable[str],
     now_iso: str,
     changed_at: str,
+    owner_user_id: int | None = None,
 ) -> int:
     seen = list(seen_uids)
     where_sql = """
@@ -1639,6 +1640,9 @@ def mark_missing_future_shifts_deleted(
           AND start_at >= ?
     """
     params: list[object] = [source_url_hash, now_iso]
+    if owner_user_id is not None:
+        where_sql += " AND owner_user_id = ?"
+        params.append(owner_user_id)
     if seen:
         placeholders = ",".join("?" for _ in seen)
         where_sql += f" AND source_uid NOT IN ({placeholders})"

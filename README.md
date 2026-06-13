@@ -117,6 +117,7 @@ The tunnel points to the app over the internal Docker network at `http://deputy-
 - If that upcoming shift is marked as changed, the checker runs one more follow-up sync at `CHANGED_FOLLOWUP_SYNC_MINUTES`, default `30`.
 - For multi-user scheduled syncs, users are queued and staggered with `USER_SYNC_STAGGER_MINUTES`, default `7`, plus `USER_SYNC_JITTER_MINUTES`, default `2`.
 - `USER_SYNC_BATCH_SIZE` defaults to `1`, so only one account is captured per runner pass.
+- Deputy web capture asks for each user's own published shifts from `OWN_ROSTER_LOOKBACK_DAYS`, default `45`, days back through `OWN_ROSTER_LOOKAHEAD_DAYS`, default `120`, days forward.
 - Manual Sync and Update uses the currently logged-in user's saved Deputy login immediately.
 - iCal is optional backup. If no iCal URL is configured, the sync will skip that source and still use Deputy web capture.
 

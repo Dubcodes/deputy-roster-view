@@ -4,7 +4,7 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -126,6 +126,13 @@ def _origin_url(settings: Settings) -> str:
     if not parsed.scheme or not parsed.netloc:
         return ""
     return urlunsplit((parsed.scheme, parsed.netloc, "/", "", ""))
+
+
+def _api_url(settings: Settings, path: str) -> str:
+    origin = _origin_url(settings).rstrip("/")
+    if not origin:
+        return path
+    return f"{origin}{path if path.startswith('/') else '/' + path}"
 
 
 def _login_url(settings: Settings) -> str:
@@ -365,6 +372,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     extracted_shifts_by_id: dict[str, dict[str, Any]] = {}
     extracted_schedule_shifts_by_id: dict[str, dict[str, Any]] = {}
     area_refs_by_id: dict[str, dict[str, Any]] = {}
+    captured_employee_id = ""
     events: list[str] = []
     page_texts: list[dict[str, Any]] = []
     target_track_groups = _target_schedule_track_groups(settings)
@@ -487,6 +495,91 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     events.append(f"Could not select schedule target automatically: {target_tracks[0]}.")
                     return False
 
+                def remember_employee_id(value: Any) -> None:
+                    nonlocal captured_employee_id
+                    if captured_employee_id or value in (None, ""):
+                        return
+                    value_text = str(value).strip()
+                    if value_text.isdigit():
+                        captured_employee_id = value_text
+
+                async def capture_extended_own_roster() -> None:
+                    employee_id = captured_employee_id
+                    if not employee_id:
+                        for shift in extracted_shifts_by_id.values():
+                            remember_employee_id(shift.get("employee"))
+                            employee_id = captured_employee_id
+                            if employee_id:
+                                break
+                    if not employee_id:
+                        events.append("Could not identify the Deputy employee id for extended own-roster capture.")
+                        return
+
+                    now = datetime.now(settings.timezone)
+                    lookback_days = max(0, settings.own_roster_lookback_days)
+                    lookahead_days = max(1, settings.own_roster_lookahead_days)
+                    start_at = (now - timedelta(days=lookback_days)).replace(hour=0, minute=0, second=0, microsecond=0)
+                    end_at = (now + timedelta(days=lookahead_days)).replace(hour=23, minute=59, second=59, microsecond=0)
+                    query = urlencode(
+                        {
+                            "start": start_at.isoformat(),
+                            "end": end_at.isoformat(),
+                            "employee": employee_id,
+                            "published": "TRUE",
+                        }
+                    )
+                    path = f"/api/management/v2/shifts?{query}"
+                    try:
+                        result = await page.evaluate(
+                            """
+                            async (path) => {
+                              const response = await fetch(path, {
+                                credentials: "include",
+                                headers: { "accept": "application/json" }
+                              });
+                              let body = null;
+                              try { body = await response.json(); } catch (error) {}
+                              return { ok: response.ok, status: response.status, body };
+                            }
+                            """,
+                            path,
+                        )
+                    except Exception as exc:
+                        events.append(f"Extended own-roster capture failed: {redacted_text(str(exc))[:180]}.")
+                        return
+
+                    body = result.get("body") if isinstance(result, dict) else None
+                    status = int(result.get("status") or 0) if isinstance(result, dict) else 0
+                    if len(captured) < MAX_CAPTURED_RESPONSES:
+                        captured.append(
+                            {
+                                "url": _clean_url(_api_url(settings, path)),
+                                "method": "GET",
+                                "status": status,
+                                "shape": _top_level_shape(body),
+                                "sample": _safe_json_sample(body),
+                            }
+                        )
+                    if not isinstance(result, dict) or not result.get("ok"):
+                        events.append(f"Extended own-roster capture returned HTTP {status or 'unknown'}.")
+                        return
+
+                    added = 0
+                    for shift in _extract_management_shifts(body):
+                        shift_id = str(shift.get("id") or "")
+                        if not shift_id:
+                            continue
+                        before = shift_id in extracted_shifts_by_id
+                        extracted_shifts_by_id[shift_id] = shift
+                        remember_employee_id(shift.get("employee"))
+                        if not before:
+                            added += 1
+                    events.append(
+                        "Extended own-roster capture covered "
+                        f"{start_at.date().isoformat()} to {end_at.date().isoformat()} "
+                        f"and added {added} shift rows."
+                    )
+
                 async def capture_response(response: Any) -> None:
                     try:
                         response_url = response.url
@@ -527,11 +620,16 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         if len(captured) < MAX_CAPTURED_RESPONSES:
                             captured.append(captured_item)
                         if "/api/management/v2/shifts" in response_url:
+                            query_params = dict(parse_qsl(urlsplit(response_url).query))
+                            remember_employee_id(query_params.get("employee"))
                             for shift in _extract_management_shifts(data):
                                 shift_id = str(shift.get("id") or "")
                                 if shift_id:
+                                    remember_employee_id(shift.get("employee"))
                                     extracted_shifts_by_id[shift_id] = shift
                         if "/api/management/v2/areas" in response_url:
+                            query_params = dict(parse_qsl(urlsplit(response_url).query))
+                            remember_employee_id(query_params.get("employeeId"))
                             for area in _extract_area_refs(data):
                                 area_id = str(area.get("id") or "")
                                 if area_id:
@@ -582,6 +680,8 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                 login_still_visible = await page.locator("input[type='password']").count() > 0
                 if login_still_visible:
                     events.append("Password field is still visible; login may have failed or needs MFA/SSO.")
+                else:
+                    await capture_extended_own_roster()
             finally:
                 if context is not None:
                     await context.close()

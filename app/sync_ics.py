@@ -279,7 +279,7 @@ def _event_changes(row: Any, event: ShiftEvent) -> dict[str, tuple[Any, Any]]:
     return changes
 
 
-def _upsert_event(conn: Any, event: ShiftEvent, now_iso: str) -> str:
+def _upsert_event(conn: Any, event: ShiftEvent, now_iso: str, owner_user_id: int | None = None) -> str:
     existing = conn.execute(
         "SELECT * FROM shifts WHERE source_uid = ?",
         (event.source_uid,),
@@ -302,6 +302,7 @@ def _upsert_event(conn: Any, event: ShiftEvent, now_iso: str) -> str:
         None,
         0,
         0,
+        owner_user_id,
         event.source_link,
         event.source_status,
         event.source_payload,
@@ -314,10 +315,10 @@ def _upsert_event(conn: Any, event: ShiftEvent, now_iso: str) -> str:
                 source_uid, source_url_hash, title, description, location,
                 start_at, end_at, date, raw_hours, break_minutes, paid_hours,
                 last_synced_at, first_seen_at, last_changed_at,
-                changed_since_viewed, deleted_from_source, source_link,
+                changed_since_viewed, deleted_from_source, owner_user_id, source_link,
                 source_status, source_payload
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             values,
         )
@@ -340,6 +341,7 @@ def _upsert_event(conn: Any, event: ShiftEvent, now_iso: str) -> str:
             paid_hours = ?,
             source_link = ?,
             source_status = ?,
+            owner_user_id = ?,
             last_synced_at = ?,
             last_changed_at = CASE WHEN ? THEN ? ELSE last_changed_at END,
             changed_since_viewed = CASE WHEN ? THEN 1 ELSE changed_since_viewed END,
@@ -360,6 +362,7 @@ def _upsert_event(conn: Any, event: ShiftEvent, now_iso: str) -> str:
             event.paid_hours,
             event.source_link,
             event.source_status,
+            owner_user_id,
             now_iso,
             1 if changed else 0,
             now_iso,
@@ -373,7 +376,7 @@ def _upsert_event(conn: Any, event: ShiftEvent, now_iso: str) -> str:
     return "updated" if changed else "unchanged"
 
 
-def sync_deputy_calendar(settings: Settings | None = None) -> dict[str, object]:
+def sync_deputy_calendar(settings: Settings | None = None, owner_user_id: int | None = None) -> dict[str, object]:
     settings = settings or get_settings()
     init_db(settings)
     started_at = _now(settings).isoformat()
@@ -398,7 +401,7 @@ def sync_deputy_calendar(settings: Settings | None = None) -> dict[str, object]:
         with get_connection(settings) as conn:
             for event in events:
                 seen_uids.add(event.source_uid)
-                action = _upsert_event(conn, event, now_iso)
+                action = _upsert_event(conn, event, now_iso, owner_user_id=owner_user_id)
                 if action == "created":
                     summary["events_created"] = int(summary["events_created"]) + 1
                 elif action == "updated":
@@ -411,6 +414,7 @@ def sync_deputy_calendar(settings: Settings | None = None) -> dict[str, object]:
                 seen_uids,
                 now_iso,
                 now_iso,
+                owner_user_id=owner_user_id,
             )
     except CalendarSyncError as exc:
         summary["status"] = "error"

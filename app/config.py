@@ -30,6 +30,8 @@ class Settings:
     user_sync_stagger_minutes: int
     user_sync_jitter_minutes: int
     user_sync_batch_size: int
+    own_roster_lookback_days: int
+    own_roster_lookahead_days: int
     data_dir: str
     db_path: str
 
@@ -103,6 +105,8 @@ def get_settings() -> Settings:
         user_sync_stagger_minutes=_int_env("USER_SYNC_STAGGER_MINUTES", 7),
         user_sync_jitter_minutes=_int_env("USER_SYNC_JITTER_MINUTES", 2),
         user_sync_batch_size=_int_env("USER_SYNC_BATCH_SIZE", 1),
+        own_roster_lookback_days=_int_env("OWN_ROSTER_LOOKBACK_DAYS", 45),
+        own_roster_lookahead_days=_int_env("OWN_ROSTER_LOOKAHEAD_DAYS", 120),
         data_dir=data_dir,
         db_path=db_path,
     )

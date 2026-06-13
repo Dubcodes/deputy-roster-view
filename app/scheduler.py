@@ -196,7 +196,7 @@ def sync_roster_sources(settings: Settings | None = None, user_id: int | None = 
     started_at = _now(settings).isoformat()
     calendar_result = _skipped_calendar_result("iCal backup feed is not configured.")
     if get_calendar_url(settings):
-        calendar_result = sync_deputy_calendar(settings)
+        calendar_result = sync_deputy_calendar(settings, owner_user_id=user_id)
 
     if credential_error:
         web_result = {
