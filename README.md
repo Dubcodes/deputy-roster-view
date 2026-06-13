@@ -90,14 +90,22 @@ If you do have a Deputy API token, set `DEPUTY_API_TOKEN` and use Settings -> Te
 
 ## Temporary Trycloudflared URL
 
-For temporary testing, deploy the normal compose file plus the tunnel overlay:
+For temporary testing, enable the built-in tunnel profile:
+
+```env
+COMPOSE_PROFILES=tunnel
+```
+
+Redeploy the stack, then open the `cloudflared` container logs and copy the `trycloudflare.com` URL.
+
+If your Portainer screen supports additional compose files, you can also deploy the normal compose file plus the tunnel overlay:
 
 ```text
 docker-compose.yml
 docker-compose.tunnel.yml
 ```
 
-In Portainer's Git stack screen, set `docker-compose.yml` as the main compose path and add `docker-compose.tunnel.yml` under Additional paths. The `cloudflared` container will print a temporary `trycloudflare.com` URL in its logs.
+In Portainer's Git stack screen, set `docker-compose.yml` as the main compose path and add `docker-compose.tunnel.yml` under Additional paths.
 
 The tunnel points to the app over the internal Docker network at `http://deputy-roster-view:8000`. Do not put Deputy passwords or app secrets in the tunnel compose file.
 

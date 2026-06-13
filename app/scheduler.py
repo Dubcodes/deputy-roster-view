@@ -198,9 +198,15 @@ def sync_roster_sources(settings: Settings | None = None, user_id: int | None = 
         calendar_result = sync_deputy_calendar(settings)
 
     if credential_error:
-        web_result = {"status": "error", "message": credential_error, "saved_schedule_rows": 0, "payload": {}}
+        web_result = {
+            "status": "error",
+            "message": credential_error,
+            "saved_own_shift_rows": 0,
+            "saved_schedule_rows": 0,
+            "payload": {},
+        }
     else:
-        web_result = sync_deputy_web_schedule(runtime_settings)
+        web_result = sync_deputy_web_schedule(runtime_settings, owner_user_id=user_id)
 
     status = _combined_sync_status(calendar_result, web_result)
     finished_at = _now(settings).isoformat()
@@ -243,7 +249,11 @@ def sync_summary_message(summary: dict[str, object]) -> str:
         parts.append(str(calendar_result.get("message") or "iCal sync failed."))
 
     if web_result.get("status") == "ok":
-        parts.append(f"Deputy web capture saved {web_result.get('saved_schedule_rows', 0)} schedule rows.")
+        parts.append(
+            "Deputy web capture saved "
+            f"{web_result.get('saved_own_shift_rows', 0)} roster rows and "
+            f"{web_result.get('saved_schedule_rows', 0)} schedule rows."
+        )
     elif web_result.get("status") == "skipped":
         parts.append(str(web_result.get("message") or "Deputy web capture skipped."))
     elif web_result:

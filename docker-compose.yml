@@ -25,3 +25,12 @@ services:
       - USER_SYNC_JITTER_MINUTES=${USER_SYNC_JITTER_MINUTES:-2}
       - USER_SYNC_BATCH_SIZE=${USER_SYNC_BATCH_SIZE:-1}
     restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles:
+      - tunnel
+    command: tunnel --no-autoupdate --url http://deputy-roster-view:8000
+    depends_on:
+      - deputy-roster-view
+    restart: unless-stopped

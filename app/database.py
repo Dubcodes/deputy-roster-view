@@ -39,6 +39,7 @@ def init_db(settings: Settings | None = None) -> None:
                 last_changed_at TEXT,
                 changed_since_viewed INTEGER DEFAULT 0,
                 deleted_from_source INTEGER DEFAULT 0,
+                owner_user_id INTEGER,
                 source_link TEXT,
                 source_status TEXT,
                 source_payload TEXT
@@ -200,6 +201,7 @@ def init_db(settings: Settings | None = None) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_shifts_date ON shifts(date);
             CREATE INDEX IF NOT EXISTS idx_shifts_start_at ON shifts(start_at);
+            CREATE INDEX IF NOT EXISTS idx_shifts_owner ON shifts(owner_user_id);
             CREATE INDEX IF NOT EXISTS idx_shifts_changed ON shifts(changed_since_viewed);
             CREATE INDEX IF NOT EXISTS idx_shift_changes_shift ON shift_changes(shift_id, changed_at);
             CREATE INDEX IF NOT EXISTS idx_sync_log_started_at ON sync_log(started_at);
@@ -213,6 +215,7 @@ def init_db(settings: Settings | None = None) -> None:
         )
         _ensure_column(conn, "shifts", "source_link", "TEXT")
         _ensure_column(conn, "shifts", "source_status", "TEXT")
+        _ensure_column(conn, "shifts", "owner_user_id", "INTEGER")
         _ensure_column(conn, "shift_marks", "timing_adjustment_time", "TEXT")
         _ensure_column(conn, "shift_marks", "timing_adjustment_last_race", "INTEGER DEFAULT 0")
         _ensure_column(conn, "shift_marks", "timing_adjustment_day_finished", "INTEGER DEFAULT 0")
@@ -614,10 +617,19 @@ def ensure_shift_mark(conn: sqlite3.Connection, shift_id: int) -> None:
     )
 
 
-def fetch_shifts_between(start_date: str, end_date: str) -> list[sqlite3.Row]:
+def fetch_shifts_between(
+    start_date: str,
+    end_date: str,
+    owner_user_id: int | None = None,
+) -> list[sqlite3.Row]:
+    owner_sql = ""
+    params: list[object] = [start_date, end_date]
+    if owner_user_id is not None:
+        owner_sql = "AND s.owner_user_id = ?"
+        params.append(owner_user_id)
     with get_connection() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT s.*, m.checked, m.confirmed, m.important, m.question,
                    m.early_start, m.gear_needed, m.travel_needed, m.pay_check,
                    m.private_note, m.custom_colour, m.timing_adjustment_time,
@@ -626,15 +638,16 @@ def fetch_shifts_between(start_date: str, end_date: str) -> list[sqlite3.Row]:
             FROM shifts s
             LEFT JOIN shift_marks m ON m.shift_id = s.id
             WHERE s.date BETWEEN ? AND ?
+              {owner_sql}
             ORDER BY s.start_at, s.id
             """,
-            (start_date, end_date),
+            params,
         ).fetchall()
     return rows
 
 
-def fetch_shifts_for_date(date_text: str) -> list[sqlite3.Row]:
-    return fetch_shifts_between(date_text, date_text)
+def fetch_shifts_for_date(date_text: str, owner_user_id: int | None = None) -> list[sqlite3.Row]:
+    return fetch_shifts_between(date_text, date_text, owner_user_id=owner_user_id)
 
 
 def fetch_shift(shift_id: int) -> sqlite3.Row | None:
@@ -941,6 +954,27 @@ def update_app_settings(values: dict[str, str]) -> None:
             )
 
 
+DEPUTY_LOCATION_CODES = {
+    20: "ELLE-T",
+    29: "CAMS-T",
+    56: "TAUR-T",
+    63: "TRAP-T",
+    68: "MATA-T",
+    105: "8PE",
+}
+DEPUTY_LOCATION_ADDRESSES = {
+    20: "100 Ascot Avenue",
+    29: "40 Racecourse Road",
+    56: "1383 Cameron Road",
+    63: "12 Sir Tristram Avenue",
+    68: "State Highway 27",
+    105: "National",
+}
+DEPUTY_AREA_OVERRIDES = {
+    1488: {"source_code": "VEH", "role": "Vehicles", "location": "6 Clow Place"},
+}
+
+
 SCHEDULE_COMPARE_FIELDS = (
     ("area_name", "Position"),
     ("employee_name", "Person"),
@@ -981,11 +1015,17 @@ def _display_change_value(value: object) -> str:
     return str(value)
 
 
-def save_deputy_web_schedule(payload: dict[str, object]) -> int:
+def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | None = None) -> dict[str, int]:
     captured_at = str(payload.get("captured_at") or datetime.now().isoformat(timespec="seconds"))
     areas = payload.get("areas") if isinstance(payload.get("areas"), list) else []
+    own_shifts = payload.get("extracted_shifts") if isinstance(payload.get("extracted_shifts"), list) else []
     shifts = payload.get("extracted_schedule_shifts") if isinstance(payload.get("extracted_schedule_shifts"), list) else []
     area_lookup: dict[str, dict[str, object]] = {}
+    schedule_shift_lookup = {
+        str(shift.get("id")): shift
+        for shift in shifts
+        if isinstance(shift, dict) and shift.get("id") not in (None, "")
+    }
 
     with get_connection() as conn:
         for area in areas:
@@ -1014,6 +1054,14 @@ def save_deputy_web_schedule(payload: dict[str, object]) -> int:
                 ),
             )
 
+        own_counts = _save_deputy_web_own_shifts(
+            conn,
+            own_shifts,
+            schedule_shift_lookup,
+            area_lookup,
+            captured_at,
+            owner_user_id,
+        )
         saved = 0
         for shift in shifts:
             if not isinstance(shift, dict) or shift.get("id") in (None, ""):
@@ -1104,7 +1152,241 @@ def save_deputy_web_schedule(payload: dict[str, object]) -> int:
                 ),
             )
             saved += 1
-    return saved
+    return {
+        "own_seen": own_counts["seen"],
+        "own_created": own_counts["created"],
+        "own_updated": own_counts["updated"],
+        "schedule_saved": saved,
+    }
+
+
+def _save_deputy_web_own_shifts(
+    conn: sqlite3.Connection,
+    own_shifts: list[object],
+    schedule_shift_lookup: dict[str, object],
+    area_lookup: dict[str, dict[str, object]],
+    captured_at: str,
+    owner_user_id: int | None,
+) -> dict[str, int]:
+    counts = {"seen": 0, "created": 0, "updated": 0}
+    source_owner = owner_user_id if owner_user_id is not None else "env"
+    source_url_hash = f"deputy-web:{source_owner}"
+    for shift in own_shifts:
+        if not isinstance(shift, dict) or shift.get("id") in (None, ""):
+            continue
+        shift_id = str(shift["id"])
+        rich_shift = schedule_shift_lookup.get(shift_id)
+        merged_shift = dict(shift)
+        if isinstance(rich_shift, dict):
+            merged_shift.update({key: value for key, value in rich_shift.items() if value not in (None, "")})
+        values = _deputy_web_shift_values(
+            merged_shift,
+            area_lookup,
+            captured_at,
+            source_url_hash,
+            owner_user_id,
+        )
+        if values is None:
+            continue
+        counts["seen"] += 1
+        existing = conn.execute(
+            "SELECT * FROM shifts WHERE source_uid = ?",
+            (values["source_uid"],),
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO shifts (
+                    source_uid, source_url_hash, title, description, location,
+                    start_at, end_at, date, raw_hours, break_minutes, paid_hours,
+                    last_synced_at, first_seen_at, last_changed_at,
+                    changed_since_viewed, deleted_from_source, owner_user_id,
+                    source_link, source_status, source_payload
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    values["source_uid"],
+                    values["source_url_hash"],
+                    values["title"],
+                    values["description"],
+                    values["location"],
+                    values["start_at"],
+                    values["end_at"],
+                    values["date"],
+                    values["raw_hours"],
+                    values["break_minutes"],
+                    values["paid_hours"],
+                    captured_at,
+                    captured_at,
+                    None,
+                    0,
+                    0,
+                    owner_user_id,
+                    values["source_link"],
+                    values["source_status"],
+                    values["source_payload"],
+                ),
+            )
+            counts["created"] += 1
+            continue
+
+        changes = _deputy_web_shift_changes(existing, values)
+        changed = bool(changes)
+        conn.execute(
+            """
+            UPDATE shifts
+            SET source_url_hash = ?,
+                title = ?,
+                description = ?,
+                location = ?,
+                start_at = ?,
+                end_at = ?,
+                date = ?,
+                raw_hours = ?,
+                break_minutes = ?,
+                paid_hours = ?,
+                source_link = ?,
+                source_status = ?,
+                owner_user_id = ?,
+                last_synced_at = ?,
+                last_changed_at = CASE WHEN ? THEN ? ELSE last_changed_at END,
+                changed_since_viewed = CASE WHEN ? THEN 1 ELSE changed_since_viewed END,
+                deleted_from_source = 0,
+                source_payload = ?
+            WHERE source_uid = ?
+            """,
+            (
+                values["source_url_hash"],
+                values["title"],
+                values["description"],
+                values["location"],
+                values["start_at"],
+                values["end_at"],
+                values["date"],
+                values["raw_hours"],
+                values["break_minutes"],
+                values["paid_hours"],
+                values["source_link"],
+                values["source_status"],
+                owner_user_id,
+                captured_at,
+                1 if changed else 0,
+                captured_at,
+                1 if changed else 0,
+                values["source_payload"],
+                values["source_uid"],
+            ),
+        )
+        if changed:
+            write_shift_changes(conn, int(existing["id"]), captured_at, changes)
+            counts["updated"] += 1
+    return counts
+
+
+WEB_SHIFT_COMPARE_FIELDS = (
+    "title",
+    "description",
+    "location",
+    "start_at",
+    "end_at",
+    "raw_hours",
+    "break_minutes",
+    "paid_hours",
+    "source_status",
+)
+
+
+def _deputy_web_shift_changes(existing: sqlite3.Row, values: dict[str, object]) -> dict[str, tuple[object, object]]:
+    changes = {}
+    for field_name in WEB_SHIFT_COMPARE_FIELDS:
+        old_value = existing[field_name]
+        new_value = values[field_name]
+        if field_name in {"raw_hours", "paid_hours"}:
+            try:
+                if round(float(old_value or 0), 2) == round(float(new_value or 0), 2):
+                    continue
+            except (TypeError, ValueError):
+                pass
+        elif str(old_value or "") == str(new_value or ""):
+            continue
+        changes[field_name] = (old_value, new_value)
+    return changes
+
+
+def _deputy_web_shift_values(
+    shift: dict[str, object],
+    area_lookup: dict[str, dict[str, object]],
+    captured_at: str,
+    source_url_hash: str,
+    owner_user_id: int | None,
+) -> dict[str, object] | None:
+    start_at = str(shift.get("start") or "")
+    end_at = str(shift.get("end") or "")
+    if not start_at or not end_at:
+        return None
+    try:
+        start_dt = datetime.fromisoformat(start_at)
+        end_dt = datetime.fromisoformat(end_at)
+    except ValueError:
+        return None
+    if end_dt <= start_dt:
+        return None
+
+    area_id = _optional_int(shift.get("area"))
+    area = area_lookup.get(str(area_id)) if area_id is not None else None
+    area_name = str(shift.get("areaName") or (area or {}).get("name") or "").strip()
+    location_id = _optional_int(shift.get("areaLocationId"))
+    if location_id is None and area:
+        location_id = _optional_int(area.get("locationId"))
+    area_override = DEPUTY_AREA_OVERRIDES.get(area_id or -1, {})
+    role_label = str(area_override.get("role") or area_name or "Shift").strip()
+    source_code = str(area_override.get("source_code") or DEPUTY_LOCATION_CODES.get(location_id or -1) or "WEB").strip()
+    title = f"[{source_code}] {role_label}".strip()
+    location = str(area_override.get("location") or DEPUTY_LOCATION_ADDRESSES.get(location_id or -1) or "").strip()
+    raw_hours = round((end_dt - start_dt).total_seconds() / 3600, 2)
+    break_minutes = 0
+    paid_hours = raw_hours
+    source_status = "published" if shift.get("isPublished") else "unpublished"
+    if shift.get("isOpen"):
+        source_status = "open"
+    source_uid = f"deputy-web:{owner_user_id if owner_user_id is not None else 'env'}:{shift.get('id')}"
+    normalised = {
+        "uid": source_uid,
+        "summary": title,
+        "description": str(shift.get("note") or ""),
+        "location": location,
+        "dtstart": start_dt.isoformat(),
+        "dtend": end_dt.isoformat(),
+        "break_minutes": break_minutes,
+        "source": "deputy_web",
+        "area_id": area_id,
+        "area_name": area_name,
+        "area_location_id": location_id,
+        "employee_id": _optional_int(shift.get("employee")),
+        "status": source_status,
+        "captured_at": captured_at,
+    }
+    payload = {
+        "normalised": normalised,
+        "deputy_web": shift,
+    }
+    return {
+        "source_uid": source_uid,
+        "source_url_hash": source_url_hash,
+        "title": title,
+        "description": str(shift.get("note") or ""),
+        "location": location,
+        "start_at": start_dt.isoformat(),
+        "end_at": end_dt.isoformat(),
+        "date": start_dt.date().isoformat(),
+        "raw_hours": raw_hours,
+        "break_minutes": break_minutes,
+        "paid_hours": paid_hours,
+        "source_link": "",
+        "source_status": source_status,
+        "source_payload": json_dumps(payload),
+    }
 
 
 def _optional_int(value: object) -> int | None:
@@ -1161,45 +1443,64 @@ def get_last_successful_sync() -> sqlite3.Row | None:
     return row
 
 
-def get_next_upcoming_shift(now_iso: str) -> sqlite3.Row | None:
+def get_next_upcoming_shift(now_iso: str, owner_user_id: int | None = None) -> sqlite3.Row | None:
+    owner_sql = ""
+    params: list[object] = [now_iso]
+    if owner_user_id is not None:
+        owner_sql = "AND owner_user_id = ?"
+        params.append(owner_user_id)
     with get_connection() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT *
             FROM shifts
             WHERE deleted_from_source = 0
               AND start_at >= ?
+              {owner_sql}
             ORDER BY start_at ASC
             LIMIT 1
             """,
-            (now_iso,),
+            params,
         ).fetchone()
     return row
 
 
-def get_current_or_next_shift(now_iso: str) -> sqlite3.Row | None:
+def get_current_or_next_shift(now_iso: str, owner_user_id: int | None = None) -> sqlite3.Row | None:
+    owner_sql = ""
+    params: list[object] = [now_iso]
+    if owner_user_id is not None:
+        owner_sql = "AND owner_user_id = ?"
+        params.append(owner_user_id)
+    params.append(now_iso)
     with get_connection() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT *
             FROM shifts
             WHERE deleted_from_source = 0
               AND end_at >= ?
+              {owner_sql}
             ORDER BY
               CASE WHEN start_at <= ? THEN 0 ELSE 1 END,
               start_at ASC,
               id ASC
             LIMIT 1
             """,
-            (now_iso, now_iso),
+            params,
         ).fetchone()
     return row
 
 
-def get_upcoming_shifts(now_iso: str, limit: int = 5) -> list[sqlite3.Row]:
+def get_upcoming_shifts(now_iso: str, limit: int = 5, owner_user_id: int | None = None) -> list[sqlite3.Row]:
+    owner_sql = ""
+    params: list[object] = [now_iso]
+    if owner_user_id is not None:
+        owner_sql = "AND s.owner_user_id = ?"
+        params.append(owner_user_id)
+    params.append(limit)
     with get_connection() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT s.*, m.checked, m.confirmed, m.important, m.question,
                    m.early_start, m.gear_needed, m.travel_needed, m.pay_check,
                    m.private_note, m.custom_colour, m.timing_adjustment_time,
@@ -1209,10 +1510,11 @@ def get_upcoming_shifts(now_iso: str, limit: int = 5) -> list[sqlite3.Row]:
             LEFT JOIN shift_marks m ON m.shift_id = s.id
             WHERE s.deleted_from_source = 0
               AND s.start_at >= ?
+              {owner_sql}
             ORDER BY s.start_at ASC
             LIMIT ?
             """,
-            (now_iso, limit),
+            params,
         ).fetchall()
     return rows
 

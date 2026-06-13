@@ -596,6 +596,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
         key=lambda item: (str(item.get("start") or ""), str(item.get("id") or "")),
     )
     used_area_ids = {str(shift.get("area") or "") for shift in extracted_schedule_shifts}
+    used_area_ids.update(str(shift.get("area") or "") for shift in extracted_shifts_by_id.values())
     area_refs = sorted(
         (area for area_id, area in area_refs_by_id.items() if area_id in used_area_ids),
         key=lambda item: (
@@ -637,8 +638,14 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     )
 
 
-async def capture_and_save_deputy_web(settings: Settings | None = None) -> dict[str, object]:
+async def capture_and_save_deputy_web(
+    settings: Settings | None = None,
+    owner_user_id: int | None = None,
+) -> dict[str, object]:
     settings = settings or get_settings()
+    saved_own_shift_rows = 0
+    own_shift_rows_created = 0
+    own_shift_rows_updated = 0
     saved_schedule_rows = 0
     try:
         result = await run_deputy_web_capture(settings)
@@ -654,12 +661,23 @@ async def capture_and_save_deputy_web(settings: Settings | None = None) -> dict[
         return {
             "status": "error",
             "message": message,
+            "saved_own_shift_rows": 0,
+            "own_shift_rows_created": 0,
+            "own_shift_rows_updated": 0,
             "saved_schedule_rows": 0,
             "payload": payload,
         }
 
     if result.payload:
-        saved_schedule_rows = save_deputy_web_schedule(result.payload)
+        save_result = save_deputy_web_schedule(result.payload, owner_user_id=owner_user_id)
+        saved_own_shift_rows = int(save_result.get("own_seen", 0))
+        own_shift_rows_created = int(save_result.get("own_created", 0))
+        own_shift_rows_updated = int(save_result.get("own_updated", 0))
+        saved_schedule_rows = int(save_result.get("schedule_saved", 0))
+        if saved_own_shift_rows:
+            result.payload.setdefault("events", []).append(
+                f"Saved {saved_own_shift_rows} own roster rows locally."
+            )
         if saved_schedule_rows:
             result.payload.setdefault("events", []).append(f"Saved {saved_schedule_rows} schedule rows locally.")
         update_app_settings({"last_deputy_web_capture": json.dumps(result.payload, ensure_ascii=True)})
@@ -667,21 +685,27 @@ async def capture_and_save_deputy_web(settings: Settings | None = None) -> dict[
     return {
         "status": result.status,
         "message": result.message,
+        "saved_own_shift_rows": saved_own_shift_rows,
+        "own_shift_rows_created": own_shift_rows_created,
+        "own_shift_rows_updated": own_shift_rows_updated,
         "saved_schedule_rows": saved_schedule_rows,
         "payload": result.payload,
     }
 
 
-def sync_deputy_web_schedule(settings: Settings | None = None) -> dict[str, object]:
+def sync_deputy_web_schedule(settings: Settings | None = None, owner_user_id: int | None = None) -> dict[str, object]:
     settings = settings or get_settings()
     if not settings.deputy_login_configured:
         return {
             "status": "skipped",
             "message": "Deputy web capture skipped because login env is incomplete.",
+            "saved_own_shift_rows": 0,
+            "own_shift_rows_created": 0,
+            "own_shift_rows_updated": 0,
             "saved_schedule_rows": 0,
             "payload": {},
         }
-    return asyncio.run(capture_and_save_deputy_web(settings))
+    return asyncio.run(capture_and_save_deputy_web(settings, owner_user_id=owner_user_id))
 
 
 def format_capture_payload(value: str) -> dict[str, Any] | None:

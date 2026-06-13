@@ -59,6 +59,7 @@ from .security import (
     session_expires_at,
     verify_pin,
 )
+from .user_credentials import settings_for_user
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -1322,7 +1323,11 @@ def sync_summary_message(summary: dict[str, object]) -> str:
         parts.append(str(calendar_result.get("message") or "iCal sync failed."))
 
     if web_result.get("status") == "ok":
-        parts.append(f"Deputy web capture saved {web_result.get('saved_schedule_rows', 0)} schedule rows.")
+        parts.append(
+            "Deputy web capture saved "
+            f"{web_result.get('saved_own_shift_rows', 0)} roster rows and "
+            f"{web_result.get('saved_schedule_rows', 0)} schedule rows."
+        )
     elif web_result.get("status") == "skipped":
         parts.append(str(web_result.get("message") or "Deputy web capture skipped."))
     elif web_result:
@@ -1393,9 +1398,13 @@ def queue_manual_sync(background_tasks: BackgroundTasks, user_id: int | None = N
     return True
 
 
-def build_timesheet_summary(submission_date: date) -> dict[str, object]:
+def build_timesheet_summary(submission_date: date, owner_user_id: int | None = None) -> dict[str, object]:
     period_start, period_end = timesheet_period(submission_date)
-    rows = fetch_shifts_between(period_start.isoformat(), period_end.isoformat())
+    rows = fetch_shifts_between(
+        period_start.isoformat(),
+        period_end.isoformat(),
+        owner_user_id=owner_user_id,
+    )
     shifts_by_date: dict[str, list[dict[str, object]]] = {}
     for row in rows:
         shifts_by_date.setdefault(row["date"], []).append(decorate_shift(row))
@@ -1632,6 +1641,8 @@ def month_view(
     notice: str | None = None,
 ) -> object:
     settings = get_settings()
+    user = current_user(request)
+    owner_user_id = int(user["id"]) if user and user.get("id") is not None else None
     today = datetime.now(settings.timezone).date()
     view = "list" if view == "list" else "month"
     year = year or today.year
@@ -1643,7 +1654,7 @@ def month_view(
     month_weeks = cal.monthdatescalendar(year, month)
     grid_start = month_weeks[0][0].isoformat()
     grid_end = month_weeks[-1][-1].isoformat()
-    rows = fetch_shifts_between(grid_start, grid_end)
+    rows = fetch_shifts_between(grid_start, grid_end, owner_user_id=owner_user_id)
     open_shifts_by_date = open_schedule_by_date(grid_start, grid_end)
 
     shifts_by_date: dict[str, list[dict[str, object]]] = {}
@@ -1701,7 +1712,7 @@ def month_view(
     first_day = date(year, month, 1)
     now_iso = datetime.now(settings.timezone).replace(microsecond=0).isoformat()
     upcoming_shifts = combine_adjacent_shifts(
-        [decorate_shift(row) for row in get_upcoming_shifts(now_iso, limit=10)]
+        [decorate_shift(row) for row in get_upcoming_shifts(now_iso, limit=10, owner_user_id=owner_user_id)]
     )[:5]
 
     return templates.TemplateResponse(
@@ -1709,7 +1720,7 @@ def month_view(
         {
             "request": request,
             "notice": notice,
-            "current_user": current_user(request),
+            "current_user": user,
             "header_context": first_day.strftime("%B %Y"),
             "header_prev_url": f"/month?year={prev_year}&month={prev_month}&view={view}",
             "header_next_url": f"/month?year={next_year}&month={next_month}&view={view}",
@@ -1739,13 +1750,15 @@ def timesheet_view(request: Request, date_text: str, notice: str | None = None) 
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Invalid date") from exc
 
-    summary = build_timesheet_summary(submission_date)
+    user = current_user(request)
+    owner_user_id = int(user["id"]) if user and user.get("id") is not None else None
+    summary = build_timesheet_summary(submission_date, owner_user_id=owner_user_id)
     return templates.TemplateResponse(
         "timesheet.html",
         {
             "request": request,
             "notice": notice,
-            "current_user": current_user(request),
+            "current_user": user,
             "summary": summary,
             "month_year": submission_date.year,
             "month_number": submission_date.month,
@@ -1760,7 +1773,11 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Invalid date") from exc
 
-    shifts = combine_adjacent_shifts([decorate_shift(row) for row in fetch_shifts_for_date(date_text)])
+    user = current_user(request)
+    owner_user_id = int(user["id"]) if user and user.get("id") is not None else None
+    shifts = combine_adjacent_shifts(
+        [decorate_shift(row) for row in fetch_shifts_for_date(date_text, owner_user_id=owner_user_id)]
+    )
     changes_by_shift: dict[int, list[dict[str, object]]] = {}
     for row in get_shift_changes_for_date(date_text):
         change = decorate_change(row)
@@ -1793,7 +1810,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
         {
             "request": request,
             "notice": notice,
-            "current_user": current_user(request),
+            "current_user": user,
             "date_text": date_text,
             "day_date": day_date,
             "month_year": day_date.year,
@@ -1870,9 +1887,10 @@ def mark_shift_viewed(shift_id: int) -> RedirectResponse:
 def settings_view(request: Request, notice: str | None = None) -> object:
     settings = get_settings()
     user = current_user(request)
-    user_can_sync = bool(user and user_has_deputy_credentials(int(user["id"])))
+    owner_user_id = int(user["id"]) if user and user.get("id") is not None else None
+    user_can_sync = bool(owner_user_id is not None and user_has_deputy_credentials(owner_user_id))
     now = datetime.now(settings.timezone).replace(microsecond=0)
-    next_shift = get_next_upcoming_shift(now.isoformat())
+    next_shift = get_next_upcoming_shift(now.isoformat(), owner_user_id=owner_user_id)
     pre_shift = get_pre_shift_status(settings)
     calendar_url = get_calendar_url(settings)
     deputy_web_capture = format_capture_payload(get_last_deputy_web_capture())
@@ -1967,8 +1985,12 @@ def test_deputy_api() -> RedirectResponse:
 
 
 @app.post("/settings/deputy-web-capture")
-async def capture_deputy_web() -> RedirectResponse:
-    result = await capture_and_save_deputy_web(get_settings())
+async def capture_deputy_web(request: Request) -> RedirectResponse:
+    user = current_user(request)
+    user_id = int(user["id"]) if user and user.get("id") is not None else None
+    settings = get_settings()
+    runtime_settings = settings_for_user(user_id, settings) if user_id is not None else None
+    result = await capture_and_save_deputy_web(runtime_settings or settings, owner_user_id=user_id)
     return RedirectResponse(url=notice_url("/settings", str(result["message"])), status_code=303)
 
 
