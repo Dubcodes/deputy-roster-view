@@ -12,6 +12,7 @@ Deputy Roster View is a private FastAPI/Jinja/SQLite app that re-presents a Depu
 - `docs/DOMAIN_RULES.md` - roster/timing/domain rules learned from the user.
 - `docs/ARCHITECTURE.md` - important modules and data flow.
 - `docs/DECISIONS.md` - decisions and why they were made.
+- `docs/MULTI_USER_PLAN.md` - planned shared multi-user expansion.
 - `docs/TESTING.md` - local checks before committing.
 - `docs/AI_TASK_TEMPLATE.md` - prompt template for future AI handovers.
 
