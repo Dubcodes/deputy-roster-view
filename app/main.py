@@ -670,7 +670,10 @@ def parse_shift_title(title: str | None) -> dict[str, str]:
     if not race_type_code:
         race_type_code = DEFAULT_RACE_TYPE_BY_CODE.get(track_code, "")
 
-    track_label = TRACK_NAMES.get(track_code)
+    if race_type_code == "T" and track_code == "CAMBRIDGE":
+        track_label = "Cambridge Synthetic"
+    else:
+        track_label = TRACK_NAMES.get(track_code)
     if not track_label:
         base_code = track_code.removesuffix("-T")
         track_label = TRACK_NAMES.get(base_code, track_code.replace("-", " ").title())

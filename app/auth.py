@@ -70,6 +70,7 @@ async def trusted_device_middleware(
                 "display_name": device["display_name"],
                 "deputy_email": device["deputy_email"],
                 "is_admin": device["is_admin"],
+                "last_sync_at": device["last_sync_at"],
             }
             update_trusted_device_seen(int(device["id"]), expires_at)
             update_app_user_seen(int(device["user_id"]))

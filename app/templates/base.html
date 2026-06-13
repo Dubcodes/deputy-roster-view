@@ -9,7 +9,17 @@
   </head>
   <body>
     <header class="site-header">
-      <a class="brand" href="/month">Deputy Roster View</a>
+      <div class="brand-stack">
+        <a class="brand" href="/month">Deputy Roster View</a>
+        {% if current_user %}
+          <span class="brand-meta">
+            {{ current_user.display_name or "Roster" }}
+            {% if current_user.last_sync_at %}
+              · synced {{ current_user.last_sync_at|datetime("%d %b %H:%M") }}
+            {% endif %}
+          </span>
+        {% endif %}
+      </div>
       {% if header_context %}
         <nav class="month-nav" aria-label="Month navigation">
           <a class="icon-button month-step" href="{{ header_prev_url }}" aria-label="Previous month">

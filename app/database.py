@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from datetime import datetime
 from typing import Iterable
@@ -175,6 +176,13 @@ def init_db(settings: Settings | None = None) -> None:
                 name TEXT,
                 location_id INTEGER,
                 roster_sort_order INTEGER,
+                updated_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_schedule_locations (
+                location_id INTEGER PRIMARY KEY,
+                name TEXT,
+                address TEXT,
                 updated_at TEXT
             );
 
@@ -548,9 +556,11 @@ def get_trusted_device(token_hash: str, now: str | None = None) -> sqlite3.Row |
                 u.deputy_email,
                 u.display_name,
                 u.is_admin,
-                u.is_active
+                u.is_active,
+                s.last_sync_at
             FROM trusted_devices d
             JOIN app_users u ON u.id = d.user_id
+            LEFT JOIN user_sync_state s ON s.user_id = u.id
             WHERE d.token_hash = ?
               AND d.revoked_at IS NULL
               AND d.expires_at > ?
@@ -1035,6 +1045,36 @@ DEPUTY_AREA_OVERRIDES = {
 }
 
 
+def _static_location_lookup() -> dict[int, dict[str, object]]:
+    locations = {}
+    for location_id, source_code in DEPUTY_LOCATION_CODES.items():
+        locations[location_id] = {
+            "id": location_id,
+            "name": source_code,
+            "address": DEPUTY_LOCATION_ADDRESSES.get(location_id, ""),
+        }
+    return locations
+
+
+def _location_source_code(location_id: int | None, location_lookup: dict[int, dict[str, object]]) -> str:
+    if location_id is None:
+        return ""
+    location = location_lookup.get(location_id) or {}
+    name = str(location.get("name") or "").strip()
+    if not name:
+        return DEPUTY_LOCATION_CODES.get(location_id, "")
+    name = re.sub(r"\s+", " ", name)
+    name = re.sub(r"^([A-Z])\s*-\s*", r"\1-", name, flags=re.IGNORECASE)
+    return name
+
+
+def _location_address(location_id: int | None, location_lookup: dict[int, dict[str, object]]) -> str:
+    if location_id is None:
+        return ""
+    location = location_lookup.get(location_id) or {}
+    return str(location.get("address") or DEPUTY_LOCATION_ADDRESSES.get(location_id, "") or "").strip()
+
+
 SCHEDULE_COMPARE_FIELDS = (
     ("area_name", "Position"),
     ("employee_name", "Person"),
@@ -1078,9 +1118,11 @@ def _display_change_value(value: object) -> str:
 def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | None = None) -> dict[str, int]:
     captured_at = str(payload.get("captured_at") or datetime.now().isoformat(timespec="seconds"))
     areas = payload.get("areas") if isinstance(payload.get("areas"), list) else []
+    locations = payload.get("locations") if isinstance(payload.get("locations"), list) else []
     own_shifts = payload.get("extracted_shifts") if isinstance(payload.get("extracted_shifts"), list) else []
     shifts = payload.get("extracted_schedule_shifts") if isinstance(payload.get("extracted_schedule_shifts"), list) else []
     area_lookup: dict[str, dict[str, object]] = {}
+    location_lookup: dict[int, dict[str, object]] = _static_location_lookup()
     schedule_shift_lookup = {
         str(shift.get("id")): shift
         for shift in shifts
@@ -1088,6 +1130,52 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
     }
 
     with get_connection() as conn:
+        for row in conn.execute("SELECT * FROM deputy_schedule_locations").fetchall():
+            location_id = _optional_int(row["location_id"])
+            if location_id is None:
+                continue
+            location_lookup[location_id] = {
+                "id": location_id,
+                "name": row["name"] or "",
+                "address": row["address"] or "",
+            }
+
+        for location in locations:
+            if not isinstance(location, dict) or location.get("id") in (None, ""):
+                continue
+            location_id = int(location["id"])
+            name = str(location.get("name") or location_id).strip()
+            address = str(location.get("address") or "").strip()
+            location_lookup[location_id] = {
+                "id": location_id,
+                "name": name,
+                "address": address,
+            }
+            conn.execute(
+                """
+                INSERT INTO deputy_schedule_locations (
+                    location_id, name, address, updated_at
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(location_id) DO UPDATE SET
+                    name = excluded.name,
+                    address = excluded.address,
+                    updated_at = excluded.updated_at
+                """,
+                (location_id, name, address, captured_at),
+            )
+
+        for row in conn.execute("SELECT * FROM deputy_schedule_areas").fetchall():
+            area_id = _optional_int(row["area_id"])
+            if area_id is None:
+                continue
+            area_lookup[str(area_id)] = {
+                "id": area_id,
+                "name": row["name"] or "",
+                "locationId": row["location_id"],
+                "rosterSortOrder": row["roster_sort_order"],
+            }
+
         for area in areas:
             if not isinstance(area, dict) or area.get("id") in (None, ""):
                 continue
@@ -1119,6 +1207,7 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
             own_shifts,
             schedule_shift_lookup,
             area_lookup,
+            location_lookup,
             captured_at,
             owner_user_id,
         )
@@ -1231,6 +1320,7 @@ def _save_deputy_web_own_shifts(
     own_shifts: list[object],
     schedule_shift_lookup: dict[str, object],
     area_lookup: dict[str, dict[str, object]],
+    location_lookup: dict[int, dict[str, object]],
     captured_at: str,
     owner_user_id: int | None,
 ) -> dict[str, int]:
@@ -1248,6 +1338,7 @@ def _save_deputy_web_own_shifts(
         values = _deputy_web_shift_values(
             merged_shift,
             area_lookup,
+            location_lookup,
             captured_at,
             source_url_hash,
             owner_user_id,
@@ -1383,6 +1474,7 @@ def _deputy_web_shift_changes(existing: sqlite3.Row, values: dict[str, object]) 
 def _deputy_web_shift_values(
     shift: dict[str, object],
     area_lookup: dict[str, dict[str, object]],
+    location_lookup: dict[int, dict[str, object]],
     captured_at: str,
     source_url_hash: str,
     owner_user_id: int | None,
@@ -1407,9 +1499,9 @@ def _deputy_web_shift_values(
         location_id = _optional_int(area.get("locationId"))
     area_override = DEPUTY_AREA_OVERRIDES.get(area_id or -1, {})
     role_label = str(area_override.get("role") or area_name or "Shift").strip()
-    source_code = str(area_override.get("source_code") or DEPUTY_LOCATION_CODES.get(location_id or -1) or "WEB").strip()
+    source_code = str(area_override.get("source_code") or _location_source_code(location_id, location_lookup) or "WEB").strip()
     title = f"[{source_code}] {role_label}".strip()
-    location = str(area_override.get("location") or DEPUTY_LOCATION_ADDRESSES.get(location_id or -1) or "").strip()
+    location = str(area_override.get("location") or _location_address(location_id, location_lookup)).strip()
     raw_hours = round((end_dt - start_dt).total_seconds() / 3600, 2)
     break_minutes = 0
     paid_hours = raw_hours
@@ -1429,6 +1521,7 @@ def _deputy_web_shift_values(
         "area_id": area_id,
         "area_name": area_name,
         "area_location_id": location_id,
+        "location_name": str((location_lookup.get(location_id or -1) or {}).get("name") or ""),
         "employee_id": _optional_int(shift.get("employee")),
         "status": source_status,
         "captured_at": captured_at,

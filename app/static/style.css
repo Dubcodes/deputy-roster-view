@@ -62,10 +62,28 @@ a {
   backdrop-filter: blur(10px);
 }
 
-.brand {
+.brand-stack {
   grid-column: 1;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.brand {
   font-weight: 800;
   text-decoration: none;
+}
+
+.brand-meta {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .month-nav {
@@ -1872,10 +1890,19 @@ th {
     flex-direction: column;
   }
 
+  .brand-stack {
+    max-width: 92px;
+    align-self: center;
+  }
+
   .brand {
     max-width: 78px;
-    align-self: center;
     font-size: 0.72rem;
+    line-height: 1.05;
+  }
+
+  .brand-meta {
+    font-size: 0.58rem;
     line-height: 1.05;
   }
 
