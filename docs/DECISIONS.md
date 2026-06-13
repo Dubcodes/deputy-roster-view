@@ -12,6 +12,10 @@ iCal is stable enough for backup roster data and does not need Deputy API access
 
 The user does not have an official API token. The app uses logged-in web capture to read the same schedule data Deputy shows in the browser. This remains read-only.
 
+## Personal Roster Capture Uses Weekly Windows
+
+Deputy's logged-in shift endpoint can return only the first page/chunk when asked for one very wide date range. The app still keeps the configurable lookback/lookahead window, but fetches the user's own roster in weekly slices and merges the rows locally so future roster weeks are not silently missed.
+
 ## Stagger User Syncs
 
 Multiple users should not all hit Deputy at 5am or at the same pre-shift window. The scheduler plans per-user sync windows with configurable spacing and small deterministic jitter, then runs due accounts in a small batch, default one account at a time.

@@ -26,7 +26,7 @@
 
 It should prefer an All Locations schedule capture. If that is not selectable, it falls back to upcoming known roster locations.
 
-After login, it also asks Deputy's own web endpoint for the user's personal published shifts over a wider window. Defaults are 45 days back and 120 days forward, configurable with `OWN_ROSTER_LOOKBACK_DAYS` and `OWN_ROSTER_LOOKAHEAD_DAYS`.
+After login, it also asks Deputy's own web endpoint for the user's personal published shifts over a wider window. Defaults are 45 days back and 120 days forward, configurable with `OWN_ROSTER_LOOKBACK_DAYS` and `OWN_ROSTER_LOOKAHEAD_DAYS`. The wider capture is split into weekly requests because Deputy can return only the first page/chunk when asked for one large date range.
 
 Schedule display is scoped by both date and Deputy location ID. This keeps split-crew days clean when two meetings or work groups happen at once.
 

@@ -515,22 +515,17 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         events.append("Could not identify the Deputy employee id for extended own-roster capture.")
                         return
 
-                    now = datetime.now(settings.timezone)
-                    lookback_days = max(0, settings.own_roster_lookback_days)
-                    lookahead_days = max(1, settings.own_roster_lookahead_days)
-                    start_at = (now - timedelta(days=lookback_days)).replace(hour=0, minute=0, second=0, microsecond=0)
-                    end_at = (now + timedelta(days=lookahead_days)).replace(hour=23, minute=59, second=59, microsecond=0)
-                    query = urlencode(
-                        {
-                            "start": start_at.isoformat(),
-                            "end": end_at.isoformat(),
-                            "employee": employee_id,
-                            "published": "TRUE",
-                        }
-                    )
-                    path = f"/api/management/v2/shifts?{query}"
-                    try:
-                        result = await page.evaluate(
+                    async def fetch_shift_window(window_start: datetime, window_end: datetime) -> dict[str, Any]:
+                        query = urlencode(
+                            {
+                                "start": window_start.isoformat(),
+                                "end": window_end.isoformat(),
+                                "employee": employee_id,
+                                "published": "TRUE",
+                            }
+                        )
+                        path = f"/api/management/v2/shifts?{query}"
+                        return await page.evaluate(
                             """
                             async (path) => {
                               const response = await fetch(path, {
@@ -544,41 +539,90 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             """,
                             path,
                         )
-                    except Exception as exc:
-                        events.append(f"Extended own-roster capture failed: {redacted_text(str(exc))[:180]}.")
-                        return
 
-                    body = result.get("body") if isinstance(result, dict) else None
-                    status = int(result.get("status") or 0) if isinstance(result, dict) else 0
-                    if len(captured) < MAX_CAPTURED_RESPONSES:
-                        captured.append(
-                            {
-                                "url": _clean_url(_api_url(settings, path)),
-                                "method": "GET",
-                                "status": status,
-                                "shape": _top_level_shape(body),
-                                "sample": _safe_json_sample(body),
-                            }
+                    now = datetime.now(settings.timezone)
+                    lookback_days = max(0, settings.own_roster_lookback_days)
+                    lookahead_days = max(1, settings.own_roster_lookahead_days)
+                    start_at = (now - timedelta(days=lookback_days)).replace(hour=0, minute=0, second=0, microsecond=0)
+                    end_at = (now + timedelta(days=lookahead_days)).replace(hour=23, minute=59, second=59, microsecond=0)
+                    initial_shift_ids = set(extracted_shifts_by_id)
+                    request_count = 0
+                    failed_requests = 0
+                    rows_seen = 0
+                    paged_windows = 0
+                    window_start = start_at
+
+                    while window_start <= end_at:
+                        window_end = min(
+                            window_start + timedelta(days=6, hours=23, minutes=59, seconds=59),
+                            end_at,
                         )
-                    if not isinstance(result, dict) or not result.get("ok"):
-                        events.append(f"Extended own-roster capture returned HTTP {status or 'unknown'}.")
-                        return
-
-                    added = 0
-                    for shift in _extract_management_shifts(body):
-                        shift_id = str(shift.get("id") or "")
-                        if not shift_id:
+                        try:
+                            result = await fetch_shift_window(window_start, window_end)
+                        except Exception as exc:
+                            failed_requests += 1
+                            events.append(
+                                "Extended own-roster capture failed for "
+                                f"{window_start.date().isoformat()} to {window_end.date().isoformat()}: "
+                                f"{redacted_text(str(exc))[:180]}."
+                            )
+                            window_start = (window_end + timedelta(seconds=1)).replace(
+                                hour=0,
+                                minute=0,
+                                second=0,
+                                microsecond=0,
+                            )
                             continue
-                        before = shift_id in extracted_shifts_by_id
-                        extracted_shifts_by_id[shift_id] = shift
-                        remember_employee_id(shift.get("employee"))
-                        if not before:
-                            added += 1
+
+                        request_count += 1
+                        body = result.get("body") if isinstance(result, dict) else None
+                        status = int(result.get("status") or 0) if isinstance(result, dict) else 0
+                        if not isinstance(result, dict) or not result.get("ok"):
+                            failed_requests += 1
+                            events.append(
+                                "Extended own-roster capture returned "
+                                f"HTTP {status or 'unknown'} for "
+                                f"{window_start.date().isoformat()} to {window_end.date().isoformat()}."
+                            )
+                            window_start = (window_end + timedelta(seconds=1)).replace(
+                                hour=0,
+                                minute=0,
+                                second=0,
+                                microsecond=0,
+                            )
+                            continue
+
+                        shifts = _extract_management_shifts(body)
+                        rows_seen += len(shifts)
+                        if isinstance(body, dict) and body.get("nextCursor"):
+                            paged_windows += 1
+                        for shift in shifts:
+                            shift_id = str(shift.get("id") or "")
+                            if not shift_id:
+                                continue
+                            extracted_shifts_by_id[shift_id] = shift
+                            remember_employee_id(shift.get("employee"))
+                        window_start = (window_end + timedelta(seconds=1)).replace(
+                            hour=0,
+                            minute=0,
+                            second=0,
+                            microsecond=0,
+                        )
+
+                    added = len(set(extracted_shifts_by_id) - initial_shift_ids)
                     events.append(
                         "Extended own-roster capture covered "
                         f"{start_at.date().isoformat()} to {end_at.date().isoformat()} "
+                        f"in {request_count} weekly requests, saw {rows_seen} shift rows, "
                         f"and added {added} shift rows."
                     )
+                    if failed_requests:
+                        events.append(f"Extended own-roster capture had {failed_requests} failed weekly requests.")
+                    if paged_windows:
+                        events.append(
+                            "Deputy returned pagination cursors inside "
+                            f"{paged_windows} weekly own-roster windows."
+                        )
 
                 async def capture_response(response: Any) -> None:
                     try:
