@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}Login - Deputy Roster View{% endblock %}
+
+{% block content %}
+  <section class="auth-shell">
+    <div class="auth-panel">
+      <p class="eyebrow">Trusted device</p>
+      <h1>Open your roster</h1>
+      <p class="muted">Use your Deputy email and roster PIN. This device will stay signed in after login.</p>
+
+      <form class="auth-form" action="/login" method="post">
+        <input type="hidden" name="next_url" value="{{ next_url }}">
+        <label class="form-row">
+          <span>Deputy email</span>
+          <input type="email" name="deputy_email" autocomplete="username" required>
+        </label>
+        <label class="form-row">
+          <span>PIN</span>
+          <input type="password" name="pin" inputmode="numeric" autocomplete="current-password" required>
+        </label>
+        <button class="button" type="submit">Trust this device</button>
+      </form>
+
+      {% if signup_enabled %}
+        <a class="text-link" href="/signup">New user signup</a>
+      {% endif %}
+    </div>
+  </section>
+{% endblock %}

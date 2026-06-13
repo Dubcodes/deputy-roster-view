@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}Signup - Deputy Roster View{% endblock %}
+
+{% block content %}
+  <section class="auth-shell">
+    <div class="auth-panel">
+      <p class="eyebrow">Signup</p>
+      <h1>Connect your Deputy roster</h1>
+      <p class="muted">Enter your Deputy login once, then set a PIN for this roster viewer. This phone will stay trusted for a long time.</p>
+
+      <form class="auth-form" action="/signup" method="post">
+        <input type="hidden" name="next_url" value="{{ next_url }}">
+
+        <label class="form-row">
+          <span>Deputy URL</span>
+          <input type="url" name="deputy_web_url" value="{{ default_deputy_web_url }}" required>
+        </label>
+
+        <label class="form-row">
+          <span>Deputy email</span>
+          <input type="email" name="deputy_email" autocomplete="username" required>
+        </label>
+
+        <label class="form-row">
+          <span>Deputy password</span>
+          <input type="password" name="deputy_password" autocomplete="current-password" required>
+        </label>
+
+        <div class="form-grid-two">
+          <label class="form-row">
+            <span>PIN</span>
+            <input type="password" name="pin" inputmode="numeric" autocomplete="new-password" required>
+          </label>
+          <label class="form-row">
+            <span>Repeat PIN</span>
+            <input type="password" name="pin_confirm" inputmode="numeric" autocomplete="new-password" required>
+          </label>
+        </div>
+
+        <button class="button" type="submit">Create trusted device</button>
+      </form>
+
+      <p class="muted">Deputy passwords are encrypted before storage. PINs are hashed and cannot be read back.</p>
+      <a class="text-link" href="/login">Already signed up?</a>
+    </div>
+  </section>
+{% endblock %}

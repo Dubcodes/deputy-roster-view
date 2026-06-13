@@ -33,6 +33,21 @@ a {
   color: inherit;
 }
 
+.text-nav-link,
+.text-link {
+  color: var(--accent);
+  font-weight: 850;
+  text-decoration: none;
+}
+
+.text-nav-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 4px;
+  font-size: 0.86rem;
+}
+
 .site-header {
   position: sticky;
   top: 0;
@@ -224,6 +239,14 @@ a {
   background: #112c3a;
   color: #9bdcff;
   font-weight: 700;
+}
+
+.data-warning {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.35;
 }
 
 .summary-strip {
@@ -1217,8 +1240,15 @@ legend {
   font-weight: 800;
 }
 
+.form-grid-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 textarea,
 input[type="text"],
+input[type="email"],
 input[type="password"],
 input[type="url"],
 input[type="time"],
@@ -1522,6 +1552,31 @@ textarea {
   font-weight: 800;
 }
 
+.auth-shell {
+  display: grid;
+  min-height: min(560px, calc(100vh - 150px));
+  align-items: center;
+}
+
+.auth-panel {
+  width: min(520px, 100%);
+  margin: 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 18px;
+}
+
+.auth-panel h1 {
+  margin: 0 0 8px;
+}
+
+.auth-form {
+  display: grid;
+  gap: 14px;
+  margin: 16px 0;
+}
+
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1533,6 +1588,10 @@ textarea {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.settings-grid-two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .settings-grid-three {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -1540,6 +1599,43 @@ textarea {
 .settings-panel p {
   margin: 8px 0 0;
   color: var(--muted);
+}
+
+.admin-user-list,
+.admin-override-list {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-user-row,
+.admin-override-row {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  padding: 10px;
+}
+
+.admin-user-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.admin-user-row p,
+.admin-override-row p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.admin-user-row small,
+.admin-override-row small {
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.admin-override-form {
+  max-width: 760px;
 }
 
 .settings-quiet {
@@ -1844,14 +1940,20 @@ th {
   .summary-strip,
   .settings-grid,
   .settings-grid-wide,
+  .settings-grid-two,
   .settings-grid-three,
   .detail-grid,
   .race-day-grid,
   .shift-facts,
   .check-grid,
+  .form-grid-two,
   .timing-checks,
   .change-values,
   .source-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-user-row {
     grid-template-columns: 1fr;
   }
 

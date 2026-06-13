@@ -25,6 +25,17 @@ def render_day_template() -> None:
         hours=str,
         urlencode=quote_plus,
     )
+    for template_name in [
+        "admin.html",
+        "base.html",
+        "day.html",
+        "login.html",
+        "month.html",
+        "settings.html",
+        "signup.html",
+        "timesheet.html",
+    ]:
+        env.get_template(template_name)
     template = env.get_template("day.html")
     html = template.render(
         request={},

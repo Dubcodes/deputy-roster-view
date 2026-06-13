@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}Admin - Deputy Roster View{% endblock %}
+
+{% block content %}
+  <section class="page-heading compact-heading">
+    <div>
+      <p class="eyebrow">Admin</p>
+      <h1>Shared roster control</h1>
+    </div>
+  </section>
+
+  <section class="settings-grid settings-grid-two">
+    <article class="settings-panel">
+      <span class="summary-label">Users</span>
+      <strong>{{ users|length }}</strong>
+      <p class="muted">First signup becomes admin. Device sessions can be revoked in a later admin pass.</p>
+    </article>
+    <article class="settings-panel">
+      <span class="summary-label">Manual overrides</span>
+      <strong>{{ overrides|length }}</strong>
+      <p class="muted">Overrides are recorded for audit first; applying them to roster display is the next slice.</p>
+    </article>
+  </section>
+
+  <section class="table-panel">
+    <div class="section-heading">
+      <h2>Users</h2>
+    </div>
+    <div class="admin-user-list">
+      {% for user in users %}
+        <article class="admin-user-row">
+          <div>
+            <strong>{{ user.display_name or user.deputy_email }}</strong>
+            <p>{{ user.deputy_email }}</p>
+          </div>
+          <div>
+            {% if user.is_admin %}
+              <span class="badge">Admin</span>
+            {% endif %}
+            <span class="badge">{{ user.active_devices }} trusted device{% if user.active_devices != 1 %}s{% endif %}</span>
+          </div>
+          <small>Last seen {{ user.last_seen_at|datetime if user.last_seen_at else "Never" }}</small>
+        </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="table-panel">
+    <div class="section-heading">
+      <h2>Add Manual Override</h2>
+    </div>
+    <form class="marks-form admin-override-form" action="/admin/overrides" method="post">
+      <div class="form-grid-two">
+        <label class="form-row">
+          <span>Date</span>
+          <input type="text" name="target_date" placeholder="2026-06-13" required>
+        </label>
+        <label class="form-row">
+          <span>Track</span>
+          <input type="text" name="target_track" placeholder="Te Rapa">
+        </label>
+      </div>
+      <div class="form-grid-two">
+        <label class="form-row">
+          <span>Type</span>
+          <input type="text" name="override_type" placeholder="timing / position / note" required>
+        </label>
+        <label class="form-row">
+          <span>Label</span>
+          <input type="text" name="label" placeholder="Last race / Director / 685" required>
+        </label>
+      </div>
+      <label class="form-row">
+        <span>Value</span>
+        <input type="text" name="value" placeholder="16:45 / Jayden-lee / corrected vehicle" required>
+      </label>
+      <label class="form-row">
+        <span>Note</span>
+        <textarea name="note" rows="3" placeholder="Why this override exists"></textarea>
+      </label>
+      <button class="button" type="submit">Record Override</button>
+    </form>
+  </section>
+
+  <details class="table-panel" {% if overrides %}open{% endif %}>
+    <summary>Override Audit</summary>
+    {% if not overrides %}
+      <div class="empty-state">No manual overrides recorded yet.</div>
+    {% else %}
+      <div class="admin-override-list">
+        {% for item in overrides %}
+          <article class="admin-override-row">
+            <strong>{{ item.target_date }}{% if item.target_track %} · {{ item.target_track }}{% endif %}</strong>
+            <p>{{ item.override_type }} · {{ item.label }} = {{ item.value }}</p>
+            {% if item.note %}<p class="muted">{{ item.note }}</p>{% endif %}
+            <small>{{ item.created_at|datetime }} by {{ item.created_by_name or "Admin" }}</small>
+          </article>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </details>
+{% endblock %}

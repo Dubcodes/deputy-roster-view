@@ -8,23 +8,28 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .auth import require_auth
+from .auth import clear_trusted_device, current_user, require_admin_user, trusted_device_middleware
 from .config import get_settings
 from .database import (
     clear_all_changed_flags,
     clear_changed_for_date,
     clear_changed_for_shift,
+    count_app_users,
+    create_admin_override,
+    create_app_user,
+    create_trusted_device,
     fetch_open_deputy_schedule_between,
     fetch_open_deputy_schedule_shifts,
     fetch_deputy_schedule_for_date,
     get_calendar_url,
     get_calendar_url_source,
     get_deputy_schedule_snapshot,
+    get_app_user_by_email,
     get_shift_changes_for_date,
     get_last_deputy_web_capture,
     fetch_shift,
@@ -36,12 +41,23 @@ from .database import (
     get_recent_sync_logs,
     get_upcoming_shifts,
     init_db,
+    list_admin_overrides,
+    list_app_users,
     update_app_settings,
     update_shift_marks,
 )
 from .deputy_api import test_deputy_roster_api
 from .deputy_web import capture_and_save_deputy_web, format_capture_payload
 from .scheduler import get_pre_shift_status, shutdown_scheduler, start_scheduler, sync_roster_sources
+from .security import (
+    SESSION_COOKIE_NAME,
+    encrypt_text,
+    hash_pin,
+    hash_session_token,
+    new_session_token,
+    session_expires_at,
+    verify_pin,
+)
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -253,8 +269,8 @@ HIDDEN_SCHEDULE_POSITION_KEYS = {
 
 app = FastAPI(
     title="Deputy Roster View",
-    dependencies=[Depends(require_auth)],
 )
+app.middleware("http")(trusted_device_middleware)
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 _sync_worker_lock = threading.Lock()
@@ -1410,6 +1426,45 @@ def build_timesheet_summary(submission_date: date) -> dict[str, object]:
     }
 
 
+def safe_next_url(value: str | None, fallback: str = "/month") -> str:
+    if value and value.startswith("/") and not value.startswith("//"):
+        return value
+    return fallback
+
+
+def infer_display_name_from_email(email: str) -> str:
+    local_part = email.split("@", 1)[0].strip()
+    local_part = re.sub(r"[._-]+", " ", local_part)
+    display_name = " ".join(part.capitalize() for part in local_part.split() if part)
+    return display_name or "Roster User"
+
+
+def set_trusted_device_cookie(response: RedirectResponse, user: object, request: Request) -> None:
+    settings = get_settings()
+    token = new_session_token()
+    create_trusted_device(
+        user_id=int(user["id"]),
+        token_hash=hash_session_token(token),
+        expires_at=session_expires_at(settings),
+        label="Trusted device",
+        user_agent=request.headers.get("user-agent", ""),
+    )
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        max_age=settings.trusted_device_days * 24 * 60 * 60,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+
+
+def signup_enabled() -> bool:
+    settings = get_settings()
+    return settings.signup_enabled
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
@@ -1424,6 +1479,134 @@ def on_shutdown() -> None:
 @app.get("/")
 def home() -> RedirectResponse:
     return RedirectResponse(url="/month", status_code=303)
+
+
+@app.get("/signup")
+def signup_view(request: Request, next: str | None = None, notice: str | None = None) -> object:
+    if not signup_enabled() and count_app_users() > 0:
+        return RedirectResponse(url="/login", status_code=303)
+    return templates.TemplateResponse(
+        "signup.html",
+        {
+            "request": request,
+            "notice": notice,
+            "next_url": safe_next_url(next),
+            "default_deputy_web_url": get_settings().deputy_web_url,
+        },
+    )
+
+
+@app.post("/signup")
+async def signup_submit(request: Request) -> RedirectResponse:
+    form = await request.form()
+    next_url = safe_next_url(str(form.get("next_url") or ""))
+    settings = get_settings()
+    if not settings.signup_enabled and count_app_users() > 0:
+        return RedirectResponse(url=notice_url("/login", "Signup is currently closed."), status_code=303)
+
+    deputy_email = str(form.get("deputy_email") or "").strip().lower()
+    deputy_password = str(form.get("deputy_password") or "")
+    pin = str(form.get("pin") or "")
+    pin_confirm = str(form.get("pin_confirm") or "")
+    deputy_web_url = str(form.get("deputy_web_url") or settings.deputy_web_url).strip()
+
+    if "@" not in deputy_email:
+        return RedirectResponse(url=notice_url("/signup", "Enter your Deputy email address."), status_code=303)
+    if not deputy_password:
+        return RedirectResponse(url=notice_url("/signup", "Enter your Deputy password."), status_code=303)
+    if len(pin) < 4 or not pin.isdigit():
+        return RedirectResponse(url=notice_url("/signup", "Choose a numeric PIN with at least 4 digits."), status_code=303)
+    if pin != pin_confirm:
+        return RedirectResponse(url=notice_url("/signup", "PIN entries did not match."), status_code=303)
+    if not deputy_web_url.startswith(("http://", "https://")):
+        return RedirectResponse(url=notice_url("/signup", "Deputy URL must start with http:// or https://."), status_code=303)
+    if get_app_user_by_email(deputy_email) is not None:
+        return RedirectResponse(url=notice_url("/login", "That Deputy email is already signed up."), status_code=303)
+
+    user = create_app_user(
+        deputy_email=deputy_email,
+        display_name=infer_display_name_from_email(deputy_email),
+        pin_hash=hash_pin(pin),
+        deputy_web_url=deputy_web_url,
+        encrypted_email=encrypt_text(deputy_email, settings),
+        encrypted_password=encrypt_text(deputy_password, settings),
+    )
+    response = RedirectResponse(url=next_url, status_code=303)
+    set_trusted_device_cookie(response, user, request)
+    return response
+
+
+@app.get("/login")
+def login_view(request: Request, next: str | None = None, notice: str | None = None) -> object:
+    return templates.TemplateResponse(
+        "login.html",
+        {
+            "request": request,
+            "notice": notice,
+            "next_url": safe_next_url(next),
+            "signup_enabled": signup_enabled(),
+        },
+    )
+
+
+@app.post("/login")
+async def login_submit(request: Request) -> RedirectResponse:
+    form = await request.form()
+    next_url = safe_next_url(str(form.get("next_url") or ""))
+    deputy_email = str(form.get("deputy_email") or "").strip().lower()
+    pin = str(form.get("pin") or "")
+    user = get_app_user_by_email(deputy_email)
+    if user is None or not verify_pin(pin, str(user["pin_hash"] or "")):
+        return RedirectResponse(url=notice_url("/login", "Email or PIN was not recognised."), status_code=303)
+
+    response = RedirectResponse(url=next_url, status_code=303)
+    set_trusted_device_cookie(response, user, request)
+    return response
+
+
+@app.get("/logout")
+def logout_view(request: Request) -> RedirectResponse:
+    response = RedirectResponse(url="/login", status_code=303)
+    clear_trusted_device(request, response)
+    return response
+
+
+@app.get("/admin")
+def admin_view(request: Request, notice: str | None = None) -> object:
+    user = require_admin_user(request)
+    return templates.TemplateResponse(
+        "admin.html",
+        {
+            "request": request,
+            "notice": notice,
+            "header_mode": "settings",
+            "current_user": user,
+            "users": list_app_users(),
+            "overrides": list_admin_overrides(),
+        },
+    )
+
+
+@app.post("/admin/overrides")
+async def admin_create_override(request: Request) -> RedirectResponse:
+    user = require_admin_user(request)
+    form = await request.form()
+    target_date = str(form.get("target_date") or "").strip()
+    override_type = str(form.get("override_type") or "").strip()
+    label = str(form.get("label") or "").strip()
+    value = str(form.get("value") or "").strip()
+    if not target_date or not override_type or not label or not value:
+        return RedirectResponse(url=notice_url("/admin", "Date, type, label, and value are required."), status_code=303)
+    create_admin_override(
+        created_by_user_id=int(user["id"]),
+        target_date=target_date,
+        target_track=str(form.get("target_track") or "").strip(),
+        override_type=override_type,
+        label=label,
+        value=value,
+        note=str(form.get("note") or "").strip(),
+    )
+    return RedirectResponse(url=notice_url("/admin", "Admin override recorded."), status_code=303)
 
 
 @app.get("/month")
@@ -1512,6 +1695,7 @@ def month_view(
         {
             "request": request,
             "notice": notice,
+            "current_user": current_user(request),
             "header_context": first_day.strftime("%B %Y"),
             "header_prev_url": f"/month?year={prev_year}&month={prev_month}&view={view}",
             "header_next_url": f"/month?year={next_year}&month={next_month}&view={view}",
@@ -1547,6 +1731,7 @@ def timesheet_view(request: Request, date_text: str, notice: str | None = None) 
         {
             "request": request,
             "notice": notice,
+            "current_user": current_user(request),
             "summary": summary,
             "month_year": submission_date.year,
             "month_number": submission_date.month,
@@ -1594,6 +1779,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
         {
             "request": request,
             "notice": notice,
+            "current_user": current_user(request),
             "date_text": date_text,
             "day_date": day_date,
             "month_year": day_date.year,
@@ -1692,6 +1878,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
         {
             "request": request,
             "notice": notice,
+            "current_user": current_user(request),
             "header_mode": "settings",
             "settings": settings,
             "calendar_url_configured": bool(calendar_url),

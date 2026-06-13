@@ -14,15 +14,27 @@ The app is read-only against Deputy. It never writes back to Deputy.
 
 2. Either open `.env` and set `DEPUTY_ICAL_URL` to your Deputy calendar/iCal subscription URL, or paste the URL into Settings after the app starts.
 
-   Keep this URL private. It can grant access to your roster feed. Do not commit `.env`, paste it into logs, or share screenshots that reveal it. If you expose the app through a tunnel, set `APP_PASSWORD`.
+   Keep this URL private. It can grant access to your roster feed. Do not commit `.env`, paste it into logs, or share screenshots that reveal it.
 
-3. Optional: set `APP_PASSWORD` if you want HTTP Basic password protection.
+3. Optional: set a stable `APP_SECRET_KEY`.
 
    ```env
-   APP_PASSWORD=your-private-password
+   APP_SECRET_KEY=make-this-long-random-and-private
    ```
 
-4. Optional: set Deputy web env values if you want to test roster enrichment from the logged-in Deputy web app. Do not put these in Git.
+   If this is left blank, the app creates `data/app_secret.key` on first run. Keep either the env key or that generated file safe because it is used to encrypt stored Deputy login secrets.
+
+4. The first browser to open the app will be sent to `/signup`. The first signed-up user becomes admin. Each user enters their Deputy email, Deputy password, and a local PIN. PINs are hashed, Deputy passwords are encrypted, and the device receives a long-lived trusted-device cookie.
+
+   Useful env values:
+
+   ```env
+   TRUSTED_DEVICE_DAYS=730
+   SIGNUP_ENABLED=true
+   COOKIE_SECURE=false
+   ```
+
+5. Optional: set Deputy web env values if you want to keep using the old single-user enrichment fallback while the multi-user capture path is being built. Do not put these in Git.
 
    ```env
    DEPUTY_WEB_URL=https://your-business.au.deputy.com/#/
@@ -32,7 +44,7 @@ The app is read-only against Deputy. It never writes back to Deputy.
    DEPUTY_API_TOKEN=your-deputy-api-token
    ```
 
-   If you do not have an API token, use Settings -> Capture Web Data after the app is running. It opens Deputy in a headless browser, logs in with your env credentials, and captures a local diagnostics summary of the JSON responses the Deputy web app receives. This is read-only and is also used to save crew/role data locally when the login env is configured.
+   If you do not have an API token, use Settings -> Capture Web Data after the app is running. It opens Deputy in a headless browser, logs in with the configured credentials, and captures a local diagnostics summary of the JSON responses the Deputy web app receives. This is read-only and is also used to save crew/role data locally when the login env is configured.
 
 5. Optional: set `APP_PORT` if port `8096` conflicts with another service.
 
@@ -68,9 +80,11 @@ If you changed `APP_PORT`, use that port instead.
 
 ## Portainer
 
-In Portainer, create a stack from this repository. Set `APP_PORT` to whichever host port you want exposed. You can provide `DEPUTY_ICAL_URL` as an environment variable, or leave it blank and paste the URL into Settings once the app is running. The app stores its SQLite database in the bind-mounted `./data` directory.
+In Portainer, create a stack from this repository. Set `APP_PORT` to whichever host port you want exposed. You can provide `DEPUTY_ICAL_URL` as an environment variable, or leave it blank and paste the URL into Settings once the app is running. The app stores its SQLite database, generated app secret, and local data in the bind-mounted `./data` directory.
 
-If using Deputy web diagnostics, set `DEPUTY_LOGIN_EMAIL`, `DEPUTY_LOGIN_PASSWORD`, and `DEPUTY_DISPLAY_NAME` as Portainer environment variables. The app shows whether the login is configured, but never displays the password. Use Settings -> Capture Web Data to check whether the logged-in web app exposes richer roster data. Once configured, normal syncs also refresh this Deputy web crew data.
+For the new multi-user flow, open the app and complete `/signup`. For temporary testing through trycloudflared, keep `COOKIE_SECURE=false`. If you move to a permanent HTTPS-only domain later, set `COOKIE_SECURE=true`.
+
+If using the older Deputy web diagnostics fallback, set `DEPUTY_LOGIN_EMAIL`, `DEPUTY_LOGIN_PASSWORD`, and `DEPUTY_DISPLAY_NAME` as Portainer environment variables. The app shows whether the login is configured, but never displays the password. Use Settings -> Capture Web Data to check whether the logged-in web app exposes richer roster data. Once configured, normal syncs also refresh this Deputy web crew data.
 
 If you do have a Deputy API token, set `DEPUTY_API_TOKEN` and use Settings -> Test Deputy API. Most normal users will not have this.
 

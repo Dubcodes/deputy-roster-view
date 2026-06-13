@@ -18,7 +18,10 @@ class Settings:
     deputy_login_password: str
     deputy_display_name: str
     deputy_api_token: str
-    app_password: str
+    app_secret_key: str
+    trusted_device_days: int
+    signup_enabled: bool
+    cookie_secure: bool
     tz_name: str
     sync_at_hour: int
     early_pre_shift_sync_hours: int
@@ -34,10 +37,6 @@ class Settings:
     @property
     def calendar_configured(self) -> bool:
         return bool(self.deputy_ical_url.strip())
-
-    @property
-    def auth_enabled(self) -> bool:
-        return bool(self.app_password)
 
     @property
     def deputy_login_configured(self) -> bool:
@@ -69,6 +68,13 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     tz_name = os.getenv("TZ", DEFAULT_TZ) or DEFAULT_TZ
@@ -82,7 +88,10 @@ def get_settings() -> Settings:
         deputy_login_password=os.getenv("DEPUTY_LOGIN_PASSWORD", ""),
         deputy_display_name=os.getenv("DEPUTY_DISPLAY_NAME", "").strip(),
         deputy_api_token=os.getenv("DEPUTY_API_TOKEN", "").strip(),
-        app_password=os.getenv("APP_PASSWORD", ""),
+        app_secret_key=os.getenv("APP_SECRET_KEY", ""),
+        trusted_device_days=_int_env("TRUSTED_DEVICE_DAYS", 730),
+        signup_enabled=_bool_env("SIGNUP_ENABLED", True),
+        cookie_secure=_bool_env("COOKIE_SECURE", False),
         tz_name=tz_name,
         sync_at_hour=_int_env("SYNC_AT_HOUR", 5),
         early_pre_shift_sync_hours=_int_env("EARLY_PRE_SHIFT_SYNC_HOURS", 12),

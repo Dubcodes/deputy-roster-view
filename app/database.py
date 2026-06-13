@@ -92,6 +92,71 @@ def init_db(settings: Settings | None = None) -> None:
                 updated_at TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS app_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deputy_email TEXT UNIQUE,
+                display_name TEXT,
+                pin_hash TEXT,
+                deputy_web_url TEXT,
+                is_admin INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT,
+                updated_at TEXT,
+                last_seen_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS trusted_devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                token_hash TEXT UNIQUE,
+                label TEXT,
+                user_agent TEXT,
+                created_at TEXT,
+                last_seen_at TEXT,
+                expires_at TEXT,
+                revoked_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_user_secrets (
+                user_id INTEGER PRIMARY KEY,
+                encrypted_email TEXT,
+                encrypted_password TEXT,
+                encrypted_session_json TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_overrides (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT,
+                created_by_user_id INTEGER,
+                target_date TEXT,
+                target_track TEXT,
+                override_type TEXT,
+                label TEXT,
+                value TEXT,
+                note TEXT,
+                active INTEGER DEFAULT 1,
+                FOREIGN KEY (created_by_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS capture_coverage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT,
+                track_label TEXT,
+                source_user_id INTEGER,
+                captured_at TEXT,
+                crew_rows INTEGER DEFAULT 0,
+                open_shift_rows INTEGER DEFAULT 0,
+                warning_rows INTEGER DEFAULT 0,
+                unavailable_rows INTEGER DEFAULT 0,
+                status TEXT,
+                note TEXT,
+                UNIQUE(date, track_label),
+                FOREIGN KEY (source_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
             CREATE TABLE IF NOT EXISTS deputy_schedule_areas (
                 area_id INTEGER PRIMARY KEY,
                 name TEXT,
@@ -128,6 +193,9 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_sync_log_started_at ON sync_log(started_at);
             CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_date ON deputy_schedule_shifts(date);
             CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_start ON deputy_schedule_shifts(start_at);
+            CREATE INDEX IF NOT EXISTS idx_trusted_devices_token ON trusted_devices(token_hash);
+            CREATE INDEX IF NOT EXISTS idx_admin_overrides_date ON admin_overrides(target_date);
+            CREATE INDEX IF NOT EXISTS idx_capture_coverage_date ON capture_coverage(date);
             """
         )
         _ensure_column(conn, "shifts", "source_link", "TEXT")
@@ -140,6 +208,7 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "deputy_schedule_shifts", "changed_since_viewed", "INTEGER DEFAULT 0")
         _ensure_column(conn, "deputy_schedule_shifts", "last_changed_at", "TEXT")
         _ensure_column(conn, "deputy_schedule_shifts", "change_summary", "TEXT")
+        _ensure_column(conn, "app_users", "deputy_web_url", "TEXT")
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -153,6 +222,194 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
 
 def row_to_dict(row: sqlite3.Row | None) -> dict | None:
     return dict(row) if row is not None else None
+
+
+def count_app_users() -> int:
+    with get_connection() as conn:
+        row = conn.execute("SELECT COUNT(*) AS count FROM app_users").fetchone()
+    return int(row["count"] or 0) if row else 0
+
+
+def list_app_users() -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                u.*,
+                (
+                    SELECT COUNT(*)
+                    FROM trusted_devices d
+                    WHERE d.user_id = u.id
+                      AND d.revoked_at IS NULL
+                      AND d.expires_at > ?
+                ) AS active_devices
+            FROM app_users u
+            ORDER BY u.is_admin DESC, LOWER(u.display_name), LOWER(u.deputy_email)
+            """,
+            (datetime.now(get_settings().timezone).isoformat(timespec="seconds"),),
+        ).fetchall()
+    return rows
+
+
+def get_app_user(user_id: int) -> sqlite3.Row | None:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM app_users WHERE id = ? AND is_active = 1",
+            (user_id,),
+        ).fetchone()
+
+
+def get_app_user_by_email(email: str) -> sqlite3.Row | None:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM app_users WHERE LOWER(deputy_email) = LOWER(?)",
+            (email.strip(),),
+        ).fetchone()
+
+
+def create_app_user(
+    *,
+    deputy_email: str,
+    display_name: str,
+    pin_hash: str,
+    deputy_web_url: str,
+    encrypted_email: str,
+    encrypted_password: str,
+) -> sqlite3.Row:
+    now = datetime.now().isoformat(timespec="seconds")
+    is_admin = 1 if count_app_users() == 0 else 0
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO app_users (
+                deputy_email, display_name, pin_hash, deputy_web_url, is_admin,
+                is_active, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            """,
+            (deputy_email.strip(), display_name.strip(), pin_hash, deputy_web_url.strip(), is_admin, now, now),
+        )
+        user_id = int(cursor.lastrowid)
+        conn.execute(
+            """
+            INSERT INTO deputy_user_secrets (
+                user_id, encrypted_email, encrypted_password, encrypted_session_json, updated_at
+            )
+            VALUES (?, ?, ?, '', ?)
+            """,
+            (user_id, encrypted_email, encrypted_password, now),
+        )
+        return conn.execute("SELECT * FROM app_users WHERE id = ?", (user_id,)).fetchone()
+
+
+def update_app_user_seen(user_id: int) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE app_users SET last_seen_at = ? WHERE id = ?",
+            (now, user_id),
+        )
+
+
+def create_trusted_device(
+    *,
+    user_id: int,
+    token_hash: str,
+    expires_at: str,
+    label: str = "",
+    user_agent: str = "",
+) -> sqlite3.Row:
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO trusted_devices (
+                user_id, token_hash, label, user_agent, created_at, last_seen_at, expires_at, revoked_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (user_id, token_hash, label, user_agent[:500], now, now, expires_at),
+        )
+        return conn.execute("SELECT * FROM trusted_devices WHERE id = ?", (cursor.lastrowid,)).fetchone()
+
+
+def get_trusted_device(token_hash: str, now: str | None = None) -> sqlite3.Row | None:
+    now = now or datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT
+                d.*,
+                u.deputy_email,
+                u.display_name,
+                u.is_admin,
+                u.is_active
+            FROM trusted_devices d
+            JOIN app_users u ON u.id = d.user_id
+            WHERE d.token_hash = ?
+              AND d.revoked_at IS NULL
+              AND d.expires_at > ?
+              AND u.is_active = 1
+            """,
+            (token_hash, now),
+        ).fetchone()
+
+
+def update_trusted_device_seen(device_id: int) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE trusted_devices SET last_seen_at = ? WHERE id = ?",
+            (now, device_id),
+        )
+
+
+def revoke_trusted_device(device_id: int) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE trusted_devices SET revoked_at = ? WHERE id = ?",
+            (now, device_id),
+        )
+
+
+def create_admin_override(
+    *,
+    created_by_user_id: int,
+    target_date: str,
+    target_track: str,
+    override_type: str,
+    label: str,
+    value: str,
+    note: str,
+) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO admin_overrides (
+                created_at, created_by_user_id, target_date, target_track,
+                override_type, label, value, note, active
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            """,
+            (now, created_by_user_id, target_date, target_track, override_type, label, value, note),
+        )
+
+
+def list_admin_overrides(limit: int = 40) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT o.*, u.display_name AS created_by_name
+            FROM admin_overrides o
+            LEFT JOIN app_users u ON u.id = o.created_by_user_id
+            ORDER BY o.created_at DESC, o.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return rows
 
 
 def ensure_shift_mark(conn: sqlite3.Connection, shift_id: int) -> None:
