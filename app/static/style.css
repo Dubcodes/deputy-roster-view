@@ -1079,7 +1079,7 @@ a {
 
 .crew-roster-row {
   display: grid;
-  grid-template-columns: minmax(72px, 0.9fr) minmax(0, 1.35fr) minmax(56px, 0.75fr);
+  grid-template-columns: minmax(108px, 0.95fr) minmax(0, 1.35fr);
   gap: 8px;
   align-items: center;
   padding: 8px 10px;

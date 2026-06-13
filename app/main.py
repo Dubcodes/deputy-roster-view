@@ -1242,11 +1242,15 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
         is_vehicle = bool(item.get("is_vehicle_area"))
 
         if not employee_name:
+            vehicle_label = area_label if is_vehicle else ""
             open_entries.append(
                 {
                     "employee_name": "Open shift",
                     "position_label": "Open shift" if is_vehicle else area_label,
-                    "vehicle_label": area_label if is_vehicle else "",
+                    "vehicle_label": vehicle_label,
+                    "position_vehicle_label": (
+                        f"Open shift · {vehicle_label}" if vehicle_label else ("Open shift" if is_vehicle else area_label)
+                    ),
                     "sort_order": area_sort,
                     "changed": bool(item.get("assignment_changed")),
                     "change_summary": item.get("assignment_change_summary") or "",
@@ -1281,14 +1285,17 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
     for person in people_by_key.values():
         position_parts = list(person.get("position_parts") or [])
         vehicle_parts = list(person.get("vehicle_parts") or [])
+        position_label = ", ".join(position_parts) if position_parts else "Vehicle"
+        vehicle_label = ", ".join(vehicle_parts)
         sort_order = schedule_sort_value(person.get("position_sort"))
         if sort_order == 999999:
             sort_order = schedule_sort_value(person.get("vehicle_sort"))
         people.append(
             {
                 "employee_name": person.get("employee_name") or "Open shift",
-                "position_label": ", ".join(position_parts) if position_parts else "Vehicle",
-                "vehicle_label": ", ".join(vehicle_parts),
+                "position_label": position_label,
+                "vehicle_label": vehicle_label,
+                "position_vehicle_label": f"{position_label} · {vehicle_label}" if vehicle_label else position_label,
                 "sort_order": sort_order,
                 "changed": bool(person.get("changed")),
                 "change_summary": "; ".join(list(person.get("change_parts") or [])),

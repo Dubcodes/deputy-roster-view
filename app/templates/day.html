@@ -101,11 +101,10 @@
               <div class="crew-roster-row crew-roster-head" role="row">
                 <span role="columnheader">Position</span>
                 <span role="columnheader">Name</span>
-                <span role="columnheader">Vehicle</span>
               </div>
               {% for person in deputy_schedule_people %}
                 <div class="crew-roster-row{% if person.changed %} has-change{% endif %}" role="row">
-                  <span role="cell">{{ person.position_label }}</span>
+                  <span role="cell">{{ person.position_vehicle_label or person.position_label }}</span>
                   <strong class="crew-name" role="cell">
                     <span>{{ person.employee_name }}</span>
                     {% if person.changed %}
@@ -115,7 +114,6 @@
                       </details>
                     {% endif %}
                   </strong>
-                  <span role="cell">{{ person.vehicle_label or "-" }}</span>
                 </div>
               {% endfor %}
             </div>

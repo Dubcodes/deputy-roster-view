@@ -20,6 +20,10 @@ Deputy's logged-in shift endpoint can return only the first page/chunk when aske
 
 The personal shift endpoint often returns only area/location IDs, so the app stores Deputy's schedule filter location list and reuses it during import. Dynamic Deputy names win over old hard-coded fallbacks because the fallback IDs can be incomplete or stale.
 
+## Schedule Coverage Uses Batched Searches
+
+Deputy's schedule UI can fail to expose All Locations in a headless capture, especially for non-admin users. After login, the app now uses the learned location list to query upcoming racing schedules in weekly batches. This is still read-only and staggered per user, but it gives the shared crew database better coverage than clicking track filters one by one.
+
 ## Stagger User Syncs
 
 Multiple users should not all hit Deputy at 5am or at the same pre-shift window. The scheduler plans per-user sync windows with configurable spacing and small deterministic jitter, then runs due accounts in a small batch, default one account at a time.
