@@ -24,13 +24,13 @@
           <div>
             <p class="eyebrow">{{ shift.time_range }}</p>
             <h2>
-              {{ shift.role_chain_label or shift.role_full_label or shift.role_label or shift.title or "Shift" }}
+              {{ shift.track_label }}
               {% if shift.header_vehicle_label %}
-                <span class="header-vehicle-label">{{ shift.header_vehicle_label }}</span>
+                <span class="header-vehicle-label">- {{ shift.header_vehicle_label }}</span>
               {% endif %}
             </h2>
             <p class="detail-subtitle">
-              {{ shift.track_label }}
+              {{ shift.role_chain_label or shift.role_full_label or shift.role_label or shift.title or "Shift" }}
               {% if shift.race_type_label %} · {{ shift.race_type_label }}{% endif %}
               {% if shift.location and shift.location != shift.track_label %} · {{ shift.location }}{% endif %}
               · {{ shift.display_hours_label }}

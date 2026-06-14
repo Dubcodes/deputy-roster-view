@@ -5,7 +5,7 @@
 - `T-` means Thoroughbred racing.
 - `H-` means Harness racing.
 - `T-Cambridge` should display as Cambridge Synthetic when that is the track code from the user's roster.
-- `H-Cambridge` is Cambridge Harness.
+- `H-Cambridge` is Cambridge Harness. The current captured Deputy location ID is `56`.
 
 ## Important Track/Location Labels
 
@@ -55,6 +55,8 @@ The reliable crew list should come from Deputy web schedule rows where possible,
 Crew data must be scoped by date and Deputy location/track, not only by date. Multiple race meetings or work groups can happen on the same day, so each user should see the crew list for the location attached to their own shift.
 
 The race-day crew table should stay as three columns: position, name, vehicle. A user's own vehicle can be shown beside their position in the day header, but should not be merged into the crew table position column.
+
+On the day page, the large heading should be the track/location first, with the user's vehicle beside it when known. The role/position belongs on the subtitle line with race type and hours.
 
 Hide `Out of Region` from the normal on-track crew list. It is noise for race-day crew display.
 

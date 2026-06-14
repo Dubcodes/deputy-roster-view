@@ -1027,23 +1027,23 @@ def update_app_settings(values: dict[str, str]) -> None:
 DEPUTY_LOCATION_CODES = {
     20: "ELLE-T",
     29: "CAMS-T",
-    56: "TAUR-T",
+    56: "H-Cambridge",
     63: "TRAP-T",
+    66: "TAUR-T",
     68: "MATA-T",
     105: "8PE",
-    121: "H-Cambridge",
 }
 DEPUTY_LOCATION_ADDRESSES = {
     20: "100 Ascot Avenue",
     29: "40 Racecourse Road",
-    56: "1383 Cameron Road",
+    56: "1 Taylor Street",
     63: "12 Sir Tristram Avenue",
+    66: "1383 Cameron Road",
     68: "State Highway 27",
     105: "National",
-    121: "1 Taylor Street",
 }
 DEPUTY_AREA_OVERRIDES = {
-    1192: {"source_code": "H-Cambridge", "role": "Side 1", "location": "1 Taylor Street"},
+    1192: {"source_code": "H-Cambridge", "role": "Side 1", "location": "1 Taylor Street", "location_id": 56},
     1488: {"source_code": "VEH", "role": "Vehicles", "location": "6 Clow Place"},
 }
 
@@ -1235,6 +1235,8 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
             area_location_id = _optional_int(shift.get("areaLocationId"))
             if area_location_id is None and area:
                 area_location_id = _optional_int(area.get("locationId"))
+            if area_location_id is None and area_override:
+                area_location_id = _optional_int(area_override.get("location_id"))
             if area_location_id is None and area_override:
                 area_location_id = _location_id_for_source_code(str(area_override.get("source_code") or ""))
             area_sort = _optional_int(shift.get("areaRosterSortOrder"))
@@ -1514,6 +1516,8 @@ def _deputy_web_shift_values(
     if location_id is None and area:
         location_id = _optional_int(area.get("locationId"))
     area_override = DEPUTY_AREA_OVERRIDES.get(area_id or -1, {})
+    if location_id is None and area_override:
+        location_id = _optional_int(area_override.get("location_id"))
     if location_id is None and area_override:
         location_id = _location_id_for_source_code(str(area_override.get("source_code") or ""))
     role_label = str(area_override.get("role") or area_name or "Shift").strip()

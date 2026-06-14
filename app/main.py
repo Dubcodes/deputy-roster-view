@@ -23,6 +23,7 @@ from .database import (
     create_admin_override,
     create_app_user,
     create_trusted_device,
+    DEPUTY_AREA_OVERRIDES,
     fetch_open_deputy_schedule_between,
     fetch_open_deputy_schedule_shifts,
     fetch_deputy_schedule_for_date,
@@ -689,6 +690,30 @@ def parse_shift_title(title: str | None) -> dict[str, str]:
     }
 
 
+def apply_known_area_override(shift: dict[str, object]) -> None:
+    normalised_payload = source_payload_normalised(str(shift.get("source_payload") or ""))
+    area_id = safe_int(normalised_payload.get("area_id"))
+    override = DEPUTY_AREA_OVERRIDES.get(area_id or -1)
+    if not override:
+        return
+    source_code = str(override.get("source_code") or "").strip()
+    role_label = str(override.get("role") or "").strip()
+    if not source_code and not role_label:
+        return
+    parsed = parse_shift_title(f"[{source_code or 'WEB'}] {role_label or 'Shift'}")
+    for key in ("source_code", "track_label", "role_label", "role_full_label", "race_type_label", "display_title"):
+        value = parsed.get(key)
+        if value:
+            shift[key] = value
+    if override.get("location") and not str(shift.get("location") or "").strip():
+        shift["location"] = str(override.get("location") or "")
+    if override.get("location_id") and not shift.get("schedule_location_id"):
+        shift["schedule_location_id"] = safe_int(override.get("location_id"))
+        shift["schedule_location_ids"] = unique_ints(
+            list(shift.get("schedule_location_ids") or []) + [shift.get("schedule_location_id")]
+        )
+
+
 def role_chain_label(segments: list[dict[str, str]]) -> str:
     labels = []
     for segment in segments:
@@ -720,7 +745,7 @@ def shift_header_vehicle_label(segments: list[dict[str, str]]) -> str:
         role = str(segment.get("role") or "").strip()
         if role and role not in vehicles:
             vehicles.append(role)
-    return f"· {', '.join(vehicles)}" if vehicles else ""
+    return ", ".join(vehicles)
 
 
 def format_change_value(field_name: str, value: str | None) -> str:
@@ -1011,7 +1036,10 @@ def decorate_shift(row: object) -> dict[str, object]:
     shift["paid_label"] = format_hours(shift.get("paid_hours"))
     shift["raw_label"] = format_hours(shift.get("raw_hours"))
     shift["mark_badges"] = [label for field, label in MARK_FIELDS if int(shift.get(field) or 0)]
+    shift["schedule_location_id"] = schedule_location_id
+    shift["schedule_location_ids"] = [schedule_location_id] if schedule_location_id is not None else []
     shift.update(parsed_title)
+    apply_known_area_override(shift)
     role_short = str(shift.get("role_label") or shift.get("role_full_label") or "Shift")
     is_vehicle = role_is_vehicleish(role_short)
     role_segment = {
@@ -1044,8 +1072,6 @@ def decorate_shift(row: object) -> dict[str, object]:
     shift["timing_adjustment_time"] = timing_time
     shift["timing_adjustment_labels"] = timing_notes
     shift["combined_shift_ids"] = [int(shift["id"])]
-    shift["schedule_location_id"] = schedule_location_id
-    shift["schedule_location_ids"] = [schedule_location_id] if schedule_location_id is not None else []
     apply_timing_math(shift)
     return shift
 

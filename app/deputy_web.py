@@ -66,6 +66,9 @@ TRACK_NAMES = {
 DEFAULT_RACE_TYPE_BY_CODE = {
     "CAM": "H",
 }
+AREA_LOCATION_OVERRIDES = {
+    1192: 56,
+}
 
 
 @dataclass(frozen=True)
@@ -863,6 +866,8 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                 def schedule_location_id_for_shift(shift: dict[str, Any]) -> int | None:
                     location_id = _safe_int(shift.get("areaLocationId"))
                     area_id = _safe_int(shift.get("area"))
+                    if location_id is None and area_id is not None:
+                        location_id = AREA_LOCATION_OVERRIDES.get(area_id)
                     if location_id is None and area_id is not None:
                         area = area_refs_by_id.get(str(area_id)) or {}
                         location_id = _safe_int(area.get("locationId"))
