@@ -8,6 +8,28 @@ from jinja2 import Environment, FileSystemLoader
 
 
 ROOT = Path(__file__).resolve().parents[1]
+THEME_VALUES = {
+    "jade",
+    "steel",
+    "moss",
+    "rose",
+    "amber",
+    "daylight",
+    "paper",
+    "mint",
+    "sky",
+    "peach",
+    "track-colours",
+    "aurora",
+    "sunset",
+    "ocean",
+    "berry",
+    "candy",
+    "high-contrast",
+    "race-night",
+    "garden",
+    "studio",
+}
 
 
 def datetime_filter(value: object, fmt: str = "%a %d %b %H:%M") -> str:
@@ -25,6 +47,7 @@ def render_day_template() -> None:
         hours=str,
         urlencode=quote_plus,
     )
+    env.globals["theme_values"] = THEME_VALUES
     for template_name in [
         "admin.html",
         "base.html",
@@ -40,6 +63,7 @@ def render_day_template() -> None:
     html = template.render(
         request={},
         notice=None,
+        current_user=None,
         date_text="2026-06-13",
         day_date=date(2026, 6, 13),
         month_year=2026,
@@ -53,10 +77,10 @@ def render_day_template() -> None:
                 "deleted_from_source": 0,
                 "colour_style": "",
                 "time_range": "08:30-17:45",
-                "role_chain_label": "Director",
-                "role_full_label": "Director",
-                "role_label": "DIR",
-                "title": "[TRAP-T] DIR",
+                "role_chain_label": "Sound VT",
+                "role_full_label": "Sound VT",
+                "role_label": "SVT",
+                "title": "[TRAP-T] SVT",
                 "track_label": "Te Rapa",
                 "race_type_label": "Thoroughbred racing",
                 "location": "12 Sir Tristram Avenue",

@@ -1,5 +1,7 @@
 <!doctype html>
-<html lang="en" data-theme="{{ current_user.display_theme if current_user and current_user.display_theme else (request.cookies.get('roster_theme', 'jade') if request else 'jade') }}">
+{% set raw_theme = current_user.display_theme if current_user and current_user.display_theme else (request.cookies.get('roster_theme', 'jade') if request else 'jade') %}
+{% set safe_theme = raw_theme|string|lower %}
+<html lang="en" data-theme="{{ safe_theme if safe_theme in theme_values else 'jade' }}">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">

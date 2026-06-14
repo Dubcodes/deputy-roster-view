@@ -89,29 +89,52 @@ MARK_FIELDS = (
     ("travel_needed", "Travel"),
     ("pay_check", "Pay check"),
 )
-THEME_OPTIONS = (
-    ("jade", "Jade dark"),
-    ("steel", "Steel dark"),
-    ("moss", "Moss dark"),
-    ("rose", "Rose dark"),
-    ("amber", "Amber dark"),
-    ("daylight", "Daylight"),
-    ("paper", "Paper"),
-    ("mint", "Mint"),
-    ("sky", "Sky"),
-    ("peach", "Peach"),
-    ("track-colours", "Track colours"),
-    ("aurora", "Aurora"),
-    ("sunset", "Sunset"),
-    ("ocean", "Ocean"),
-    ("berry", "Berry"),
-    ("candy", "Candy"),
-    ("high-contrast", "High contrast"),
-    ("race-night", "Race night"),
-    ("garden", "Garden"),
-    ("studio", "Studio"),
+THEME_GROUPS = (
+    {
+        "id": "dark",
+        "label": "Dark",
+        "column": "left",
+        "themes": (
+            {"value": "jade", "label": "Jade dark", "swatches": ("#101114", "#181b20", "#33c4a5", "#ffdd8a")},
+            {"value": "steel", "label": "Steel dark", "swatches": ("#0d1114", "#20272d", "#8fc7d5", "#ffd878")},
+            {"value": "moss", "label": "Moss dark", "swatches": ("#10130f", "#22291e", "#b7c96d", "#ffda86")},
+            {"value": "rose", "label": "Rose dark", "swatches": ("#130f12", "#2a2027", "#ef9ca8", "#ffdc83")},
+            {"value": "amber", "label": "Amber dark", "swatches": ("#11100c", "#272318", "#e0b858", "#ffe38d")},
+        ),
+    },
+    {
+        "id": "bright",
+        "label": "Bright",
+        "column": "left",
+        "themes": (
+            {"value": "daylight", "label": "Daylight", "swatches": ("#f7faf8", "#ffffff", "#126f62", "#b5791e")},
+            {"value": "paper", "label": "Paper", "swatches": ("#fbfaf6", "#ffffff", "#7c4f18", "#aa781f")},
+            {"value": "mint", "label": "Mint", "swatches": ("#f3fbf6", "#ffffff", "#167347", "#b87b1d")},
+            {"value": "sky", "label": "Sky", "swatches": ("#f3f8fc", "#ffffff", "#1d638e", "#b37617")},
+            {"value": "peach", "label": "Peach", "swatches": ("#fff7f2", "#ffffff", "#9a4a2c", "#a8741a")},
+        ),
+    },
+    {
+        "id": "special",
+        "label": "Special / Colorful",
+        "column": "right",
+        "themes": (
+            {"value": "track-colours", "label": "Track colours", "swatches": ("#f7f7fb", "#ffffff", "linear-gradient(90deg, #33c4a5, #ef9ca8, #e0b858)", "#ad771d")},
+            {"value": "aurora", "label": "Aurora", "swatches": ("#0b1020", "#1d2740", "linear-gradient(90deg, #80e7d3, #9aa8ff)", "#ffe18a")},
+            {"value": "sunset", "label": "Sunset", "swatches": ("#170d17", "#332235", "linear-gradient(90deg, #ffb06c, #ef9ca8)", "#ffe28f")},
+            {"value": "ocean", "label": "Ocean", "swatches": ("#071316", "#193035", "linear-gradient(90deg, #6bd6ff, #33c4a5)", "#ffe292")},
+            {"value": "berry", "label": "Berry", "swatches": ("#160d1f", "#332044", "linear-gradient(90deg, #d7a5ff, #ef9ca8)", "#ffe190")},
+            {"value": "candy", "label": "Candy", "swatches": ("#fff7fb", "#ffffff", "linear-gradient(90deg, #9b3272, #d69cff)", "#aa761d")},
+            {"value": "high-contrast", "label": "High contrast", "swatches": ("#000000", "#111111", "#ffe45c", "#ffffff")},
+            {"value": "race-night", "label": "Race night", "swatches": ("#08090d", "#20222c", "linear-gradient(90deg, #ff5c7a, #00e5ff)", "#ffe48d")},
+            {"value": "garden", "label": "Garden", "swatches": ("#f6faf0", "#ffffff", "linear-gradient(90deg, #4f6f20, #7fe08b)", "#ae771a")},
+            {"value": "studio", "label": "Studio", "swatches": ("#f6f6f6", "#ffffff", "#3f4f5f", "#a06d18")},
+        ),
+    },
 )
-THEME_VALUES = {value for value, _label in THEME_OPTIONS}
+THEME_OPTIONS = tuple(theme for group in THEME_GROUPS for theme in group["themes"])
+THEME_VALUES = {str(theme["value"]) for theme in THEME_OPTIONS}
+THEME_LABELS = {str(theme["value"]): str(theme["label"]) for theme in THEME_OPTIONS}
 LOCATION_COLOUR_COUNT = 10
 SECRET_URL_RE = re.compile(r"(calendar\?ap=)[^&\s\"']+")
 URL_RE = re.compile(r"https?://\S+")
@@ -430,6 +453,11 @@ def clean_time_value(value: str | None) -> str:
     if hour > 23 or minute > 59:
         return ""
     return value
+
+
+def normalise_theme(value: object) -> str:
+    theme = str(value or "").strip().lower()
+    return theme if theme in THEME_VALUES else "jade"
 
 
 def stable_location_colour_index(*values: object) -> int:
@@ -2379,6 +2407,8 @@ def settings_view(request: Request, notice: str | None = None) -> object:
     }
     user_sync_state = get_user_sync_state(owner_user_id) if owner_user_id is not None else None
     user_last_sync_at = str(user_sync_state["last_sync_at"] or "") if user_sync_state else ""
+    raw_theme = user["display_theme"] if user and user.get("display_theme") else request.cookies.get("roster_theme", "jade")
+    current_theme = normalise_theme(raw_theme)
     return templates.TemplateResponse(
         "settings.html",
         {
@@ -2406,7 +2436,9 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "deputy_schedule_snapshot": schedule_snapshot,
             "roster_snapshot": roster_snapshot,
             "open_schedule_shifts": visible_open_schedule_shifts(),
-            "theme_options": THEME_OPTIONS,
+            "theme_groups": THEME_GROUPS,
+            "current_theme": current_theme,
+            "current_theme_label": THEME_LABELS.get(current_theme, "Jade dark"),
         },
     )
 
@@ -2415,9 +2447,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
 async def save_theme_settings(request: Request) -> RedirectResponse:
     user = current_user(request)
     form = await request.form()
-    theme = str(form.get("theme") or "jade").strip().lower()
-    if theme not in THEME_VALUES:
-        theme = "jade"
+    theme = normalise_theme(form.get("theme"))
     if user and user.get("id") is not None:
         update_user_display_theme(int(user["id"]), theme)
     response = RedirectResponse(url=notice_url("/settings", "Theme saved."), status_code=303)
@@ -2566,3 +2596,4 @@ templates.env.filters["datetime"] = format_datetime
 templates.env.filters["time"] = format_time
 templates.env.filters["day_short"] = format_day_short
 templates.env.filters["hours"] = format_hours
+templates.env.globals["theme_values"] = THEME_VALUES

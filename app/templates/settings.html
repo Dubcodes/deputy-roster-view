@@ -44,21 +44,75 @@
       {% endif %}
     </article>
 
-    <article class="settings-panel">
-      <span class="summary-label">Theme</span>
-      <strong>Display colours</strong>
-      <form class="settings-form compact-settings-form" action="/settings/theme" method="post">
-        {% set current_theme = current_user.display_theme if current_user and current_user.display_theme else request.cookies.get('roster_theme', 'jade') %}
-        <label class="form-row">
-          <span>Palette</span>
-          <select name="theme">
-            {% for theme_value, theme_label in theme_options %}
-              <option value="{{ theme_value }}" {% if current_theme == theme_value %}selected{% endif %}>{{ theme_label }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <button class="button button-secondary" type="submit">Save Theme</button>
-      </form>
+    <article class="settings-panel theme-panel">
+      <details class="theme-picker-details">
+        <summary class="theme-summary">
+          <span>
+            <span class="summary-label">Theme</span>
+            <strong>{{ current_theme_label }}</strong>
+          </span>
+          <span class="theme-summary-action">Change theme</span>
+        </summary>
+        <form class="settings-form theme-picker-form" action="/settings/theme" method="post">
+          <div class="theme-picker-grid">
+            <div class="theme-picker-column">
+              {% for group in theme_groups if group.column == "left" %}
+                <fieldset class="theme-group">
+                  <legend>{{ group.label }}</legend>
+                  <div class="theme-options">
+                    {% for theme in group.themes %}
+                      <label class="theme-choice">
+                        <input type="radio" name="theme" value="{{ theme.value }}" {% if current_theme == theme.value %}checked{% endif %}>
+                        <span class="theme-choice-content">
+                          <span class="theme-choice-main">
+                            <span class="theme-name">{{ theme.label }}</span>
+                            {% if current_theme == theme.value %}
+                              <span class="theme-current-label">Current</span>
+                            {% endif %}
+                          </span>
+                          <span class="theme-swatches" aria-hidden="true">
+                            {% for swatch in theme.swatches %}
+                              <span class="theme-swatch{% if 'gradient' in swatch %} is-gradient{% endif %}" style="background: {{ swatch }};"></span>
+                            {% endfor %}
+                          </span>
+                        </span>
+                      </label>
+                    {% endfor %}
+                  </div>
+                </fieldset>
+              {% endfor %}
+            </div>
+            <div class="theme-picker-column">
+              {% for group in theme_groups if group.column == "right" %}
+                <fieldset class="theme-group theme-group-special">
+                  <legend>{{ group.label }}</legend>
+                  <div class="theme-options">
+                    {% for theme in group.themes %}
+                      <label class="theme-choice">
+                        <input type="radio" name="theme" value="{{ theme.value }}" {% if current_theme == theme.value %}checked{% endif %}>
+                        <span class="theme-choice-content">
+                          <span class="theme-choice-main">
+                            <span class="theme-name">{{ theme.label }}</span>
+                            {% if current_theme == theme.value %}
+                              <span class="theme-current-label">Current</span>
+                            {% endif %}
+                          </span>
+                          <span class="theme-swatches" aria-hidden="true">
+                            {% for swatch in theme.swatches %}
+                              <span class="theme-swatch{% if 'gradient' in swatch %} is-gradient{% endif %}" style="background: {{ swatch }};"></span>
+                            {% endfor %}
+                          </span>
+                        </span>
+                      </label>
+                    {% endfor %}
+                  </div>
+                </fieldset>
+              {% endfor %}
+            </div>
+          </div>
+          <button class="button button-secondary" type="submit">Save Theme</button>
+        </form>
+      </details>
     </article>
 
     <article class="settings-panel sync-panel">
@@ -112,7 +166,7 @@
         <input type="hidden" name="page_url" data-current-page-url>
         <label class="form-row">
           <span>What looks wrong?</span>
-          <textarea name="report_text" rows="5" placeholder="Example: 3 July should show the right track, position, and crew schedule instead of a generic Web shift." required></textarea>
+          <textarea name="report_text" rows="5" placeholder="Example: 3 July should show the right track, position, and crew schedule instead of a generic shift." required></textarea>
         </label>
         <button class="button" type="submit">Save Error Report</button>
       </form>
