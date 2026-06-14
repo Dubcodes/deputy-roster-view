@@ -18,7 +18,7 @@
 
 ### Deputy iCal
 
-`sync_ics.py` fetches the configured Deputy calendar feed and stores/updates rows in `shifts`. In the multi-user version this is an optional backup source, not the primary login path.
+`sync_ics.py` fetches the configured Deputy calendar feed and stores/updates rows in `shifts`. In the multi-user version each account can save an encrypted iCal URL in Settings. Web capture runs first; iCal then fills missing shifts and avoids duplicating matching web-captured Deputy shift IDs.
 
 ### Deputy Web Capture
 

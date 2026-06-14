@@ -6,7 +6,9 @@ Use FastAPI, Jinja, SQLite, APScheduler, requests, icalendar, and Playwright onl
 
 ## iCal Is A Backup Roster Source
 
-iCal is stable enough for backup roster data and does not need Deputy API access, but multi-user signup is based on Deputy login credentials. A missing iCal URL should not fail a web-capture sync.
+iCal is stable enough for backup roster data and does not need Deputy API access, but multi-user signup is based on Deputy login credentials. Each user can store their own encrypted iCal URL. A missing iCal URL should not fail a web-capture sync.
+
+Deputy web capture runs first. iCal then fills missing shifts for the same account and skips events that already have a matching web-captured Deputy shift. If an iCal-only row later appears in web capture, the web row adopts that existing row so local notes do not split across duplicates.
 
 ## Deputy Web Capture Adds Crew Context
 

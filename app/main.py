@@ -49,9 +49,11 @@ from .database import (
     mark_user_sync_finished,
     mark_user_sync_started,
     reset_incomplete_user_syncs,
+    update_deputy_user_ical_url,
     update_app_settings,
     update_shift_marks,
     user_has_deputy_credentials,
+    user_has_ical_url,
 )
 from .deputy_api import test_deputy_roster_api
 from .deputy_web import capture_and_save_deputy_web, format_capture_payload
@@ -2074,6 +2076,11 @@ def settings_view(request: Request, notice: str | None = None) -> object:
     next_shift = get_next_upcoming_shift(now.isoformat(), owner_user_id=owner_user_id)
     pre_shift = get_pre_shift_status(settings)
     calendar_url = get_calendar_url(settings)
+    user_calendar_url_configured = bool(owner_user_id is not None and user_has_ical_url(owner_user_id))
+    legacy_calendar_url_configured = bool(calendar_url)
+    calendar_url_source = get_calendar_url_source(settings)
+    if owner_user_id is not None:
+        calendar_url_source = "This account" if user_calendar_url_configured else "Not saved for this account"
     deputy_web_capture = format_capture_payload(get_last_deputy_web_capture())
     schedule_snapshot = get_deputy_schedule_snapshot()
     capture_stats = deputy_web_capture.get("stats", {}) if deputy_web_capture else {}
@@ -2100,8 +2107,9 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "settings": settings,
             "can_sync": settings.deputy_login_configured or user_can_sync,
             "trusted_device_days": settings.trusted_device_days,
-            "calendar_url_configured": bool(calendar_url),
-            "calendar_url_source": get_calendar_url_source(settings),
+            "calendar_url_configured": user_calendar_url_configured or (owner_user_id is None and legacy_calendar_url_configured),
+            "calendar_url_source": calendar_url_source,
+            "legacy_calendar_url_configured": legacy_calendar_url_configured,
             "last_successful_sync": get_last_successful_sync(),
             "user_last_sync_at": user_last_sync_at,
             "next_shift": decorate_shift(next_shift) if next_shift else None,
@@ -2123,10 +2131,15 @@ def settings_view(request: Request, notice: str | None = None) -> object:
 @app.post("/settings/calendar")
 async def save_calendar_settings(request: Request) -> RedirectResponse:
     form = await request.form()
+    user = current_user(request)
+    user_id = int(user["id"]) if user and user.get("id") is not None else None
     if form.get("clear_calendar_url"):
-        update_app_settings({"deputy_ical_url": ""})
+        if user_id is not None:
+            update_deputy_user_ical_url(user_id, "")
+        else:
+            update_app_settings({"deputy_ical_url": ""})
         return RedirectResponse(
-            url=notice_url("/settings", "Saved calendar URL cleared."),
+            url=notice_url("/settings", "Saved iCal URL cleared."),
             status_code=303,
         )
 
@@ -2142,9 +2155,12 @@ async def save_calendar_settings(request: Request) -> RedirectResponse:
             status_code=303,
         )
 
-    update_app_settings({"deputy_ical_url": calendar_url})
+    if user_id is not None:
+        update_deputy_user_ical_url(user_id, encrypt_text(calendar_url, get_settings()))
+    else:
+        update_app_settings({"deputy_ical_url": calendar_url})
     return RedirectResponse(
-        url=notice_url("/settings", "Calendar URL saved. Use Sync Now to refresh the roster."),
+        url=notice_url("/settings", "iCal URL saved for this account. Use Sync my roster to refresh."),
         status_code=303,
     )
 

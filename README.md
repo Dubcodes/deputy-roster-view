@@ -12,9 +12,9 @@ The app is read-only against Deputy. It never writes back to Deputy.
    cp .env.example .env
    ```
 
-2. Optional: open `.env` and set `DEPUTY_ICAL_URL` to your Deputy calendar/iCal subscription URL, or paste the URL into Settings after the app starts.
+2. Optional legacy fallback: open `.env` and set `DEPUTY_ICAL_URL` to a Deputy calendar/iCal subscription URL. For normal multi-user use, each person should paste their own iCal URL into Settings after signup.
 
-   The iCal URL is now a backup feed. Keep it private. It can grant access to a roster feed. Do not commit `.env`, paste it into logs, or share screenshots that reveal it.
+   The iCal URL is a backup feed. Keep it private. It can grant access to a roster feed. Do not commit `.env`, paste it into logs, or share screenshots that reveal it.
 
 3. Optional: set a stable `APP_SECRET_KEY`.
 
@@ -54,7 +54,9 @@ The app is read-only against Deputy. It never writes back to Deputy.
 
 ## Getting The Deputy Calendar URL
 
-In Deputy, look for the calendar subscription/export option for your roster. Copy the iCal/calendar feed URL and paste it into the app's Settings page or place it only in `.env` as `DEPUTY_ICAL_URL`.
+In Deputy, look for the calendar subscription/export option for your roster. Copy the iCal/calendar feed URL and paste it into the app's Settings page. In multi-user mode this URL belongs to the signed-in account and is stored encrypted.
+
+`DEPUTY_ICAL_URL` in `.env` is only a legacy/global fallback for older single-user installs.
 
 If the URL has previously been pasted into chat, logs, or another shared place, regenerate or reset it in Deputy if Deputy provides that option.
 
@@ -127,8 +129,8 @@ The tunnel points to the app over the internal Docker network at `http://deputy-
 - For multi-user scheduled syncs, users are queued and staggered with `USER_SYNC_STAGGER_MINUTES`, default `7`, plus `USER_SYNC_JITTER_MINUTES`, default `2`.
 - `USER_SYNC_BATCH_SIZE` defaults to `1`, so only one account is captured per runner pass.
 - Deputy web capture asks for each user's own published shifts from `OWN_ROSTER_LOOKBACK_DAYS`, default `45`, days back through `OWN_ROSTER_LOOKAHEAD_DAYS`, default `120`, days forward.
-- Manual Sync and Update uses the currently logged-in user's saved Deputy login immediately.
-- iCal is optional backup. If no iCal URL is configured, the sync will skip that source and still use Deputy web capture.
+- Manual Sync my roster uses the currently logged-in user's saved Deputy login immediately.
+- iCal is optional backup. If the signed-in account has an iCal URL saved, sync uses it after Deputy web capture to fill missing shifts without duplicating web-captured shifts. If no iCal URL is configured, sync skips that source and still uses Deputy web capture.
 
 The app redacts calendar details by design and does not display the configured calendar URL.
 

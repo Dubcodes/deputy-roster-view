@@ -194,10 +194,6 @@ def sync_roster_sources(settings: Settings | None = None, user_id: int | None = 
             credential_error = f"Saved Deputy login could not be decrypted: {exc.__class__.__name__}."
 
     started_at = _now(settings).isoformat()
-    calendar_result = _skipped_calendar_result("iCal backup feed is not configured.")
-    if get_calendar_url(settings):
-        calendar_result = sync_deputy_calendar(settings, owner_user_id=user_id)
-
     if credential_error:
         web_result = {
             "status": "error",
@@ -208,6 +204,16 @@ def sync_roster_sources(settings: Settings | None = None, user_id: int | None = 
         }
     else:
         web_result = sync_deputy_web_schedule(runtime_settings, owner_user_id=user_id)
+
+    calendar_result = _skipped_calendar_result("iCal backup feed is not configured.")
+    calendar_settings = runtime_settings if user_id is not None else settings
+    calendar_url = calendar_settings.deputy_ical_url.strip() if user_id is not None else get_calendar_url(settings)
+    if calendar_url:
+        calendar_result = sync_deputy_calendar(
+            calendar_settings,
+            owner_user_id=user_id,
+            calendar_url=calendar_url,
+        )
 
     status = _combined_sync_status(calendar_result, web_result)
     finished_at = _now(settings).isoformat()

@@ -279,14 +279,34 @@ def _event_changes(row: Any, event: ShiftEvent) -> dict[str, tuple[Any, Any]]:
     return changes
 
 
+def _scoped_source_uid(event: ShiftEvent, owner_user_id: int | None = None) -> str:
+    source_owner = owner_user_id if owner_user_id is not None else "env"
+    return f"ical:{source_owner}:{event.source_url_hash}:{event.source_uid}"
+
+
+def _deputy_shift_id_from_link(source_link: str) -> str:
+    match = re.search(r"(?:/shift/|/record/)(\d+)", source_link)
+    return match.group(1) if match else ""
+
+
 def _upsert_event(conn: Any, event: ShiftEvent, now_iso: str, owner_user_id: int | None = None) -> str:
+    source_uid = _scoped_source_uid(event, owner_user_id)
     existing = conn.execute(
         "SELECT * FROM shifts WHERE source_uid = ?",
-        (event.source_uid,),
+        (source_uid,),
     ).fetchone()
+    deputy_shift_id = _deputy_shift_id_from_link(event.source_link)
+    if existing is None and deputy_shift_id:
+        web_source_uid = f"deputy-web:{owner_user_id if owner_user_id is not None else 'env'}:{deputy_shift_id}"
+        existing_web = conn.execute(
+            "SELECT id FROM shifts WHERE source_uid = ?",
+            (web_source_uid,),
+        ).fetchone()
+        if existing_web is not None:
+            return "unchanged"
 
     values = (
-        event.source_uid,
+        source_uid,
         event.source_url_hash,
         event.title,
         event.description,
@@ -368,7 +388,7 @@ def _upsert_event(conn: Any, event: ShiftEvent, now_iso: str, owner_user_id: int
             now_iso,
             1 if changed else 0,
             event.source_payload,
-            event.source_uid,
+            source_uid,
         ),
     )
     if changed:
@@ -376,7 +396,11 @@ def _upsert_event(conn: Any, event: ShiftEvent, now_iso: str, owner_user_id: int
     return "updated" if changed else "unchanged"
 
 
-def sync_deputy_calendar(settings: Settings | None = None, owner_user_id: int | None = None) -> dict[str, object]:
+def sync_deputy_calendar(
+    settings: Settings | None = None,
+    owner_user_id: int | None = None,
+    calendar_url: str | None = None,
+) -> dict[str, object]:
     settings = settings or get_settings()
     init_db(settings)
     started_at = _now(settings).isoformat()
@@ -392,7 +416,7 @@ def sync_deputy_calendar(settings: Settings | None = None, owner_user_id: int | 
     }
 
     try:
-        calendar_url = get_calendar_url(settings)
+        calendar_url = (calendar_url or get_calendar_url(settings)).strip()
         events = _load_events(settings, calendar_url)
         now_iso = _now(settings).isoformat()
         source_url_hash = _hash_url(calendar_url)
@@ -400,7 +424,7 @@ def sync_deputy_calendar(settings: Settings | None = None, owner_user_id: int | 
 
         with get_connection(settings) as conn:
             for event in events:
-                seen_uids.add(event.source_uid)
+                seen_uids.add(_scoped_source_uid(event, owner_user_id))
                 action = _upsert_event(conn, event, now_iso, owner_user_id=owner_user_id)
                 if action == "created":
                     summary["events_created"] = int(summary["events_created"]) + 1

@@ -124,6 +124,7 @@ def init_db(settings: Settings | None = None) -> None:
                 user_id INTEGER PRIMARY KEY,
                 encrypted_email TEXT,
                 encrypted_password TEXT,
+                encrypted_ical_url TEXT,
                 encrypted_session_json TEXT,
                 updated_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
@@ -235,6 +236,7 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "deputy_schedule_shifts", "last_changed_at", "TEXT")
         _ensure_column(conn, "deputy_schedule_shifts", "change_summary", "TEXT")
         _ensure_column(conn, "app_users", "deputy_web_url", "TEXT")
+        _ensure_column(conn, "deputy_user_secrets", "encrypted_ical_url", "TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_location ON deputy_schedule_shifts(date, area_location_id)"
         )
@@ -331,6 +333,25 @@ def get_deputy_user_secret(user_id: int) -> sqlite3.Row | None:
 def user_has_deputy_credentials(user_id: int) -> bool:
     row = get_deputy_user_secret(user_id)
     return bool(row and row["encrypted_email"] and row["encrypted_password"])
+
+
+def user_has_ical_url(user_id: int) -> bool:
+    row = get_deputy_user_secret(user_id)
+    return bool(row and row["encrypted_ical_url"])
+
+
+def update_deputy_user_ical_url(user_id: int, encrypted_ical_url: str) -> None:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE deputy_user_secrets
+            SET encrypted_ical_url = ?,
+                updated_at = ?
+            WHERE user_id = ?
+            """,
+            (encrypted_ical_url, now, user_id),
+        )
 
 
 def list_syncable_app_users() -> list[sqlite3.Row]:
@@ -532,9 +553,9 @@ def create_app_user(
         conn.execute(
             """
             INSERT INTO deputy_user_secrets (
-                user_id, encrypted_email, encrypted_password, encrypted_session_json, updated_at
+                user_id, encrypted_email, encrypted_password, encrypted_ical_url, encrypted_session_json, updated_at
             )
-            VALUES (?, ?, ?, '', ?)
+            VALUES (?, ?, ?, '', '', ?)
             """,
             (user_id, encrypted_email, encrypted_password, now),
         )
@@ -1400,10 +1421,7 @@ def _save_deputy_web_own_shifts(
         if values is None:
             continue
         counts["seen"] += 1
-        existing = conn.execute(
-            "SELECT * FROM shifts WHERE source_uid = ?",
-            (values["source_uid"],),
-        ).fetchone()
+        existing = _find_existing_shift_for_web(conn, str(values["source_uid"]), shift_id, owner_user_id)
         if existing is None:
             conn.execute(
                 """
@@ -1447,7 +1465,8 @@ def _save_deputy_web_own_shifts(
         conn.execute(
             """
             UPDATE shifts
-            SET source_url_hash = ?,
+            SET source_uid = ?,
+                source_url_hash = ?,
                 title = ?,
                 description = ?,
                 location = ?,
@@ -1465,9 +1484,10 @@ def _save_deputy_web_own_shifts(
                 changed_since_viewed = CASE WHEN ? THEN 1 ELSE changed_since_viewed END,
                 deleted_from_source = 0,
                 source_payload = ?
-            WHERE source_uid = ?
+            WHERE id = ?
             """,
             (
+                values["source_uid"],
                 values["source_url_hash"],
                 values["title"],
                 values["description"],
@@ -1486,7 +1506,7 @@ def _save_deputy_web_own_shifts(
                 captured_at,
                 1 if changed else 0,
                 values["source_payload"],
-                values["source_uid"],
+                int(existing["id"]),
             ),
         )
         if changed:
@@ -1523,6 +1543,41 @@ def _deputy_web_shift_changes(existing: sqlite3.Row, values: dict[str, object]) 
             continue
         changes[field_name] = (old_value, new_value)
     return changes
+
+
+def _find_existing_shift_for_web(
+    conn: sqlite3.Connection,
+    source_uid: str,
+    source_shift_id: str,
+    owner_user_id: int | None,
+) -> sqlite3.Row | None:
+    existing = conn.execute(
+        "SELECT * FROM shifts WHERE source_uid = ?",
+        (source_uid,),
+    ).fetchone()
+    if existing is not None:
+        return existing
+
+    owner_sql = "owner_user_id IS NULL" if owner_user_id is None else "owner_user_id = ?"
+    params: list[object] = []
+    if owner_user_id is not None:
+        params.append(owner_user_id)
+    params.extend([f"%/shift/{source_shift_id}%", f"%/record/{source_shift_id}%"])
+    return conn.execute(
+        f"""
+        SELECT *
+        FROM shifts
+        WHERE source_uid LIKE 'ical:%'
+          AND {owner_sql}
+          AND (
+                source_link LIKE ?
+                OR source_link LIKE ?
+              )
+        ORDER BY last_synced_at DESC, id DESC
+        LIMIT 1
+        """,
+        params,
+    ).fetchone()
 
 
 def _deputy_web_shift_values(

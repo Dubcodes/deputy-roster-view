@@ -72,10 +72,14 @@
   <details class="table-panel diagnostics-panel">
     <summary>iCal Backup Feed</summary>
     <div class="diagnostics-content">
+      <p class="muted">
+        Status: {{ "configured" if calendar_url_configured else "missing" }}{% if calendar_url_source %} · {{ calendar_url_source }}{% endif %}.
+        Paste your own Deputy calendar URL here to merge iCal details into your roster during sync.
+      </p>
       <form class="settings-form" action="/settings/calendar" method="post">
         <label class="form-row">
-          <span>Deputy iCal URL</span>
-          <input type="password" name="deputy_ical_url" placeholder="Paste a backup calendar URL" autocomplete="off">
+          <span>My Deputy iCal URL</span>
+          <input type="password" name="deputy_ical_url" placeholder="Paste your calendar URL" autocomplete="off">
         </label>
         <label class="toggle-row">
           <input type="checkbox" name="clear_calendar_url">

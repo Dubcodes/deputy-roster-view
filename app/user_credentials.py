@@ -15,6 +15,8 @@ def settings_for_user(user_id: int, settings: Settings | None = None) -> Setting
 
     email = decrypt_text(str(secret["encrypted_email"] or ""), settings)
     password = decrypt_text(str(secret["encrypted_password"] or ""), settings)
+    encrypted_ical_url = str(secret["encrypted_ical_url"] or "")
+    ical_url = decrypt_text(encrypted_ical_url, settings) if encrypted_ical_url else ""
     web_url = str(secret["deputy_web_url"] or settings.deputy_web_url).strip()
     display_name = str(secret["display_name"] or secret["deputy_email"] or "").strip()
     if not email or not password or not web_url:
@@ -23,8 +25,8 @@ def settings_for_user(user_id: int, settings: Settings | None = None) -> Setting
     return replace(
         settings,
         deputy_web_url=web_url,
+        deputy_ical_url=ical_url,
         deputy_login_email=email,
         deputy_login_password=password,
         deputy_display_name=display_name,
     )
-
