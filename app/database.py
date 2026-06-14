@@ -1031,6 +1031,7 @@ DEPUTY_LOCATION_CODES = {
     63: "TRAP-T",
     68: "MATA-T",
     105: "8PE",
+    121: "H-Cambridge",
 }
 DEPUTY_LOCATION_ADDRESSES = {
     20: "100 Ascot Avenue",
@@ -1039,8 +1040,10 @@ DEPUTY_LOCATION_ADDRESSES = {
     63: "12 Sir Tristram Avenue",
     68: "State Highway 27",
     105: "National",
+    121: "1 Taylor Street",
 }
 DEPUTY_AREA_OVERRIDES = {
+    1192: {"source_code": "H-Cambridge", "role": "Side 1", "location": "1 Taylor Street"},
     1488: {"source_code": "VEH", "role": "Vehicles", "location": "6 Clow Place"},
 }
 
@@ -1066,6 +1069,16 @@ def _location_source_code(location_id: int | None, location_lookup: dict[int, di
     name = re.sub(r"\s+", " ", name)
     name = re.sub(r"^([A-Z])\s*-\s*", r"\1-", name, flags=re.IGNORECASE)
     return name
+
+
+def _location_id_for_source_code(source_code: str | None) -> int | None:
+    source_code = re.sub(r"\s+", "", str(source_code or "").strip().upper())
+    if not source_code:
+        return None
+    for location_id, location_code in DEPUTY_LOCATION_CODES.items():
+        if re.sub(r"\s+", "", location_code.upper()) == source_code:
+            return location_id
+    return None
 
 
 def _location_address(location_id: int | None, location_lookup: dict[int, dict[str, object]]) -> str:
@@ -1216,11 +1229,14 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
             if not isinstance(shift, dict) or shift.get("id") in (None, ""):
                 continue
             area_id = _optional_int(shift.get("area"))
+            area_override = DEPUTY_AREA_OVERRIDES.get(area_id or -1, {})
             area = area_lookup.get(str(area_id)) if area_id is not None else None
-            area_name = str(shift.get("areaName") or (area or {}).get("name") or area_id or "")
+            area_name = str(shift.get("areaName") or (area or {}).get("name") or area_override.get("role") or area_id or "")
             area_location_id = _optional_int(shift.get("areaLocationId"))
             if area_location_id is None and area:
                 area_location_id = _optional_int(area.get("locationId"))
+            if area_location_id is None and area_override:
+                area_location_id = _location_id_for_source_code(str(area_override.get("source_code") or ""))
             area_sort = _optional_int(shift.get("areaRosterSortOrder"))
             if area_sort is None and area:
                 area_sort = _optional_int(area.get("rosterSortOrder"))
@@ -1498,6 +1514,8 @@ def _deputy_web_shift_values(
     if location_id is None and area:
         location_id = _optional_int(area.get("locationId"))
     area_override = DEPUTY_AREA_OVERRIDES.get(area_id or -1, {})
+    if location_id is None and area_override:
+        location_id = _location_id_for_source_code(str(area_override.get("source_code") or ""))
     role_label = str(area_override.get("role") or area_name or "Shift").strip()
     source_code = str(area_override.get("source_code") or _location_source_code(location_id, location_lookup) or "WEB").strip()
     title = f"[{source_code}] {role_label}".strip()

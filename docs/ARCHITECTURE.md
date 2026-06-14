@@ -30,6 +30,8 @@ After login, it also asks Deputy's own web endpoint for the user's personal publ
 
 For crew coverage, the capture also learns Deputy's primary location list and then performs batched weekly schedule-search requests for upcoming racing locations. This avoids relying only on the visible roster page when All Locations cannot be selected and helps fill shared crew rows for other users.
 
+If the broad location search misses a user's own roster area, the capture follows up with a targeted roster-area search. It includes the user's own area IDs and, when possible, sibling areas for the same missed Deputy location. This helps Harness/other sparse areas resolve without scanning unrelated locations.
+
 Schedule display is scoped by both date and Deputy location ID. This keeps split-crew days clean when two meetings or work groups happen at once.
 
 ### Multi-User Sync Queue

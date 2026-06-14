@@ -777,6 +777,14 @@ a {
   font-size: 1.45rem;
 }
 
+.header-vehicle-label {
+  display: inline-flex;
+  margin-left: 7px;
+  color: var(--muted);
+  font-size: 0.78em;
+  font-weight: 850;
+}
+
 .detail-subtitle {
   margin: 7px 0 0;
   color: var(--muted);
@@ -1079,7 +1087,7 @@ a {
 
 .crew-roster-row {
   display: grid;
-  grid-template-columns: minmax(108px, 0.95fr) minmax(0, 1.35fr);
+  grid-template-columns: minmax(72px, 0.9fr) minmax(0, 1.35fr) minmax(56px, 0.75fr);
   gap: 8px;
   align-items: center;
   padding: 8px 10px;

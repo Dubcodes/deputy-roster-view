@@ -709,6 +709,20 @@ def role_is_vehicleish(role_label: str | None) -> bool:
     return bool(re.fullmatch(r"\d{3,4}", normalised) or re.fullmatch(r"RAV\d+", normalised) or normalised in VEHICLE_ROLE_LABELS)
 
 
+def shift_header_vehicle_label(segments: list[dict[str, str]]) -> str:
+    has_position = any(segment.get("kind") != "vehicle" for segment in segments)
+    if not has_position:
+        return ""
+    vehicles = []
+    for segment in segments:
+        if segment.get("kind") != "vehicle":
+            continue
+        role = str(segment.get("role") or "").strip()
+        if role and role not in vehicles:
+            vehicles.append(role)
+    return f"· {', '.join(vehicles)}" if vehicles else ""
+
+
 def format_change_value(field_name: str, value: str | None) -> str:
     value = redact_secret_text(str(value or ""))
     if value == "":
@@ -1012,6 +1026,7 @@ def decorate_shift(row: object) -> dict[str, object]:
     }
     shift["role_segments"] = [role_segment]
     shift["role_chain_label"] = role_chain_label(shift["role_segments"])
+    shift["header_vehicle_label"] = shift_header_vehicle_label(shift["role_segments"])
     colour = clean_colour(str(shift.get("custom_colour") or ""))
     shift["colour_style"] = f"--shift-colour: {colour};" if colour else ""
     shift["description_lines"] = description_lines(str(shift.get("description") or ""))
@@ -1103,6 +1118,7 @@ def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[
     merged["roster_summary"] = parse_roster_summary(list(merged.get("description_lines") or []))
     merged["role_segments"] = list(left.get("role_segments") or []) + list(right.get("role_segments") or [])
     merged["role_chain_label"] = role_chain_label(list(merged.get("role_segments") or []))
+    merged["header_vehicle_label"] = shift_header_vehicle_label(list(merged.get("role_segments") or []))
     merged["changed_since_viewed"] = int(left.get("changed_since_viewed") or 0) or int(right.get("changed_since_viewed") or 0)
     merged["combined_shift_ids"] = list(left.get("combined_shift_ids") or [left["id"]]) + list(
         right.get("combined_shift_ids") or [right["id"]]
@@ -1248,9 +1264,6 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
                     "employee_name": "Open shift",
                     "position_label": "Open shift" if is_vehicle else area_label,
                     "vehicle_label": vehicle_label,
-                    "position_vehicle_label": (
-                        f"Open shift · {vehicle_label}" if vehicle_label else ("Open shift" if is_vehicle else area_label)
-                    ),
                     "sort_order": area_sort,
                     "changed": bool(item.get("assignment_changed")),
                     "change_summary": item.get("assignment_change_summary") or "",
@@ -1295,7 +1308,6 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
                 "employee_name": person.get("employee_name") or "Open shift",
                 "position_label": position_label,
                 "vehicle_label": vehicle_label,
-                "position_vehicle_label": f"{position_label} · {vehicle_label}" if vehicle_label else position_label,
                 "sort_order": sort_order,
                 "changed": bool(person.get("changed")),
                 "change_summary": "; ".join(list(person.get("change_parts") or [])),

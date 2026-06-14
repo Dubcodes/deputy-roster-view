@@ -23,7 +23,12 @@
         <div class="detail-card-heading">
           <div>
             <p class="eyebrow">{{ shift.time_range }}</p>
-            <h2>{{ shift.role_chain_label or shift.role_full_label or shift.role_label or shift.title or "Shift" }}</h2>
+            <h2>
+              {{ shift.role_chain_label or shift.role_full_label or shift.role_label or shift.title or "Shift" }}
+              {% if shift.header_vehicle_label %}
+                <span class="header-vehicle-label">{{ shift.header_vehicle_label }}</span>
+              {% endif %}
+            </h2>
             <p class="detail-subtitle">
               {{ shift.track_label }}
               {% if shift.race_type_label %} · {{ shift.race_type_label }}{% endif %}
@@ -101,10 +106,11 @@
               <div class="crew-roster-row crew-roster-head" role="row">
                 <span role="columnheader">Position</span>
                 <span role="columnheader">Name</span>
+                <span role="columnheader">Vehicle</span>
               </div>
               {% for person in deputy_schedule_people %}
                 <div class="crew-roster-row{% if person.changed %} has-change{% endif %}" role="row">
-                  <span role="cell">{{ person.position_vehicle_label or person.position_label }}</span>
+                  <span role="cell">{{ person.position_label }}</span>
                   <strong class="crew-name" role="cell">
                     <span>{{ person.employee_name }}</span>
                     {% if person.changed %}
@@ -114,6 +120,7 @@
                       </details>
                     {% endif %}
                   </strong>
+                  <span role="cell">{{ person.vehicle_label or "-" }}</span>
                 </div>
               {% endfor %}
             </div>
