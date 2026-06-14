@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote_plus
 
 from jinja2 import Environment, FileSystemLoader
@@ -75,7 +76,7 @@ def render_day_template() -> None:
             {
                 "id": 1,
                 "deleted_from_source": 0,
-                "colour_style": "",
+                "colour_style": "--shift-location-colour: var(--location-colour-8); --location-colour: var(--location-colour-8);",
                 "time_range": "08:30-17:45",
                 "role_chain_label": "Sound VT",
                 "role_full_label": "Sound VT",
@@ -128,8 +129,70 @@ def render_day_template() -> None:
     )
     if "Race Day" not in html or "11:10 | 16:24" not in html:
         raise AssertionError("Day template did not render expected race-day content.")
+    if "--shift-location-colour: var(--location-colour-8)" not in html:
+        raise AssertionError("Day template did not render per-shift location colour style.")
+
+
+def render_month_template() -> None:
+    env = Environment(loader=FileSystemLoader(ROOT / "app" / "templates"))
+    env.filters.update(
+        datetime=datetime_filter,
+        time=str,
+        day_short=str,
+        hours=str,
+        urlencode=quote_plus,
+    )
+    env.globals["theme_values"] = THEME_VALUES
+    template = env.get_template("month.html")
+    shift = {
+        "id": 1,
+        "date": "2026-06-13",
+        "deleted_from_source": 0,
+        "changed_since_viewed": 0,
+        "colour_style": "--shift-location-colour: var(--location-colour-8); --location-colour: var(--location-colour-8);",
+        "track_label": "Te Rapa",
+        "role_chain_label": "Sound VT",
+        "role_label": "SVT",
+        "title": "[TRAP-T] SVT",
+        "start_label": "08:30",
+        "time_range": "08:30-17:45",
+        "display_hours_label": "9h 15m",
+        "race_type_label": "Thoroughbred racing",
+    }
+    day = {
+        "date": date(2026, 6, 13),
+        "iso": "2026-06-13",
+        "day_number": 13,
+        "in_month": True,
+        "is_today": False,
+        "shifts": [shift],
+        "open_shifts": [],
+        "timesheet": None,
+    }
+    html = template.render(
+        request=SimpleNamespace(url=SimpleNamespace(path="/month", query=""), cookies={}),
+        notice=None,
+        current_user=None,
+        header_context="June 2026",
+        header_prev_url="/month?year=2026&month=5",
+        header_next_url="/month?year=2026&month=7",
+        month_view_url="/month?year=2026&month=6&view=month",
+        list_view_url="/month?year=2026&month=6&view=list",
+        view="month",
+        month_name="June 2026",
+        weekdays=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+        weeks=[{"days": [day], "total": 9.25}],
+        active_days=[day],
+        upcoming_shifts=[shift],
+        today=date(2026, 6, 14),
+    )
+    if 'class="shift-card' not in html:
+        raise AssertionError("Month template did not render a calendar shift card.")
+    if "--shift-location-colour: var(--location-colour-8)" not in html:
+        raise AssertionError("Month template did not render per-shift location colour style.")
 
 
 if __name__ == "__main__":
     render_day_template()
+    render_month_template()
     print("template smoke render ok")

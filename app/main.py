@@ -79,6 +79,8 @@ from .user_credentials import settings_for_user
 
 
 APP_DIR = Path(__file__).resolve().parent
+APP_VERSION = "0.5.0"
+APP_BUILD = "2026.06.14.3"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -1231,7 +1233,10 @@ def decorate_shift(row: object) -> dict[str, object]:
         shift.get("track_label"),
         shift.get("location"),
     )
-    shift["colour_style"] = f"--location-colour: var(--location-colour-{location_colour_index});"
+    shift["colour_style"] = (
+        f"--shift-location-colour: var(--location-colour-{location_colour_index}); "
+        f"--location-colour: var(--location-colour-{location_colour_index});"
+    )
     shift["description_lines"] = description_lines(str(shift.get("description") or ""))
     shift["source_payload_pretty"] = pretty_source_payload(str(shift.get("source_payload") or ""))
     shift["source_diagnostics"] = source_payload_diagnostics(str(shift.get("source_payload") or ""))
@@ -2037,6 +2042,8 @@ def admin_view(request: Request, notice: str | None = None) -> object:
             "header_mode": "settings",
             "current_user": user,
             "settings": settings,
+            "app_version": APP_VERSION,
+            "app_build": APP_BUILD,
             "users": admin_user_rows(),
             "overrides": list_admin_overrides(),
             "error_reports": format_error_reports(),

@@ -10,7 +10,7 @@
     </div>
   </section>
 
-  <section class="settings-grid settings-grid-three">
+  <section class="settings-grid">
     <article class="settings-panel">
       <span class="summary-label">Users</span>
       <strong>{{ users|length }}</strong>
@@ -25,6 +25,11 @@
       <span class="summary-label">Manual overrides</span>
       <strong>{{ overrides|length }}</strong>
       <p class="muted">Overrides are recorded for audit first.</p>
+    </article>
+    <article class="settings-panel">
+      <span class="summary-label">Version</span>
+      <strong>{{ app_version }}</strong>
+      <p class="muted">Build {{ app_build }}</p>
     </article>
   </section>
 
