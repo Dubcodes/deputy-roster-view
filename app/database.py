@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterable
 
 from .config import Settings, get_settings
@@ -426,6 +426,9 @@ def get_due_user_syncs(now_iso: str, limit: int = 1) -> list[sqlite3.Row]:
 
 
 def mark_user_sync_started(user_id: int, started_at: str) -> bool:
+    stale_cutoff = (
+        datetime.now(get_settings().timezone) - timedelta(minutes=45)
+    ).isoformat(timespec="seconds")
     with get_connection() as conn:
         result = conn.execute(
             """
@@ -435,9 +438,12 @@ def mark_user_sync_started(user_id: int, started_at: str) -> bool:
                 last_message = 'Sync running.',
                 updated_at = ?
             WHERE user_id = ?
-              AND sync_in_progress = 0
+              AND (
+                    sync_in_progress = 0
+                    OR COALESCE(updated_at, '') < ?
+                  )
             """,
-            (started_at, user_id),
+            (started_at, user_id, stale_cutoff),
         )
     return result.rowcount > 0
 
@@ -481,6 +487,23 @@ def get_user_sync_state(user_id: int) -> sqlite3.Row | None:
             (user_id,),
         ).fetchone()
     return row
+
+
+def reset_incomplete_user_syncs(message: str = "Previous sync stopped during app restart.") -> int:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        result = conn.execute(
+            """
+            UPDATE user_sync_state
+            SET sync_in_progress = 0,
+                last_status = 'error',
+                last_message = ?,
+                updated_at = ?
+            WHERE sync_in_progress = 1
+            """,
+            (message[:500], now),
+        )
+    return result.rowcount
 
 
 def create_app_user(

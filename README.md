@@ -96,7 +96,16 @@ For temporary testing, enable the built-in tunnel profile:
 COMPOSE_PROFILES=tunnel
 ```
 
-Redeploy the stack, then open the `cloudflared` container logs and copy the `trycloudflare.com` URL.
+Redeploy the stack, then open the `cloudflared` container logs and copy the `trycloudflare.com` URL. This URL is temporary. If Portainer recreates the `cloudflared` container during a redeploy, Cloudflare will issue a new URL.
+
+For a stable public URL, create a named Cloudflare Tunnel and use its token instead:
+
+```env
+COMPOSE_PROFILES=named-tunnel
+CLOUDFLARE_TUNNEL_TOKEN=your-cloudflare-tunnel-token
+```
+
+Only use one tunnel profile at a time: `tunnel` for a throwaway test URL, or `named-tunnel` for a stable Cloudflare-managed URL.
 
 If your Portainer screen supports additional compose files, you can also deploy the normal compose file plus the tunnel overlay:
 

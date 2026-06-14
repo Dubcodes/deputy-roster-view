@@ -48,6 +48,7 @@ from .database import (
     list_app_users,
     mark_user_sync_finished,
     mark_user_sync_started,
+    reset_incomplete_user_syncs,
     update_app_settings,
     update_shift_marks,
     user_has_deputy_credentials,
@@ -1653,6 +1654,7 @@ def signup_enabled() -> bool:
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    reset_incomplete_user_syncs()
     start_scheduler()
 
 

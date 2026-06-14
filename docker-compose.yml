@@ -36,3 +36,12 @@ services:
     depends_on:
       - deputy-roster-view
     restart: unless-stopped
+
+  cloudflared-named:
+    image: cloudflare/cloudflared:latest
+    profiles:
+      - named-tunnel
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - deputy-roster-view
+    restart: unless-stopped
