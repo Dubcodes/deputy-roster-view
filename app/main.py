@@ -1226,14 +1226,12 @@ def decorate_shift(row: object) -> dict[str, object]:
     shift["role_segments"] = [role_segment]
     shift["role_chain_label"] = role_chain_label(shift["role_segments"])
     shift["header_vehicle_label"] = shift_header_vehicle_label(shift["role_segments"])
-    colour = clean_colour(str(shift.get("custom_colour") or ""))
     location_colour_index = stable_location_colour_index(
         shift.get("schedule_location_id"),
         shift.get("track_label"),
         shift.get("location"),
     )
-    location_colour_style = f"--location-colour: var(--location-colour-{location_colour_index});"
-    shift["colour_style"] = f"{location_colour_style} --shift-colour: {colour};" if colour else location_colour_style
+    shift["colour_style"] = f"--location-colour: var(--location-colour-{location_colour_index});"
     shift["description_lines"] = description_lines(str(shift.get("description") or ""))
     shift["source_payload_pretty"] = pretty_source_payload(str(shift.get("source_payload") or ""))
     shift["source_diagnostics"] = source_payload_diagnostics(str(shift.get("source_payload") or ""))
