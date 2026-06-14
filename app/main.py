@@ -24,6 +24,7 @@ from .database import (
     create_app_user,
     create_trusted_device,
     DEPUTY_AREA_OVERRIDES,
+    ensure_user_sync_state,
     fetch_open_deputy_schedule_between,
     fetch_open_deputy_schedule_shifts,
     fetch_deputy_schedule_for_date,
@@ -41,9 +42,12 @@ from .database import (
     get_recent_source_payloads,
     get_recent_sync_logs,
     get_upcoming_shifts,
+    get_user_sync_state,
     init_db,
     list_admin_overrides,
     list_app_users,
+    mark_user_sync_finished,
+    mark_user_sync_started,
     update_app_settings,
     update_shift_marks,
     user_has_deputy_credentials,
@@ -278,14 +282,7 @@ app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="stati
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 _sync_worker_lock = threading.Lock()
 _sync_state_lock = threading.Lock()
-_manual_sync_status: dict[str, object] = {
-    "running": False,
-    "label": "Ready",
-    "message": "",
-    "started_at": "",
-    "finished_at": "",
-    "status": "ready",
-}
+_manual_sync_status_by_scope: dict[str, dict[str, object]] = {}
 
 
 def parse_iso_datetime(value: str | None) -> datetime | None:
@@ -1408,14 +1405,35 @@ def notice_url(path: str, message: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query_items), parts.fragment))
 
 
-def get_manual_sync_status() -> dict[str, object]:
-    with _sync_state_lock:
-        return dict(_manual_sync_status)
+def default_manual_sync_status() -> dict[str, object]:
+    return {
+        "running": False,
+        "label": "Ready",
+        "message": "",
+        "started_at": "",
+        "finished_at": "",
+        "status": "ready",
+    }
 
 
-def set_manual_sync_status(**values: object) -> None:
+def manual_sync_scope(user_id: int | None = None) -> str:
+    return f"user:{user_id}" if user_id is not None else "env"
+
+
+def get_manual_sync_status(user_id: int | None = None) -> dict[str, object]:
     with _sync_state_lock:
-        _manual_sync_status.update(values)
+        status = default_manual_sync_status()
+        status.update(_manual_sync_status_by_scope.get(manual_sync_scope(user_id), {}))
+        return status
+
+
+def set_manual_sync_status(user_id: int | None = None, **values: object) -> None:
+    with _sync_state_lock:
+        scope = manual_sync_scope(user_id)
+        status = default_manual_sync_status()
+        status.update(_manual_sync_status_by_scope.get(scope, {}))
+        status.update(values)
+        _manual_sync_status_by_scope[scope] = status
 
 
 def sync_summary_message(summary: dict[str, object]) -> str:
@@ -1453,15 +1471,32 @@ def run_manual_sync_job(user_id: int | None = None) -> None:
     settings = get_settings()
     if not _sync_worker_lock.acquire(blocking=False):
         set_manual_sync_status(
-            running=True,
-            label="Sync already running",
-            message="Sync already running.",
-            status="running",
+            user_id,
+            running=False,
+            label="Ready",
+            message="Another roster sync is already running. Try again in a minute.",
+            status="ready",
+            finished_at=datetime.now(settings.timezone).isoformat(timespec="seconds"),
         )
         return
+    user_state_started = False
     try:
         started_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
+        if user_id is not None:
+            ensure_user_sync_state(user_id)
+            user_state_started = mark_user_sync_started(user_id, started_at)
+            if not user_state_started:
+                set_manual_sync_status(
+                    user_id,
+                    running=False,
+                    label="Ready",
+                    message="This account already has a sync running. Try again in a minute.",
+                    finished_at=started_at,
+                    status="ready",
+                )
+                return
         set_manual_sync_status(
+            user_id,
             running=True,
             label="Scanning Deputy page now",
             message="Sync running.",
@@ -1474,31 +1509,48 @@ def run_manual_sync_job(user_id: int | None = None) -> None:
         message = sync_summary_message(summary)
         status = "ready" if summary.get("status") == "ok" else "error"
         set_manual_sync_status(
+            user_id,
             running=False,
             label="Ready" if status == "ready" else "Error",
             message=message,
             finished_at=finished_at,
             status=status,
         )
+        if user_id is not None and user_state_started:
+            mark_user_sync_finished(
+                user_id,
+                finished_at=finished_at,
+                status=status,
+                message=message,
+            )
     except Exception as exc:
         finished_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
         set_manual_sync_status(
+            user_id,
             running=False,
             label="Error",
             message=f"Sync failed: {exc.__class__.__name__}. Check the app logs if this repeats.",
             finished_at=finished_at,
             status="error",
         )
+        if user_id is not None and user_state_started:
+            mark_user_sync_finished(
+                user_id,
+                finished_at=finished_at,
+                status="error",
+                message=f"Sync failed: {exc.__class__.__name__}.",
+            )
     finally:
         _sync_worker_lock.release()
 
 
 def queue_manual_sync(background_tasks: BackgroundTasks, user_id: int | None = None) -> bool:
-    status = get_manual_sync_status()
+    status = get_manual_sync_status(user_id)
     if bool(status.get("running")):
         return False
     settings = get_settings()
     set_manual_sync_status(
+        user_id,
         running=True,
         label="Scanning Deputy page now",
         message="Sync queued.",
@@ -2034,6 +2086,8 @@ def settings_view(request: Request, notice: str | None = None) -> object:
         "warnings": int(capture_stats.get("warning_count") or 0),
         "changed": int(schedule_snapshot.get("changed_rows") or 0),
     }
+    user_sync_state = get_user_sync_state(owner_user_id) if owner_user_id is not None else None
+    user_last_sync_at = str(user_sync_state["last_sync_at"] or "") if user_sync_state else ""
     return templates.TemplateResponse(
         "settings.html",
         {
@@ -2047,9 +2101,10 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "calendar_url_configured": bool(calendar_url),
             "calendar_url_source": get_calendar_url_source(settings),
             "last_successful_sync": get_last_successful_sync(),
+            "user_last_sync_at": user_last_sync_at,
             "next_shift": decorate_shift(next_shift) if next_shift else None,
             "pre_shift": pre_shift,
-            "sync_status": get_manual_sync_status(),
+            "sync_status": get_manual_sync_status(owner_user_id),
             "sync_logs": get_recent_sync_logs(),
             "source_payload_shifts": [
                 decorate_shift(row)
@@ -2126,7 +2181,7 @@ def sync_now(request: Request, background_tasks: BackgroundTasks, next: str | No
     user = current_user(request)
     user_id = int(user["id"]) if user and user.get("id") is not None else None
     started = queue_manual_sync(background_tasks, user_id=user_id)
-    status = get_manual_sync_status()
+    status = get_manual_sync_status(user_id)
     wants_json = request.headers.get("x-requested-with") == "fetch" or "application/json" in request.headers.get("accept", "")
     if wants_json:
         return JSONResponse({"started": started, **status})
@@ -2136,8 +2191,10 @@ def sync_now(request: Request, background_tasks: BackgroundTasks, next: str | No
 
 
 @app.get("/sync-status")
-def sync_status() -> JSONResponse:
-    return JSONResponse(get_manual_sync_status())
+def sync_status(request: Request) -> JSONResponse:
+    user = current_user(request)
+    user_id = int(user["id"]) if user and user.get("id") is not None else None
+    return JSONResponse(get_manual_sync_status(user_id))
 
 
 templates.env.filters["datetime"] = format_datetime

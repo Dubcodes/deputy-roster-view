@@ -24,7 +24,7 @@ The personal shift endpoint often returns only area/location IDs, so the app sto
 
 Deputy's schedule UI can fail to expose All Locations in a headless capture, especially for non-admin users. After login, the app now uses the learned location list to query upcoming racing schedules in weekly batches. This is still read-only and staggered per user, but it gives the shared crew database better coverage than clicking track filters one by one.
 
-When Deputy still leaves a roster area unresolved, the app runs a targeted area-ID search for the user's own roster areas and sibling areas for missed locations. Area overrides are allowed only for confirmed Deputy IDs, such as Joshua's H-Cambridge Side 1 area, and should be treated as fallbacks rather than the primary data source. Overrides also relabel existing saved rows at display time, so old `Web / Shift` rows can improve without waiting for Deputy to resend every field.
+Deputy rejects the tempting `areaIds` schedule-search shape with invalid-format errors, so the app does not use targeted area-ID searches. Area overrides are allowed only for confirmed Deputy IDs, such as Joshua's H-Cambridge Side 1 area, and should be treated as display/import fallbacks rather than the primary data source. Overrides also relabel existing saved rows at display time, so old `Web / Shift` rows can improve without waiting for Deputy to resend every field.
 
 ## Stagger User Syncs
 

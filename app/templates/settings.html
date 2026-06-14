@@ -17,9 +17,9 @@
         </div>
       </div>
       <form action="/sync-now" method="post" data-progress-form>
-        <button class="button" type="submit" data-progress-button {% if sync_status.running %}disabled{% endif %}>Sync and Update</button>
+        <button class="button" type="submit" data-progress-button {% if sync_status.running %}disabled{% endif %}>Sync my roster</button>
       </form>
-      <p class="muted">Auto sync runs at 5am, 12 hours before a shift, one hour before start, and again 30 minutes before start if changes were found. User accounts are staggered so Deputy is not hit all at once.</p>
+      <p class="muted">Manual sync updates this account. Auto sync runs at 5am, 12 hours before a shift, one hour before start, and again 30 minutes before start if changes were found. User accounts are staggered so Deputy is not hit all at once.</p>
     </article>
 
     <article class="settings-panel">
@@ -30,7 +30,7 @@
       {% else %}
         <strong>None listed</strong>
       {% endif %}
-      <p class="muted">Last sync: {{ last_successful_sync.finished_at|datetime if last_successful_sync else "Never" }}</p>
+      <p class="muted">Last sync: {{ user_last_sync_at|datetime if user_last_sync_at else "Never" }}</p>
     </article>
 
     <article class="settings-panel roster-snapshot-panel">

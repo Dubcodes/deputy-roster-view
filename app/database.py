@@ -470,6 +470,19 @@ def mark_user_sync_finished(
         )
 
 
+def get_user_sync_state(user_id: int) -> sqlite3.Row | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM user_sync_state
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+    return row
+
+
 def create_app_user(
     *,
     deputy_email: str,

@@ -90,7 +90,7 @@ Daily and pre-shift sync triggers should plan per-user windows, not run every ac
 - `USER_SYNC_JITTER_MINUTES=2`
 - `USER_SYNC_BATCH_SIZE=1`
 
-Manual Sync and Update is immediate for the user who pressed the button.
+Manual "Sync my roster" is immediate for the user who pressed the button.
 
 ## Admin Panel
 

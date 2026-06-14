@@ -45,7 +45,7 @@ Schedule display is scoped by both date and Deputy location ID. This keeps split
 - `/month`: main landing calendar/list view.
 - `/day/{yyyy-mm-dd}`: shift detail, race-day timings, Deputy crew schedule, change history, timing notes.
 - `/settings`: sync control, roster snapshot, diagnostics, maintenance.
-- `/sync-now`: starts background sync and redirects/polls.
+- `/sync-now`: starts a background sync for the signed-in account and redirects/polls.
 - `/signup` and `/login`: one-time trusted-device flow.
 - `/admin`: user/sync health and manual override audit.
 

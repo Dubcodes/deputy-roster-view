@@ -66,9 +66,6 @@ TRACK_NAMES = {
 DEFAULT_RACE_TYPE_BY_CODE = {
     "CAM": "H",
 }
-AREA_LOCATION_OVERRIDES = {
-    1192: 56,
-}
 
 
 @dataclass(frozen=True)
@@ -847,69 +844,6 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     if failed_requests:
                         events.append(f"Expanded area reference capture had {failed_requests} failed requests.")
 
-                def own_shift_area_ids_in_window(start_at: datetime, end_at: datetime) -> set[int]:
-                    area_ids: set[int] = set()
-                    for shift in extracted_shifts_by_id.values():
-                        area_id = _safe_int(shift.get("area"))
-                        if area_id is None:
-                            continue
-                        try:
-                            shift_start = datetime.fromisoformat(str(shift.get("start") or ""))
-                        except ValueError:
-                            continue
-                        if shift_start.tzinfo is None:
-                            shift_start = shift_start.replace(tzinfo=settings.timezone)
-                        if start_at <= shift_start <= end_at:
-                            area_ids.add(area_id)
-                    return area_ids
-
-                def schedule_location_id_for_shift(shift: dict[str, Any]) -> int | None:
-                    location_id = _safe_int(shift.get("areaLocationId"))
-                    area_id = _safe_int(shift.get("area"))
-                    if location_id is None and area_id is not None:
-                        location_id = AREA_LOCATION_OVERRIDES.get(area_id)
-                    if location_id is None and area_id is not None:
-                        area = area_refs_by_id.get(str(area_id)) or {}
-                        location_id = _safe_int(area.get("locationId"))
-                    return location_id
-
-                def schedule_row_location_id(row: dict[str, Any]) -> int | None:
-                    location_id = _safe_int(row.get("areaLocationId"))
-                    area_id = _safe_int(row.get("area"))
-                    if location_id is None and area_id is not None:
-                        area = area_refs_by_id.get(str(area_id)) or {}
-                        location_id = _safe_int(area.get("locationId"))
-                    return location_id
-
-                def own_shift_missing_location_ids() -> set[int]:
-                    schedule_location_dates: set[tuple[str, int]] = set()
-                    for row in extracted_schedule_shifts_by_id.values():
-                        row_date = str(row.get("start") or "")[:10]
-                        location_id = schedule_row_location_id(row)
-                        if row_date and location_id is not None:
-                            schedule_location_dates.add((row_date, location_id))
-
-                    missing_location_ids: set[int] = set()
-                    for shift in extracted_shifts_by_id.values():
-                        shift_date = str(shift.get("start") or "")[:10]
-                        location_id = schedule_location_id_for_shift(shift)
-                        if (
-                            shift_date
-                            and location_id is not None
-                            and (shift_date, location_id) not in schedule_location_dates
-                        ):
-                            missing_location_ids.add(location_id)
-                    return missing_location_ids
-
-                def area_ids_for_locations(location_ids: set[int]) -> set[int]:
-                    area_ids: set[int] = set()
-                    for area_id_text, area in area_refs_by_id.items():
-                        area_id = _safe_int(area_id_text)
-                        location_id = _safe_int(area.get("locationId"))
-                        if area_id is not None and location_id in location_ids:
-                            area_ids.add(area_id)
-                    return area_ids
-
                 async def capture_direct_schedule_searches() -> None:
                     location_ids = _direct_schedule_location_ids(location_refs_by_id)
                     if not location_ids:
@@ -977,84 +911,6 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     )
                     if failed_requests:
                         events.append(f"Direct schedule search had {failed_requests} failed batched requests.")
-
-                async def capture_targeted_area_schedule_searches() -> None:
-                    start_at, end_at = schedule_capture_bounds()
-                    own_area_ids = own_shift_area_ids_in_window(start_at, end_at)
-                    missing_location_ids = own_shift_missing_location_ids()
-                    target_area_ids = set(own_area_ids)
-                    target_area_ids.update(area_ids_for_locations(missing_location_ids))
-                    if not target_area_ids:
-                        events.append("Targeted roster-area search skipped because no own roster areas needed follow-up.")
-                        return
-
-                    initial_shift_ids = set(extracted_schedule_shifts_by_id)
-                    request_count = 0
-                    failed_requests = 0
-                    rows_seen = 0
-                    window_start = start_at
-                    target_area_list = sorted(target_area_ids)
-
-                    while window_start <= end_at:
-                        window_end = min(
-                            window_start + timedelta(days=6, hours=23, minutes=59, seconds=59),
-                            end_at,
-                        )
-                        for batch_area_ids in _chunks(target_area_list, DIRECT_SCHEDULE_LOCATION_BATCH_SIZE):
-                            body_data = {
-                                "start": window_start.isoformat(),
-                                "end": window_end.isoformat(),
-                                "expandMetadata": True,
-                                "locationMode": "SELECTED",
-                                "locationIds": [],
-                                "areaIds": batch_area_ids,
-                            }
-                            try:
-                                result = await fetch_schedule_search(body_data)
-                            except Exception as exc:
-                                failed_requests += 1
-                                events.append(
-                                    "Targeted roster-area search failed for "
-                                    f"{window_start.date().isoformat()} to {window_end.date().isoformat()}: "
-                                    f"{redacted_text(str(exc))[:180]}."
-                                )
-                                continue
-
-                            request_count += 1
-                            body = result.get("body") if isinstance(result, dict) else None
-                            status = int(result.get("status") or 0) if isinstance(result, dict) else 0
-                            if not isinstance(result, dict) or not result.get("ok"):
-                                failed_requests += 1
-                                events.append(
-                                    "Targeted roster-area search returned "
-                                    f"HTTP {status or 'unknown'} for "
-                                    f"{window_start.date().isoformat()} to {window_end.date().isoformat()}."
-                                )
-                                continue
-
-                            rows_seen += store_schedule_search_body(body)
-
-                        window_start = (window_end + timedelta(seconds=1)).replace(
-                            hour=0,
-                            minute=0,
-                            second=0,
-                            microsecond=0,
-                        )
-
-                    added = len(set(extracted_schedule_shifts_by_id) - initial_shift_ids)
-                    location_note = (
-                        f" including {len(missing_location_ids)} missed locations"
-                        if missing_location_ids
-                        else ""
-                    )
-                    events.append(
-                        "Targeted roster-area search covered "
-                        f"{start_at.date().isoformat()} to {end_at.date().isoformat()} "
-                        f"across {len(target_area_ids)} areas{location_note} in {request_count} requests, "
-                        f"saw {rows_seen} crew rows, and added {added} crew rows."
-                    )
-                    if failed_requests:
-                        events.append(f"Targeted roster-area search had {failed_requests} failed requests.")
 
                 async def capture_response(response: Any) -> None:
                     try:
@@ -1169,7 +1025,6 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     await capture_extended_own_roster()
                     await capture_expanded_area_refs()
                     await capture_direct_schedule_searches()
-                    await capture_targeted_area_schedule_searches()
             finally:
                 if context is not None:
                     await context.close()
