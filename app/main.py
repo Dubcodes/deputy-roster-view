@@ -46,12 +46,16 @@ from .database import (
     init_db,
     list_admin_overrides,
     list_app_users,
+    list_trusted_devices_for_user,
     mark_user_sync_finished,
     mark_user_sync_started,
+    revoke_trusted_device_for_user,
     reset_incomplete_user_syncs,
     update_deputy_user_ical_url,
     update_app_settings,
     update_shift_marks,
+    update_user_display_theme,
+    update_user_pin_hash,
     user_has_deputy_credentials,
     user_has_ical_url,
 )
@@ -1627,6 +1631,15 @@ def infer_display_name_from_email(email: str) -> str:
     return display_name or "Roster User"
 
 
+def admin_user_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for user in list_app_users():
+        item = dict(user)
+        item["devices"] = [dict(device) for device in list_trusted_devices_for_user(int(user["id"]))]
+        rows.append(item)
+    return rows
+
+
 def set_trusted_device_cookie(response: RedirectResponse, user: object, request: Request) -> None:
     settings = get_settings()
     token = new_session_token()
@@ -1686,7 +1699,7 @@ def signup_view(request: Request, next: str | None = None, notice: str | None = 
 
 
 @app.post("/signup")
-async def signup_submit(request: Request) -> RedirectResponse:
+async def signup_submit(request: Request, background_tasks: BackgroundTasks) -> RedirectResponse:
     form = await request.form()
     next_url = safe_next_url(str(form.get("next_url") or ""))
     settings = get_settings()
@@ -1720,6 +1733,7 @@ async def signup_submit(request: Request) -> RedirectResponse:
         encrypted_email=encrypt_text(deputy_email, settings),
         encrypted_password=encrypt_text(deputy_password, settings),
     )
+    queue_manual_sync(background_tasks, user_id=int(user["id"]))
     response = RedirectResponse(url=next_url, status_code=303)
     set_trusted_device_cookie(response, user, request)
     return response
@@ -1772,10 +1786,40 @@ def admin_view(request: Request, notice: str | None = None) -> object:
             "header_mode": "settings",
             "current_user": user,
             "settings": settings,
-            "users": list_app_users(),
+            "users": admin_user_rows(),
             "overrides": list_admin_overrides(),
         },
     )
+
+
+@app.post("/admin/users/{user_id}/devices/{device_id}/revoke")
+def admin_revoke_device(request: Request, user_id: int, device_id: int) -> RedirectResponse:
+    require_admin_user(request)
+    revoked = revoke_trusted_device_for_user(user_id, device_id)
+    message = "Trusted device revoked." if revoked else "That device was already revoked or could not be found."
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/users/{user_id}/pin")
+async def admin_reset_pin(request: Request, user_id: int) -> RedirectResponse:
+    require_admin_user(request)
+    form = await request.form()
+    pin = str(form.get("pin") or "")
+    pin_confirm = str(form.get("pin_confirm") or "")
+    if len(pin) < 4 or not pin.isdigit():
+        return RedirectResponse(url=notice_url("/admin", "PIN must be at least 4 digits."), status_code=303)
+    if pin != pin_confirm:
+        return RedirectResponse(url=notice_url("/admin", "PIN entries did not match."), status_code=303)
+    updated = update_user_pin_hash(user_id, hash_pin(pin))
+    message = "PIN reset." if updated else "User not found."
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/clear-changed")
+def admin_clear_changed(request: Request) -> RedirectResponse:
+    require_admin_user(request)
+    changed = clear_all_changed_flags()
+    return RedirectResponse(url=notice_url("/admin", f"Cleared changed flags on {changed} items."), status_code=303)
 
 
 @app.post("/admin/overrides")
@@ -1946,6 +1990,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
     shifts = combine_adjacent_shifts(
         [decorate_shift(row) for row in fetch_shifts_for_date(date_text, owner_user_id=owner_user_id)]
     )
+    open_shifts = open_schedule_by_date(date_text, date_text).get(date_text, [])
     changes_by_shift: dict[int, list[dict[str, object]]] = {}
     for row in get_shift_changes_for_date(date_text):
         change = decorate_change(row)
@@ -1999,6 +2044,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             "month_year": day_date.year,
             "month_number": day_date.month,
             "shifts": shifts,
+            "open_shifts": open_shifts,
             "deputy_schedule_people": deputy_schedule_people,
             "deputy_schedule_label": deputy_schedule_label,
             "deputy_schedule_changed": deputy_schedule_changed,
@@ -2126,6 +2172,26 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "open_schedule_shifts": visible_open_schedule_shifts(),
         },
     )
+
+
+@app.post("/settings/theme")
+async def save_theme_settings(request: Request) -> RedirectResponse:
+    user = current_user(request)
+    form = await request.form()
+    theme = str(form.get("theme") or "jade").strip().lower()
+    if theme not in {"jade", "steel", "moss", "rose", "amber"}:
+        theme = "jade"
+    if user and user.get("id") is not None:
+        update_user_display_theme(int(user["id"]), theme)
+    response = RedirectResponse(url=notice_url("/settings", "Theme saved."), status_code=303)
+    response.set_cookie(
+        "roster_theme",
+        theme,
+        max_age=365 * 24 * 60 * 60,
+        httponly=False,
+        samesite="lax",
+    )
+    return response
 
 
 @app.post("/settings/calendar")

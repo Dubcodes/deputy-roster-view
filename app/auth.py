@@ -68,6 +68,7 @@ async def trusted_device_middleware(
             request.state.current_user = {
                 "id": device["user_id"],
                 "display_name": device["display_name"],
+                "display_theme": device["display_theme"],
                 "deputy_email": device["deputy_email"],
                 "is_admin": device["is_admin"],
                 "last_sync_at": device["last_sync_at"],

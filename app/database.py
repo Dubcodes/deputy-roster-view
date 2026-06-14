@@ -98,6 +98,7 @@ def init_db(settings: Settings | None = None) -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 deputy_email TEXT UNIQUE,
                 display_name TEXT,
+                display_theme TEXT DEFAULT 'jade',
                 pin_hash TEXT,
                 deputy_web_url TEXT,
                 is_admin INTEGER DEFAULT 0,
@@ -236,6 +237,7 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "deputy_schedule_shifts", "last_changed_at", "TEXT")
         _ensure_column(conn, "deputy_schedule_shifts", "change_summary", "TEXT")
         _ensure_column(conn, "app_users", "deputy_web_url", "TEXT")
+        _ensure_column(conn, "app_users", "display_theme", "TEXT DEFAULT 'jade'")
         _ensure_column(conn, "deputy_user_secrets", "encrypted_ical_url", "TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_location ON deputy_schedule_shifts(date, area_location_id)"
@@ -542,10 +544,10 @@ def create_app_user(
         cursor = conn.execute(
             """
             INSERT INTO app_users (
-                deputy_email, display_name, pin_hash, deputy_web_url, is_admin,
+                deputy_email, display_name, display_theme, pin_hash, deputy_web_url, is_admin,
                 is_active, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            VALUES (?, ?, 'jade', ?, ?, ?, 1, ?, ?)
             """,
             (deputy_email.strip(), display_name.strip(), pin_hash, deputy_web_url.strip(), is_admin, now, now),
         )
@@ -612,6 +614,7 @@ def get_trusted_device(token_hash: str, now: str | None = None) -> sqlite3.Row |
                 d.*,
                 u.deputy_email,
                 u.display_name,
+                u.display_theme,
                 u.is_admin,
                 u.is_active,
                 s.last_sync_at
@@ -641,6 +644,19 @@ def update_trusted_device_seen(device_id: int, expires_at: str | None = None) ->
         )
 
 
+def list_trusted_devices_for_user(user_id: int) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT *
+            FROM trusted_devices
+            WHERE user_id = ?
+            ORDER BY revoked_at IS NOT NULL, last_seen_at DESC, created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+
+
 def revoke_trusted_device(device_id: int) -> None:
     now = datetime.now().isoformat(timespec="seconds")
     with get_connection() as conn:
@@ -648,6 +664,54 @@ def revoke_trusted_device(device_id: int) -> None:
             "UPDATE trusted_devices SET revoked_at = ? WHERE id = ?",
             (now, device_id),
         )
+
+
+def revoke_trusted_device_for_user(user_id: int, device_id: int) -> int:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        result = conn.execute(
+            """
+            UPDATE trusted_devices
+            SET revoked_at = ?
+            WHERE id = ?
+              AND user_id = ?
+              AND revoked_at IS NULL
+            """,
+            (now, device_id, user_id),
+        )
+    return result.rowcount
+
+
+def update_user_pin_hash(user_id: int, pin_hash: str) -> int:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        result = conn.execute(
+            """
+            UPDATE app_users
+            SET pin_hash = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND is_active = 1
+            """,
+            (pin_hash, now, user_id),
+        )
+    return result.rowcount
+
+
+def update_user_display_theme(user_id: int, display_theme: str) -> int:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        result = conn.execute(
+            """
+            UPDATE app_users
+            SET display_theme = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND is_active = 1
+            """,
+            (display_theme, now, user_id),
+        )
+    return result.rowcount
 
 
 def create_admin_override(

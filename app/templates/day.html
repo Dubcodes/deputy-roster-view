@@ -13,8 +13,26 @@
     </div>
   </section>
 
-  {% if not shifts %}
+  {% if not shifts and not open_shifts %}
     <div class="empty-state">No shifts listed for this day.</div>
+  {% endif %}
+
+  {% if open_shifts %}
+    <section class="table-panel open-shifts-panel">
+      <div class="section-heading">
+        <h2>Available / Open Shifts</h2>
+      </div>
+      <div class="open-shift-list">
+        {% for open_shift in open_shifts %}
+          <article class="open-shift-row">
+            <strong>{{ open_shift.date|datetime("%a %d %b") if open_shift.date else date_text }}</strong>
+            <span>{{ open_shift.area_display }}</span>
+            <span>{{ open_shift.time_range or "Time TBC" }}</span>
+            <span>{{ open_shift.status_label or "Open" }}</span>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
   {% endif %}
 
   <section class="detail-list">

@@ -25,6 +25,8 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 - Store shifts, local notes, change history, schedule rows, users, trusted devices, sync state, and sync logs in SQLite.
 - Show month calendar, list view, day details, settings, diagnostics, manual sync, and timesheet summaries.
 - Support one-time signup with encrypted Deputy credentials and long-lived trusted devices.
+- Let admins revoke trusted devices, reset PINs, clear noisy changed flags, and record manual overrides.
+- Let each user choose their own display colour theme.
 - Stagger background syncs across users so Deputy is not hit by every account at once.
 - Run with Docker Compose / Portainer.
 

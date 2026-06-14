@@ -55,14 +55,14 @@
               </a>
             {% endfor %}
             {% for open_shift in day.open_shifts %}
-              <a class="list-shift available-shift-card" href="/sync-now?next=/day/{{ day.iso }}">
+              <a class="list-shift available-shift-card" href="/day/{{ day.iso }}">
                 <span class="list-shift-main">
                   <strong>Available shift</strong>
                   <span>{{ open_shift.area_display }}</span>
                 </span>
                 <span class="list-shift-meta">
                   <span>{{ open_shift.time_range or "Time TBC" }}</span>
-                  <span>Tap to refresh</span>
+                  <span>Open shift</span>
                 </span>
               </a>
             {% endfor %}
@@ -118,7 +118,7 @@
                 </a>
               {% endfor %}
               {% if day.open_shifts %}
-                <a class="available-shift-dot" href="/sync-now?next=/day/{{ day.iso }}" aria-label="{{ day.open_shifts|length }} available shifts. Sync and open day.">
+                <a class="available-shift-dot" href="/day/{{ day.iso }}" aria-label="{{ day.open_shifts|length }} available shifts">
                   <span>Open</span>
                 </a>
               {% endif %}

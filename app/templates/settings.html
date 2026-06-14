@@ -4,6 +4,42 @@
 
 {% block content %}
   <section class="settings-grid settings-grid-three settings-quiet">
+    <article class="settings-panel">
+      <span class="summary-label">Account</span>
+      {% if current_user %}
+        <strong>{{ current_user.display_name or "Roster user" }}</strong>
+      {% else %}
+        <strong>Local</strong>
+      {% endif %}
+      <div class="settings-action-row">
+        {% if current_user and current_user.is_admin %}
+          <a class="button button-secondary" href="/admin">Admin</a>
+        {% endif %}
+        {% if current_user %}
+          <a class="button button-secondary" href="/logout">Logout</a>
+        {% endif %}
+      </div>
+    </article>
+
+    <article class="settings-panel">
+      <span class="summary-label">Theme</span>
+      <strong>Display colours</strong>
+      <form class="settings-form compact-settings-form" action="/settings/theme" method="post">
+        {% set current_theme = current_user.display_theme if current_user and current_user.display_theme else request.cookies.get('roster_theme', 'jade') %}
+        <label class="form-row">
+          <span>Palette</span>
+          <select name="theme">
+            <option value="jade" {% if current_theme == "jade" %}selected{% endif %}>Jade</option>
+            <option value="steel" {% if current_theme == "steel" %}selected{% endif %}>Steel</option>
+            <option value="moss" {% if current_theme == "moss" %}selected{% endif %}>Moss</option>
+            <option value="rose" {% if current_theme == "rose" %}selected{% endif %}>Rose</option>
+            <option value="amber" {% if current_theme == "amber" %}selected{% endif %}>Amber</option>
+          </select>
+        </label>
+        <button class="button button-secondary" type="submit">Save Theme</button>
+      </form>
+    </article>
+
     <article class="settings-panel sync-panel">
       <div class="section-heading">
         <h2>Roster Update</h2>

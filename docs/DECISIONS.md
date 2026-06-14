@@ -18,6 +18,8 @@ The user does not have an official API token. The app uses logged-in web capture
 
 Deputy's logged-in shift endpoint can return only the first page/chunk when asked for one very wide date range. The app still keeps the configurable lookback/lookahead window, but fetches the user's own roster in weekly slices and merges the rows locally so future roster weeks are not silently missed.
 
+Defaults should stay modest for multi-user use: 35 days back and 56 days forward for each user's own roster. The direct shared schedule search is capped separately so the app can cover upcoming crew context without scraping months of unnecessary data.
+
 ## Location IDs Are Learned From Deputy
 
 The personal shift endpoint often returns only area/location IDs, so the app stores Deputy's schedule filter location list and reuses it during import. Dynamic Deputy names win over old hard-coded fallbacks because the fallback IDs can be incomplete or stale.
@@ -36,6 +38,10 @@ Multiple users should not all hit Deputy at 5am or at the same pre-shift window.
 
 The user wants phone access without repeated logins. Trusted-device tokens are stored hashed in the database and refreshed on each authenticated request. `TRUSTED_DEVICE_DAYS` is the per-activity expiry window, while admin revocation and logout still end access.
 
+Admins can revoke a trusted device, reset a user's PIN, and clear changed flags after broad parser/display tuning creates noisy change badges.
+
+Theme selection is stored per app user so different people can keep their own colour palette across trusted devices.
+
 ## Change Visibility
 
 The UI should highlight changes, but avoid noisy false positives:
@@ -49,7 +55,7 @@ Raw iCal and Deputy web capture data are useful for debugging, but too noisy for
 
 ## Open Shifts
 
-Open/available shifts are detected from saved Deputy schedule rows. A visible marker can link through `/sync-now` first so the app refreshes before showing details.
+Open/available shifts are detected from saved Deputy schedule rows. A visible marker should open the day details instead of starting a sync, because an accidental tap on the month view should not trigger a long Deputy capture.
 
 Applying for shifts is not implemented.
 

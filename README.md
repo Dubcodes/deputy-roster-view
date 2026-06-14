@@ -24,7 +24,7 @@ The app is read-only against Deputy. It never writes back to Deputy.
 
    If this is left blank, the app creates `data/app_secret.key` on first run. Keep either the env key or that generated file safe because it is used to encrypt stored Deputy login secrets.
 
-4. The first browser to open the app will be sent to `/signup`. The first signed-up user becomes admin. Each user enters their Deputy email, Deputy password, and a local PIN. PINs are hashed, Deputy passwords are encrypted, and the device receives a long-lived trusted-device cookie.
+4. The first browser to open the app will be sent to `/signup`. The first signed-up user becomes admin. Each user enters their Deputy email, Deputy password, and a local PIN. PINs are hashed, Deputy passwords are encrypted, and the device receives a long-lived trusted-device cookie. Signup queues that user's first roster sync automatically.
 
    Useful env values:
 
@@ -46,7 +46,7 @@ The app is read-only against Deputy. It never writes back to Deputy.
 
    The app does not require a Deputy API token. If an API token is present, the settings page can test it, but the main path uses logged-in Deputy web capture.
 
-5. Optional: set `APP_PORT` if port `8096` conflicts with another service.
+6. Optional: set `APP_PORT` if port `8096` conflicts with another service.
 
    ```env
    APP_PORT=8123
@@ -100,6 +100,8 @@ COMPOSE_PROFILES=tunnel
 
 Redeploy the stack, then open the `cloudflared` container logs and copy the `trycloudflare.com` URL. This URL is temporary. If Portainer recreates the `cloudflared` container during a redeploy, Cloudflare will issue a new URL.
 
+If you want to keep using throwaway trycloudflared URLs while the app is being redeployed often, run the tunnel as a separate Portainer stack/container and point it at the app container name and port. That keeps app updates from recreating the tunnel container. The URL can still change if the tunnel container itself restarts.
+
 For a stable public URL, create a named Cloudflare Tunnel and use its token instead:
 
 ```env
@@ -128,7 +130,7 @@ The tunnel points to the app over the internal Docker network at `http://deputy-
 - If that upcoming shift is marked as changed, the checker runs one more follow-up sync at `CHANGED_FOLLOWUP_SYNC_MINUTES`, default `30`.
 - For multi-user scheduled syncs, users are queued and staggered with `USER_SYNC_STAGGER_MINUTES`, default `7`, plus `USER_SYNC_JITTER_MINUTES`, default `2`.
 - `USER_SYNC_BATCH_SIZE` defaults to `1`, so only one account is captured per runner pass.
-- Deputy web capture asks for each user's own published shifts from `OWN_ROSTER_LOOKBACK_DAYS`, default `45`, days back through `OWN_ROSTER_LOOKAHEAD_DAYS`, default `120`, days forward.
+- Deputy web capture asks for each user's own published shifts from `OWN_ROSTER_LOOKBACK_DAYS`, default `35`, days back through `OWN_ROSTER_LOOKAHEAD_DAYS`, default `56`, days forward.
 - Manual Sync my roster uses the currently logged-in user's saved Deputy login immediately.
 - iCal is optional backup. If the signed-in account has an iCal URL saved, sync uses it after Deputy web capture to fill missing shifts without duplicating web-captured shifts. If no iCal URL is configured, sync skips that source and still uses Deputy web capture.
 
@@ -139,6 +141,8 @@ The app redacts calendar details by design and does not display the configured c
 `TRUSTED_DEVICE_DAYS` controls how long a phone/browser is trusted after activity. The default is `730`.
 
 The app refreshes the trusted-device expiry on each authenticated request, so the timer effectively resets while the user keeps using the app. Admin revocation, logout, clearing browser cookies, changing the app secret, or browser cookie limits can still require login again.
+
+Admins can open Settings -> Admin to revoke trusted devices, reset a user's PIN, and clear changed flags after parser/display tuning creates noisy badges.
 
 ## Navigation
 

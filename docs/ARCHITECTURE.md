@@ -26,9 +26,9 @@
 
 It should prefer an All Locations schedule capture. If that is not selectable, it falls back to upcoming known roster locations.
 
-After login, it also asks Deputy's own web endpoint for the user's personal published shifts over a wider window. Defaults are 45 days back and 120 days forward, configurable with `OWN_ROSTER_LOOKBACK_DAYS` and `OWN_ROSTER_LOOKAHEAD_DAYS`. The wider capture is split into weekly requests because Deputy can return only the first page/chunk when asked for one large date range.
+After login, it also asks Deputy's own web endpoint for the user's personal published shifts over a rolling window. Defaults are 35 days back and 56 days forward, configurable with `OWN_ROSTER_LOOKBACK_DAYS` and `OWN_ROSTER_LOOKAHEAD_DAYS`. The capture is split into weekly requests because Deputy can return only the first page/chunk when asked for one large date range.
 
-For crew coverage, the capture also learns Deputy's primary location list and then performs batched weekly schedule-search requests for upcoming racing locations. This avoids relying only on the visible roster page when All Locations cannot be selected and helps fill shared crew rows for other users.
+For crew coverage, the capture also learns Deputy's primary location list and then performs batched weekly schedule-search requests for upcoming racing locations. This avoids relying only on the visible roster page when All Locations cannot be selected and helps fill shared crew rows for other users. Direct shared schedule capture is capped at 42 days ahead by default to keep multi-user syncs polite.
 
 If the broad location search misses a user's own roster area, the capture follows up with a targeted roster-area search. It includes the user's own area IDs and, when possible, sibling areas for the same missed Deputy location. This helps Harness/other sparse areas resolve without scanning unrelated locations.
 
