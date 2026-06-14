@@ -22,6 +22,7 @@ from .database import (
     count_app_users,
     create_admin_override,
     create_app_user,
+    create_error_report,
     create_trusted_device,
     DEPUTY_AREA_OVERRIDES,
     ensure_user_sync_state,
@@ -31,6 +32,7 @@ from .database import (
     get_calendar_url,
     get_calendar_url_source,
     get_deputy_schedule_snapshot,
+    get_app_user,
     get_app_user_by_email,
     get_shift_changes_for_date,
     get_last_deputy_web_capture,
@@ -46,6 +48,7 @@ from .database import (
     init_db,
     list_admin_overrides,
     list_app_users,
+    list_error_reports,
     list_trusted_devices_for_user,
     mark_user_sync_finished,
     mark_user_sync_started,
@@ -88,6 +91,33 @@ MARK_FIELDS = (
 SECRET_URL_RE = re.compile(r"(calendar\?ap=)[^&\s\"']+")
 URL_RE = re.compile(r"https?://\S+")
 SUMMARY_RE = re.compile(r"^\[([^\]]+)\]\s*(.*)$")
+GENERIC_TRACK_LABELS = {"web", "shift", ""}
+GENERIC_ROLE_LABELS = {"shift", ""}
+KNOWN_SHIFT_CONTEXT_FALLBACKS = (
+    {
+        "date": "2026-07-03",
+        "start": "15:00",
+        "end": "21:00",
+        "source_code": "H-Cambridge",
+        "location": "1 Taylor Street",
+        "location_id": 56,
+        "role_by_name": (
+            ("jayden", "Director"),
+            ("josh", "Side 1"),
+            ("joshua", "Side 1"),
+            ("nate", "Side 2"),
+            ("elliot", "Head On"),
+            ("olivia", "Back"),
+            ("laine", "RTS"),
+            ("bj", "Engineer"),
+            ("brendan", "Engineer"),
+            ("gary", "CCU1"),
+            ("lans", "CCU2"),
+            ("grant", "Sound VT"),
+            ("sharne", "Floor Manager"),
+        ),
+    },
+)
 TRACK_NAMES = {
     "CAM": "Cambridge",
     "CAMBRIDGE": "Cambridge",
@@ -562,6 +592,22 @@ def pretty_source_payload(value: str | None) -> str:
     return redact_secret_text(rendered)
 
 
+def payload_root(value: str | None) -> dict[str, object]:
+    if not value:
+        return {}
+    try:
+        payload = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def truncate_diagnostic_text(value: str, limit: int = 180_000) -> str:
+    if len(value) <= limit:
+        return value
+    return f"{value[:limit]}\n\n[diagnostic text truncated after {limit} characters]"
+
+
 def safe_int(value: object) -> int | None:
     if value in (None, ""):
         return None
@@ -584,14 +630,7 @@ def unique_ints(values: list[object]) -> list[int]:
 
 
 def source_payload_normalised(value: str | None) -> dict[str, object]:
-    if not value:
-        return {}
-    try:
-        payload = json.loads(value)
-    except (TypeError, ValueError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
+    payload = payload_root(value)
     normalised = payload.get("normalised", {})
     return normalised if isinstance(normalised, dict) else {}
 
@@ -716,6 +755,72 @@ def apply_known_area_override(shift: dict[str, object]) -> None:
         shift["schedule_location_ids"] = unique_ints(
             list(shift.get("schedule_location_ids") or []) + [shift.get("schedule_location_id")]
         )
+
+
+def payload_employee_name(shift: dict[str, object]) -> str:
+    payload = payload_root(str(shift.get("source_payload") or ""))
+    deputy_web = payload.get("deputy_web", {}) if isinstance(payload, dict) else {}
+    if not isinstance(deputy_web, dict):
+        deputy_web = {}
+    normalised = payload.get("normalised", {}) if isinstance(payload, dict) else {}
+    if not isinstance(normalised, dict):
+        normalised = {}
+    return str(
+        deputy_web.get("employeeName")
+        or normalised.get("employee_name")
+        or shift.get("employee_name")
+        or ""
+    ).strip()
+
+
+def shift_time_matches(shift: dict[str, object], fallback: dict[str, object]) -> bool:
+    start_at = parse_iso_datetime(str(shift.get("start_at") or ""))
+    end_at = parse_iso_datetime(str(shift.get("end_at") or ""))
+    if not start_at or not end_at:
+        return False
+    return (
+        str(shift.get("date") or "") == str(fallback.get("date") or "")
+        and start_at.strftime("%H:%M") == str(fallback.get("start") or "")
+        and end_at.strftime("%H:%M") == str(fallback.get("end") or "")
+    )
+
+
+def fallback_role_for_employee(employee_name: str, fallback: dict[str, object]) -> str:
+    employee_key = re.sub(r"[^a-z0-9]+", " ", employee_name.lower())
+    for needle, role in fallback.get("role_by_name", ()):
+        needle_key = re.sub(r"[^a-z0-9]+", " ", str(needle).lower()).strip()
+        if needle_key and re.search(rf"\b{re.escape(needle_key)}\b", employee_key):
+            return str(role)
+    return ""
+
+
+def apply_known_shift_context_fallback(shift: dict[str, object]) -> None:
+    source_code = str(shift.get("source_code") or "").strip().lower()
+    track_label = str(shift.get("track_label") or "").strip().lower()
+    if track_label not in GENERIC_TRACK_LABELS and source_code not in {"web", ""}:
+        return
+
+    for fallback in KNOWN_SHIFT_CONTEXT_FALLBACKS:
+        if not shift_time_matches(shift, fallback):
+            continue
+        employee_role = fallback_role_for_employee(payload_employee_name(shift), fallback)
+        role = employee_role or str(shift.get("role_label") or "")
+        if not role or role.lower() in GENERIC_ROLE_LABELS:
+            role = "Shift"
+        parsed = parse_shift_title(f"[{fallback['source_code']}] {role}")
+        for key in ("source_code", "track_label", "role_label", "role_full_label", "race_type_label", "display_title"):
+            value = parsed.get(key)
+            if value:
+                shift[key] = value
+        if fallback.get("location"):
+            shift["location"] = str(fallback.get("location") or "")
+        location_id = safe_int(fallback.get("location_id"))
+        if location_id is not None:
+            shift["schedule_location_id"] = location_id
+            shift["schedule_location_ids"] = unique_ints(
+                list(shift.get("schedule_location_ids") or []) + [location_id]
+            )
+        return
 
 
 def role_chain_label(segments: list[dict[str, str]]) -> str:
@@ -1044,6 +1149,7 @@ def decorate_shift(row: object) -> dict[str, object]:
     shift["schedule_location_ids"] = [schedule_location_id] if schedule_location_id is not None else []
     shift.update(parsed_title)
     apply_known_area_override(shift)
+    apply_known_shift_context_fallback(shift)
     role_short = str(shift.get("role_label") or shift.get("role_full_label") or "Shift")
     is_vehicle = role_is_vehicleish(role_short)
     role_segment = {
@@ -1640,6 +1746,57 @@ def admin_user_rows() -> list[dict[str, object]]:
     return rows
 
 
+def diagnostic_source_payloads(limit: int = 8) -> list[dict[str, object]]:
+    payloads = []
+    for row in get_recent_source_payloads(limit):
+        item = dict(row)
+        payloads.append(
+            {
+                "id": item.get("id"),
+                "owner_user_id": item.get("owner_user_id"),
+                "source_uid": item.get("source_uid"),
+                "title": item.get("title"),
+                "date": item.get("date"),
+                "start_at": item.get("start_at"),
+                "end_at": item.get("end_at"),
+                "source_status": item.get("source_status"),
+                "payload": pretty_source_payload(str(item.get("source_payload") or "")),
+            }
+        )
+    return payloads
+
+
+def build_error_report_diagnostics(request: Request, user: dict[str, object] | None) -> str:
+    user_id = int(user["id"]) if user and user.get("id") is not None else None
+    sync_state = get_user_sync_state(user_id) if user_id is not None else None
+    raw_web_capture = redact_secret_text(get_last_deputy_web_capture())
+    diagnostics = {
+        "captured_at": datetime.now(get_settings().timezone).isoformat(timespec="seconds"),
+        "request_path": str(request.url.path),
+        "reporter": {
+            "id": user_id,
+            "display_name": (user or {}).get("display_name"),
+            "email": (user or {}).get("deputy_email"),
+        },
+        "sync_status": get_manual_sync_status(user_id),
+        "user_sync_state": dict(sync_state) if sync_state else {},
+        "schedule_snapshot": get_deputy_schedule_snapshot(),
+        "recent_sync_logs": [dict(row) for row in get_recent_sync_logs(8)],
+        "recent_source_payloads": diagnostic_source_payloads(),
+        "last_deputy_web_capture": truncate_diagnostic_text(raw_web_capture),
+    }
+    return json.dumps(diagnostics, ensure_ascii=True, indent=2, sort_keys=True)
+
+
+def format_error_reports() -> list[dict[str, object]]:
+    reports = []
+    for row in list_error_reports():
+        item = dict(row)
+        item["diagnostics_pretty"] = pretty_source_payload(str(item.get("diagnostics") or ""))
+        reports.append(item)
+    return reports
+
+
 def set_trusted_device_cookie(response: RedirectResponse, user: object, request: Request) -> None:
     settings = get_settings()
     token = new_session_token()
@@ -1788,6 +1945,7 @@ def admin_view(request: Request, notice: str | None = None) -> object:
             "settings": settings,
             "users": admin_user_rows(),
             "overrides": list_admin_overrides(),
+            "error_reports": format_error_reports(),
         },
     )
 
@@ -2192,6 +2350,45 @@ async def save_theme_settings(request: Request) -> RedirectResponse:
         samesite="lax",
     )
     return response
+
+
+@app.post("/settings/pin")
+async def change_own_pin(request: Request) -> RedirectResponse:
+    user = current_user(request)
+    if not user or user.get("id") is None:
+        return RedirectResponse(url=notice_url("/login", "Log in before changing your PIN."), status_code=303)
+    form = await request.form()
+    current_pin = str(form.get("current_pin") or "")
+    new_pin = str(form.get("pin") or "")
+    pin_confirm = str(form.get("pin_confirm") or "")
+    if len(new_pin) < 4 or not new_pin.isdigit():
+        return RedirectResponse(url=notice_url("/settings", "New PIN must be at least 4 digits."), status_code=303)
+    if new_pin != pin_confirm:
+        return RedirectResponse(url=notice_url("/settings", "PIN entries did not match."), status_code=303)
+    stored_user = get_app_user(int(user["id"]))
+    if stored_user is None or not verify_pin(current_pin, str(stored_user["pin_hash"] or "")):
+        return RedirectResponse(url=notice_url("/settings", "Current PIN was not recognised."), status_code=303)
+    update_user_pin_hash(int(user["id"]), hash_pin(new_pin))
+    return RedirectResponse(url=notice_url("/settings", "PIN changed."), status_code=303)
+
+
+@app.post("/settings/error-report")
+async def submit_error_report(request: Request) -> RedirectResponse:
+    user = current_user(request)
+    form = await request.form()
+    report_text = str(form.get("report_text") or "").strip()
+    if len(report_text) < 5:
+        return RedirectResponse(url=notice_url("/settings", "Add a few words about what looks wrong."), status_code=303)
+    page_url = str(form.get("page_url") or request.headers.get("referer") or request.url.path)
+    diagnostics = build_error_report_diagnostics(request, user)
+    create_error_report(
+        user_id=int(user["id"]) if user and user.get("id") is not None else None,
+        report_text=report_text,
+        page_url=page_url,
+        user_agent=request.headers.get("user-agent", ""),
+        diagnostics=diagnostics,
+    )
+    return RedirectResponse(url=notice_url("/settings", "Error report saved with the latest diagnostics."), status_code=303)
 
 
 @app.post("/settings/calendar")

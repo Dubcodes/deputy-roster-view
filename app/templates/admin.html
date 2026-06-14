@@ -117,6 +117,31 @@
 
   <section class="table-panel">
     <div class="section-heading">
+      <h2>Error Reports</h2>
+    </div>
+    {% if not error_reports %}
+      <div class="empty-state">No error reports yet.</div>
+    {% else %}
+      <div class="error-report-list">
+        {% for report in error_reports %}
+          <details class="error-report-row">
+            <summary>
+              <span>
+                <strong>{{ report.display_name or report.deputy_email or "Unknown user" }}</strong>
+                <small>{{ report.created_at|datetime }}{% if report.page_url %} · {{ report.page_url }}{% endif %}</small>
+              </span>
+              <span class="badge">{{ report.status or "new" }}</span>
+            </summary>
+            <p>{{ report.report_text }}</p>
+            <textarea class="copy-box" rows="10" readonly>{{ report.diagnostics_pretty }}</textarea>
+          </details>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="table-panel">
+    <div class="section-heading">
       <h2>Add Manual Override</h2>
     </div>
     <form class="marks-form admin-override-form" action="/admin/overrides" method="post">

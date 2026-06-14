@@ -114,6 +114,10 @@ a {
   backdrop-filter: blur(10px);
 }
 
+.site-header.no-month-nav {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .brand-stack {
   grid-column: 1;
   display: flex;
@@ -143,11 +147,11 @@ a {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 6px;
 }
 
 .month-nav strong {
-  min-width: 220px;
+  min-width: 12ch;
   color: var(--text);
   font-size: clamp(1.35rem, 2vw, 2.05rem);
   font-weight: 950;
@@ -194,6 +198,10 @@ a {
   justify-self: end;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.site-header.no-month-nav .site-nav {
+  grid-column: 2;
 }
 
 .site-nav a {
@@ -1787,8 +1795,71 @@ textarea {
 .settings-action-row {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin-top: 10px;
+}
+
+.settings-icon-action {
+  width: 38px;
+  min-width: 38px;
+  padding: 6px;
+}
+
+.inline-settings-details {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.inline-settings-details summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.88rem;
+  font-weight: 850;
+}
+
+.inline-settings-details .settings-form {
+  margin-top: 10px;
+}
+
+.error-report-form {
+  max-width: 760px;
+}
+
+.error-report-list {
+  display: grid;
+  gap: 10px;
+}
+
+.error-report-row {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.error-report-row summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  cursor: pointer;
+}
+
+.error-report-row summary span:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.error-report-row summary small {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.error-report-row p {
+  margin: 10px 0;
 }
 
 .admin-override-form {
@@ -2026,9 +2097,13 @@ th {
 
 @media (max-width: 760px) {
   .site-header {
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: minmax(108px, 1fr) auto auto;
     gap: 6px;
     padding: 8px 6px;
+  }
+
+  .site-header.no-month-nav {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .page-heading,
@@ -2038,12 +2113,11 @@ th {
   }
 
   .brand-stack {
-    max-width: 92px;
+    max-width: none;
     align-self: center;
   }
 
   .brand {
-    max-width: 78px;
     font-size: 0.72rem;
     line-height: 1.05;
   }
@@ -2051,16 +2125,18 @@ th {
   .brand-meta {
     font-size: 0.58rem;
     line-height: 1.05;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
   }
 
   .month-nav {
     justify-content: center;
-    gap: 4px;
+    gap: 2px;
   }
 
   .month-nav strong {
     min-width: 0;
-    flex: 1;
     font-size: 1rem;
     line-height: 1.05;
     text-align: center;
@@ -2134,7 +2210,8 @@ th {
 
   .admin-user-row summary,
   .admin-device-row,
-  .admin-user-tools {
+  .admin-user-tools,
+  .error-report-row summary {
     grid-template-columns: 1fr;
   }
 

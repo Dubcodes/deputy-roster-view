@@ -27,6 +27,7 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 - Support one-time signup with encrypted Deputy credentials and long-lived trusted devices.
 - Let admins revoke trusted devices, reset PINs, clear noisy changed flags, and record manual overrides.
 - Let each user choose their own display colour theme.
+- Let users change their own PIN and submit an error report with recent redacted diagnostics.
 - Stagger background syncs across users so Deputy is not hit by every account at once.
 - Run with Docker Compose / Portainer.
 

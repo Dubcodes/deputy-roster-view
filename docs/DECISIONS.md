@@ -24,6 +24,8 @@ Defaults should stay modest for multi-user use: 35 days back and 56 days forward
 
 The personal shift endpoint often returns only area/location IDs, so the app stores Deputy's schedule filter location list and reuses it during import. Dynamic Deputy names win over old hard-coded fallbacks because the fallback IDs can be incomplete or stale.
 
+If Deputy sends a bare `Web / Shift` row, display code may apply a narrow known-event fallback from user-provided legacy roster data. These fallbacks should be date/time scoped and only fill details Deputy omitted; they must not override richer Deputy data.
+
 ## Schedule Coverage Uses Batched Searches
 
 Deputy's schedule UI can fail to expose All Locations in a headless capture, especially for non-admin users. After login, the app now uses the learned location list to query upcoming racing schedules in weekly batches. This is still read-only and staggered per user, but it gives the shared crew database better coverage than clicking track filters one by one.
@@ -52,6 +54,8 @@ The UI should highlight changes, but avoid noisy false positives:
 ## Raw Data Belongs In Diagnostics
 
 Raw iCal and Deputy web capture data are useful for debugging, but too noisy for the main phone UI. Keep them collapsed in settings with copy buttons.
+
+User-submitted error reports should save a redacted diagnostic snapshot so the admin can compare what the app saw with what Deputy showed at the time.
 
 ## Open Shifts
 

@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="/static/style.css">
   </head>
   <body>
-    <header class="site-header">
+    <header class="site-header {% if header_context %}has-month-nav{% else %}no-month-nav{% endif %}">
       <div class="brand-stack">
         <a class="brand" href="/month">Deputy Roster View</a>
         {% if current_user %}

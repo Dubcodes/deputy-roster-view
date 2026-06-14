@@ -47,13 +47,15 @@ Schedule display is scoped by both date and Deputy location ID. This keeps split
 - `/settings`: sync control, roster snapshot, diagnostics, maintenance.
 - `/sync-now`: starts a background sync for the signed-in account and redirects/polls.
 - `/signup` and `/login`: one-time trusted-device flow.
-- `/admin`: user/sync health and manual override audit.
+- `/admin`: user/sync health, error reports, and manual override audit.
 
 ## Local State
 
 User notes and timing overrides live in `shift_marks` and must survive every sync. Sync code should not overwrite marks.
 
 Deputy login secrets are encrypted in `deputy_user_secrets`. The app secret comes from `APP_SECRET_KEY` or generated `data/app_secret.key`; losing/changing it means stored Deputy passwords cannot be decrypted.
+
+Error reports live in `error_reports`. They include the user's note, page/user-agent context, recent sync state, recent source payload diagnostics, and the latest redacted Deputy web capture snapshot.
 
 ## Change Detection
 

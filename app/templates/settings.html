@@ -16,9 +16,31 @@
           <a class="button button-secondary" href="/admin">Admin</a>
         {% endif %}
         {% if current_user %}
-          <a class="button button-secondary" href="/logout">Logout</a>
+          <a class="icon-button settings-icon-action" href="/logout" aria-label="Logout" title="Logout" onclick="return confirm('Log out of this trusted device? You will need your email and PIN to get back in.');">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l5-5-5-5"></path><path d="M15 12H3"></path><path d="M21 3v18h-8"></path></svg>
+          </a>
         {% endif %}
       </div>
+      {% if current_user %}
+        <details class="inline-settings-details">
+          <summary>Change PIN</summary>
+          <form class="settings-form compact-settings-form" action="/settings/pin" method="post">
+            <label class="form-row">
+              <span>Current PIN</span>
+              <input type="password" name="current_pin" inputmode="numeric" autocomplete="current-password" required>
+            </label>
+            <label class="form-row">
+              <span>New PIN</span>
+              <input type="password" name="pin" inputmode="numeric" autocomplete="new-password" required>
+            </label>
+            <label class="form-row">
+              <span>Repeat PIN</span>
+              <input type="password" name="pin_confirm" inputmode="numeric" autocomplete="new-password" required>
+            </label>
+            <button class="button button-secondary" type="submit">Save PIN</button>
+          </form>
+        </details>
+      {% endif %}
     </article>
 
     <article class="settings-panel">
@@ -82,6 +104,21 @@
       </p>
     </article>
   </section>
+
+  <details class="table-panel diagnostics-panel">
+    <summary>Report An Error</summary>
+    <div class="diagnostics-content">
+      <p class="muted">Tell us what looks wrong. The report saves recent sync/capture diagnostics so the admin can compare it with Deputy data.</p>
+      <form class="settings-form error-report-form" action="/settings/error-report" method="post">
+        <input type="hidden" name="page_url" data-current-page-url>
+        <label class="form-row">
+          <span>What looks wrong?</span>
+          <textarea name="report_text" rows="5" placeholder="Example: 3 July should be Cambridge Harness, Director, not Web Shift." required></textarea>
+        </label>
+        <button class="button" type="submit">Save Error Report</button>
+      </form>
+    </div>
+  </details>
 
   <details class="table-panel open-shifts-panel" {% if open_schedule_shifts %}open{% endif %}>
     <summary>Available / Open Shifts</summary>
@@ -217,6 +254,10 @@
 {% block scripts %}
   <script>
     (() => {
+      document.querySelectorAll("[data-current-page-url]").forEach((input) => {
+        input.value = window.location.href;
+      });
+
       document.querySelectorAll("[data-copy-target]").forEach((button) => {
         const status = document.querySelector(`[data-copy-status-for="${button.dataset.copyTarget}"]`);
         const setStatus = (message) => {

@@ -157,6 +157,18 @@ def init_db(settings: Settings | None = None) -> None:
                 FOREIGN KEY (created_by_user_id) REFERENCES app_users(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS error_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT,
+                user_id INTEGER,
+                report_text TEXT,
+                page_url TEXT,
+                user_agent TEXT,
+                diagnostics TEXT,
+                status TEXT DEFAULT 'new',
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
             CREATE TABLE IF NOT EXISTS capture_coverage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT,
@@ -219,6 +231,7 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_start ON deputy_schedule_shifts(start_at);
             CREATE INDEX IF NOT EXISTS idx_trusted_devices_token ON trusted_devices(token_hash);
             CREATE INDEX IF NOT EXISTS idx_admin_overrides_date ON admin_overrides(target_date);
+            CREATE INDEX IF NOT EXISTS idx_error_reports_created ON error_reports(created_at);
             CREATE INDEX IF NOT EXISTS idx_capture_coverage_date ON capture_coverage(date);
             CREATE INDEX IF NOT EXISTS idx_user_sync_state_next ON user_sync_state(next_sync_after, sync_in_progress);
             """
@@ -712,6 +725,50 @@ def update_user_display_theme(user_id: int, display_theme: str) -> int:
             (display_theme, now, user_id),
         )
     return result.rowcount
+
+
+def create_error_report(
+    *,
+    user_id: int | None,
+    report_text: str,
+    page_url: str,
+    user_agent: str,
+    diagnostics: str,
+) -> sqlite3.Row:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO error_reports (
+                created_at, user_id, report_text, page_url, user_agent, diagnostics, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 'new')
+            """,
+            (now, user_id, report_text[:4000], page_url[:1000], user_agent[:500], diagnostics),
+        )
+        return conn.execute(
+            """
+            SELECT r.*, u.display_name, u.deputy_email
+            FROM error_reports r
+            LEFT JOIN app_users u ON u.id = r.user_id
+            WHERE r.id = ?
+            """,
+            (cursor.lastrowid,),
+        ).fetchone()
+
+
+def list_error_reports(limit: int = 12) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT r.*, u.display_name, u.deputy_email
+            FROM error_reports r
+            LEFT JOIN app_users u ON u.id = r.user_id
+            ORDER BY r.created_at DESC, r.id DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit or 12)),),
+        ).fetchall()
 
 
 def create_admin_override(
