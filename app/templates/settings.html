@@ -12,6 +12,7 @@
         <strong>Local</strong>
       {% endif %}
       <div class="settings-action-row">
+        <a class="button button-secondary" href="/help">Help</a>
         {% if current_user and current_user.is_admin %}
           <a class="button button-secondary" href="/admin">Admin</a>
         {% endif %}
@@ -51,11 +52,9 @@
         <label class="form-row">
           <span>Palette</span>
           <select name="theme">
-            <option value="jade" {% if current_theme == "jade" %}selected{% endif %}>Jade</option>
-            <option value="steel" {% if current_theme == "steel" %}selected{% endif %}>Steel</option>
-            <option value="moss" {% if current_theme == "moss" %}selected{% endif %}>Moss</option>
-            <option value="rose" {% if current_theme == "rose" %}selected{% endif %}>Rose</option>
-            <option value="amber" {% if current_theme == "amber" %}selected{% endif %}>Amber</option>
+            {% for theme_value, theme_label in theme_options %}
+              <option value="{{ theme_value }}" {% if current_theme == theme_value %}selected{% endif %}>{{ theme_label }}</option>
+            {% endfor %}
           </select>
         </label>
         <button class="button button-secondary" type="submit">Save Theme</button>
@@ -113,7 +112,7 @@
         <input type="hidden" name="page_url" data-current-page-url>
         <label class="form-row">
           <span>What looks wrong?</span>
-          <textarea name="report_text" rows="5" placeholder="Example: 3 July should be Cambridge Harness, Director, not Web Shift." required></textarea>
+          <textarea name="report_text" rows="5" placeholder="Example: 3 July should show the right track, position, and crew schedule instead of a generic Web shift." required></textarea>
         </label>
         <button class="button" type="submit">Save Error Report</button>
       </form>

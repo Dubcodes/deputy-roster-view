@@ -9,6 +9,9 @@ from typing import Iterable
 from .config import Settings, get_settings
 
 
+DEFAULT_CREW_POOL_NAME = "Northern Crew"
+
+
 def get_connection(settings: Settings | None = None) -> sqlite3.Connection:
     settings = settings or get_settings()
     os.makedirs(settings.data_dir, exist_ok=True)
@@ -169,6 +172,37 @@ def init_db(settings: Settings | None = None) -> None:
                 FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS crew_pools (
+                name TEXT PRIMARY KEY,
+                created_at TEXT,
+                updated_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS user_crew_memberships (
+                user_id INTEGER,
+                crew_name TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                PRIMARY KEY (user_id, crew_name),
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE,
+                FOREIGN KEY (crew_name) REFERENCES crew_pools(name) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS crew_known_locations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                crew_name TEXT,
+                location_key TEXT,
+                display_name TEXT,
+                source_code TEXT,
+                deputy_location_id INTEGER,
+                first_seen_at TEXT,
+                last_seen_at TEXT,
+                source_user_id INTEGER,
+                UNIQUE(crew_name, location_key),
+                FOREIGN KEY (crew_name) REFERENCES crew_pools(name) ON DELETE CASCADE,
+                FOREIGN KEY (source_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
             CREATE TABLE IF NOT EXISTS capture_coverage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT,
@@ -232,9 +266,21 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_trusted_devices_token ON trusted_devices(token_hash);
             CREATE INDEX IF NOT EXISTS idx_admin_overrides_date ON admin_overrides(target_date);
             CREATE INDEX IF NOT EXISTS idx_error_reports_created ON error_reports(created_at);
+            CREATE INDEX IF NOT EXISTS idx_crew_known_locations_name ON crew_known_locations(crew_name, display_name);
             CREATE INDEX IF NOT EXISTS idx_capture_coverage_date ON capture_coverage(date);
             CREATE INDEX IF NOT EXISTS idx_user_sync_state_next ON user_sync_state(next_sync_after, sync_in_progress);
             """
+        )
+        _ensure_default_crew_pool(conn)
+        now = datetime.now().isoformat(timespec="seconds")
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO user_crew_memberships (user_id, crew_name, created_at, updated_at)
+            SELECT id, ?, ?, ?
+            FROM app_users
+            WHERE is_active = 1
+            """,
+            (DEFAULT_CREW_POOL_NAME, now, now),
         )
         _ensure_column(conn, "shifts", "source_link", "TEXT")
         _ensure_column(conn, "shifts", "source_status", "TEXT")
@@ -275,6 +321,33 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
     }
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _ensure_default_crew_pool(conn: sqlite3.Connection) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO crew_pools (name, created_at, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            updated_at = crew_pools.updated_at
+        """,
+        (DEFAULT_CREW_POOL_NAME, now, now),
+    )
+
+
+def _ensure_user_default_crew(conn: sqlite3.Connection, user_id: int) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    _ensure_default_crew_pool(conn)
+    conn.execute(
+        """
+        INSERT INTO user_crew_memberships (user_id, crew_name, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, crew_name) DO UPDATE SET
+            updated_at = excluded.updated_at
+        """,
+        (user_id, DEFAULT_CREW_POOL_NAME, now, now),
+    )
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict | None:
@@ -584,6 +657,7 @@ def create_app_user(
             """,
             (user_id, now),
         )
+        _ensure_user_default_crew(conn, user_id)
         return conn.execute("SELECT * FROM app_users WHERE id = ?", (user_id,)).fetchone()
 
 
@@ -854,10 +928,15 @@ def fetch_shifts_for_date(date_text: str, owner_user_id: int | None = None) -> l
     return fetch_shifts_between(date_text, date_text, owner_user_id=owner_user_id)
 
 
-def fetch_shift(shift_id: int) -> sqlite3.Row | None:
+def fetch_shift(shift_id: int, owner_user_id: int | None = None) -> sqlite3.Row | None:
+    owner_sql = ""
+    params: list[object] = [shift_id]
+    if owner_user_id is not None:
+        owner_sql = "AND s.owner_user_id = ?"
+        params.append(owner_user_id)
     with get_connection() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT s.*, m.checked, m.confirmed, m.important, m.question,
                    m.early_start, m.gear_needed, m.travel_needed, m.pay_check,
                    m.private_note, m.custom_colour, m.timing_adjustment_time,
@@ -866,15 +945,21 @@ def fetch_shift(shift_id: int) -> sqlite3.Row | None:
             FROM shifts s
             LEFT JOIN shift_marks m ON m.shift_id = s.id
             WHERE s.id = ?
+              {owner_sql}
             """,
-            (shift_id,),
+            params,
         ).fetchone()
     return row
 
 
-def update_shift_marks(shift_id: int, values: dict[str, object]) -> bool:
+def update_shift_marks(shift_id: int, values: dict[str, object], owner_user_id: int | None = None) -> bool:
+    owner_sql = ""
+    params: list[object] = [shift_id]
+    if owner_user_id is not None:
+        owner_sql = "AND owner_user_id = ?"
+        params.append(owner_user_id)
     with get_connection() as conn:
-        shift = conn.execute("SELECT id FROM shifts WHERE id = ?", (shift_id,)).fetchone()
+        shift = conn.execute(f"SELECT id FROM shifts WHERE id = ? {owner_sql}", params).fetchone()
         if shift is None:
             return False
         ensure_shift_mark(conn, shift_id)
@@ -918,29 +1003,56 @@ def update_shift_marks(shift_id: int, values: dict[str, object]) -> bool:
     return True
 
 
-def clear_changed_for_date(date_text: str) -> int:
+def clear_changed_for_date(date_text: str, owner_user_id: int | None = None, include_schedule: bool = False) -> int:
+    owner_sql = ""
+    params: list[object] = [date_text]
+    if owner_user_id is not None:
+        owner_sql = "AND owner_user_id = ?"
+        params.append(owner_user_id)
     with get_connection() as conn:
         shift_result = conn.execute(
-            "UPDATE shifts SET changed_since_viewed = 0 WHERE date = ?",
-            (date_text,),
+            f"UPDATE shifts SET changed_since_viewed = 0 WHERE date = ? {owner_sql}",
+            params,
         )
-        schedule_result = conn.execute(
-            """
-            UPDATE deputy_schedule_shifts
-            SET changed_since_viewed = 0,
-                change_summary = ''
-            WHERE date = ?
-            """,
-            (date_text,),
-        )
-        return shift_result.rowcount + schedule_result.rowcount
+        schedule_result_count = 0
+        if include_schedule:
+            schedule_result = conn.execute(
+                """
+                UPDATE deputy_schedule_shifts
+                SET changed_since_viewed = 0,
+                    change_summary = ''
+                WHERE date = ?
+                """,
+                (date_text,),
+            )
+            schedule_result_count = schedule_result.rowcount
+        return shift_result.rowcount + schedule_result_count
 
 
-def clear_changed_for_shift(shift_id: int) -> int:
+def clear_changed_for_shift(shift_id: int, owner_user_id: int | None = None) -> int:
+    owner_sql = ""
+    params: list[object] = [shift_id]
+    if owner_user_id is not None:
+        owner_sql = "AND owner_user_id = ?"
+        params.append(owner_user_id)
     with get_connection() as conn:
         result = conn.execute(
-            "UPDATE shifts SET changed_since_viewed = 0 WHERE id = ?",
-            (shift_id,),
+            f"UPDATE shifts SET changed_since_viewed = 0 WHERE id = ? {owner_sql}",
+            params,
+        )
+        return result.rowcount
+
+
+def clear_changed_flags_for_user(owner_user_id: int) -> int:
+    with get_connection() as conn:
+        result = conn.execute(
+            """
+            UPDATE shifts
+            SET changed_since_viewed = 0
+            WHERE owner_user_id = ?
+              AND changed_since_viewed = 1
+            """,
+            (owner_user_id,),
         )
         return result.rowcount
 
@@ -1542,6 +1654,7 @@ def _save_deputy_web_own_shifts(
         if values is None:
             continue
         counts["seen"] += 1
+        _record_known_location_from_shift(conn, values, owner_user_id, captured_at)
         existing = _find_existing_shift_for_web(conn, str(values["source_uid"]), shift_id, owner_user_id)
         if existing is None:
             conn.execute(
@@ -1634,6 +1747,62 @@ def _save_deputy_web_own_shifts(
             write_shift_changes(conn, int(existing["id"]), captured_at, changes)
             counts["updated"] += 1
     return counts
+
+
+def _record_known_location_from_shift(
+    conn: sqlite3.Connection,
+    values: dict[str, object],
+    owner_user_id: int | None,
+    captured_at: str,
+) -> None:
+    if owner_user_id is not None:
+        _ensure_user_default_crew(conn, owner_user_id)
+    payload = _json_loads_dict(str(values.get("source_payload") or ""))
+    normalised = payload.get("normalised") if isinstance(payload.get("normalised"), dict) else {}
+    source_code = str(normalised.get("source_code") or "").strip()
+    deputy_location_id = _optional_int(normalised.get("area_location_id"))
+    display_name = str(normalised.get("location_name") or source_code or values.get("location") or "").strip()
+    display_name = re.sub(r"^[THG]-", "", display_name, flags=re.IGNORECASE).strip() or source_code
+    if not display_name or display_name.upper() in {"WEB", "SHIFT"}:
+        return
+    location_key = f"deputy:{deputy_location_id}" if deputy_location_id is not None else re.sub(r"[^a-z0-9]+", "-", display_name.lower()).strip("-")
+    if not location_key:
+        return
+    conn.execute(
+        """
+        INSERT INTO crew_known_locations (
+            crew_name, location_key, display_name, source_code, deputy_location_id,
+            first_seen_at, last_seen_at, source_user_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(crew_name, location_key) DO UPDATE SET
+            display_name = excluded.display_name,
+            source_code = excluded.source_code,
+            deputy_location_id = excluded.deputy_location_id,
+            last_seen_at = excluded.last_seen_at,
+            source_user_id = excluded.source_user_id
+        """,
+        (
+            DEFAULT_CREW_POOL_NAME,
+            location_key,
+            display_name,
+            source_code,
+            deputy_location_id,
+            captured_at,
+            captured_at,
+            owner_user_id,
+        ),
+    )
+
+
+def _json_loads_dict(value: str) -> dict[str, object]:
+    import json
+
+    try:
+        payload = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 WEB_SHIFT_COMPARE_FIELDS = (
@@ -1752,6 +1921,8 @@ def _deputy_web_shift_values(
         "dtend": end_dt.isoformat(),
         "break_minutes": break_minutes,
         "source": "deputy_web",
+        "source_code": source_code,
+        "role_label": role_label,
         "area_id": area_id,
         "area_name": area_name,
         "area_location_id": location_id,

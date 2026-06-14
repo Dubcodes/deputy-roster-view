@@ -22,7 +22,7 @@
 
 ### Deputy Web Capture
 
-`deputy_web.py` logs into the Deputy web app using either a user's encrypted saved credentials or server-level env fallback credentials. It captures relevant JSON responses and saves schedule rows into `deputy_schedule_shifts`. It also stores Deputy location names from the schedule filter response in `deputy_schedule_locations`, so own-roster rows with only area/location IDs can display the real track instead of falling back to `Web`. This is used for crew/role context, open shift counts, and richer roster data.
+`deputy_web.py` logs into the Deputy web app using either a user's encrypted saved credentials or server-level env fallback credentials. It captures relevant JSON responses and saves schedule rows into `deputy_schedule_shifts`. It also stores Deputy location names from the schedule filter response in `deputy_schedule_locations`, so own-roster rows with only area/location IDs can display the real track instead of falling back to `Web`. This is used for crew/position context, open shift counts, and richer roster data.
 
 It should prefer an All Locations schedule capture. If that is not selectable, it falls back to upcoming known roster locations.
 
@@ -33,6 +33,10 @@ For crew coverage, the capture also learns Deputy's primary location list and th
 If the broad location search misses a user's own roster area, the capture follows up with a targeted roster-area search. It includes the user's own area IDs and, when possible, sibling areas for the same missed Deputy location. This helps Harness/other sparse areas resolve without scanning unrelated locations.
 
 Schedule display is scoped by both date and Deputy location ID. This keeps split-crew days clean when two meetings or work groups happen at once.
+
+### Crew/Location Groundwork
+
+All users currently belong to one shared crew pool, `Northern Crew`. When a user's rostered shift syncs with a usable location, the app records that location in `crew_known_locations` for the shared crew. This does not filter open shifts or change the UI yet; it only leaves a clean data shape for future location, crew, or region tagging.
 
 ### Multi-User Sync Queue
 
@@ -45,6 +49,7 @@ Schedule display is scoped by both date and Deputy location ID. This keeps split
 - `/month`: main landing calendar/list view.
 - `/day/{yyyy-mm-dd}`: shift detail, race-day timings, Deputy crew schedule, change history, timing notes.
 - `/settings`: sync control, roster snapshot, diagnostics, maintenance.
+- `/help`: user-facing explanation of screens, buttons, shortcuts, and admin contacts.
 - `/sync-now`: starts a background sync for the signed-in account and redirects/polls.
 - `/signup` and `/login`: one-time trusted-device flow.
 - `/admin`: user/sync health, error reports, and manual override audit.
@@ -52,6 +57,10 @@ Schedule display is scoped by both date and Deputy location ID. This keeps split
 ## Local State
 
 User notes and timing overrides live in `shift_marks` and must survive every sync. Sync code should not overwrite marks.
+
+Themes are stored per user in `app_users.display_theme`. The CSS theme system is variable-driven so open shift badges, notice banners, assigned shifts, and special location-colour accents remain readable without changing roster logic.
+
+Personal roster reads and shift actions are scoped by `owner_user_id` for the signed-in account. Shared Deputy schedule rows can still be displayed as crew context for the same date/location, but they are not treated as the user's own shifts.
 
 Deputy login secrets are encrypted in `deputy_user_secrets`. The app secret comes from `APP_SECRET_KEY` or generated `data/app_secret.key`; losing/changing it means stored Deputy passwords cannot be decrypted.
 

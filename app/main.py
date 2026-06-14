@@ -17,6 +17,7 @@ from .auth import clear_trusted_device, current_user, require_admin_user, truste
 from .config import get_settings
 from .database import (
     clear_all_changed_flags,
+    clear_changed_flags_for_user,
     clear_changed_for_date,
     clear_changed_for_shift,
     count_app_users,
@@ -88,6 +89,30 @@ MARK_FIELDS = (
     ("travel_needed", "Travel"),
     ("pay_check", "Pay check"),
 )
+THEME_OPTIONS = (
+    ("jade", "Jade dark"),
+    ("steel", "Steel dark"),
+    ("moss", "Moss dark"),
+    ("rose", "Rose dark"),
+    ("amber", "Amber dark"),
+    ("daylight", "Daylight"),
+    ("paper", "Paper"),
+    ("mint", "Mint"),
+    ("sky", "Sky"),
+    ("peach", "Peach"),
+    ("track-colours", "Track colours"),
+    ("aurora", "Aurora"),
+    ("sunset", "Sunset"),
+    ("ocean", "Ocean"),
+    ("berry", "Berry"),
+    ("candy", "Candy"),
+    ("high-contrast", "High contrast"),
+    ("race-night", "Race night"),
+    ("garden", "Garden"),
+    ("studio", "Studio"),
+)
+THEME_VALUES = {value for value, _label in THEME_OPTIONS}
+LOCATION_COLOUR_COUNT = 10
 SECRET_URL_RE = re.compile(r"(calendar\?ap=)[^&\s\"']+")
 URL_RE = re.compile(r"https?://\S+")
 SUMMARY_RE = re.compile(r"^\[([^\]]+)\]\s*(.*)$")
@@ -405,6 +430,14 @@ def clean_time_value(value: str | None) -> str:
     if hour > 23 or minute > 59:
         return ""
     return value
+
+
+def stable_location_colour_index(*values: object) -> int:
+    key = "|".join(str(value or "").strip().lower() for value in values if str(value or "").strip())
+    if not key:
+        return 1
+    total = sum((index + 1) * ord(char) for index, char in enumerate(key))
+    return (total % LOCATION_COLOUR_COUNT) + 1
 
 
 def redact_secret_text(value: str) -> str:
@@ -1166,7 +1199,13 @@ def decorate_shift(row: object) -> dict[str, object]:
     shift["role_chain_label"] = role_chain_label(shift["role_segments"])
     shift["header_vehicle_label"] = shift_header_vehicle_label(shift["role_segments"])
     colour = clean_colour(str(shift.get("custom_colour") or ""))
-    shift["colour_style"] = f"--shift-colour: {colour};" if colour else ""
+    location_colour_index = stable_location_colour_index(
+        shift.get("schedule_location_id"),
+        shift.get("track_label"),
+        shift.get("location"),
+    )
+    location_colour_style = f"--location-colour: var(--location-colour-{location_colour_index});"
+    shift["colour_style"] = f"{location_colour_style} --shift-colour: {colour};" if colour else location_colour_style
     shift["description_lines"] = description_lines(str(shift.get("description") or ""))
     shift["source_payload_pretty"] = pretty_source_payload(str(shift.get("source_payload") or ""))
     shift["source_diagnostics"] = source_payload_diagnostics(str(shift.get("source_payload") or ""))
@@ -1746,6 +1785,21 @@ def admin_user_rows() -> list[dict[str, object]]:
     return rows
 
 
+def admin_contact_rows() -> list[dict[str, object]]:
+    contacts = []
+    for user in list_app_users():
+        if not int(user["is_admin"] or 0):
+            continue
+        contacts.append(
+            {
+                "display_name": user["display_name"] or infer_display_name_from_email(str(user["deputy_email"] or "")),
+                "deputy_email": user["deputy_email"],
+                "last_seen_at": user["last_seen_at"],
+            }
+        )
+    return contacts
+
+
 def diagnostic_source_payloads(limit: int = 8) -> list[dict[str, object]]:
     payloads = []
     for row in get_recent_source_payloads(limit):
@@ -1838,6 +1892,20 @@ def on_shutdown() -> None:
 @app.get("/")
 def home() -> RedirectResponse:
     return RedirectResponse(url="/month", status_code=303)
+
+
+@app.get("/help")
+def help_view(request: Request, notice: str | None = None) -> object:
+    return templates.TemplateResponse(
+        "help.html",
+        {
+            "request": request,
+            "notice": notice,
+            "current_user": current_user(request),
+            "header_mode": "settings",
+            "admin_contacts": admin_contact_rows(),
+        },
+    )
 
 
 @app.get("/signup")
@@ -2214,8 +2282,10 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
 
 
 @app.post("/day/{date_text}/mark-viewed")
-def mark_day_viewed(date_text: str) -> RedirectResponse:
-    clear_changed_for_date(date_text)
+def mark_day_viewed(request: Request, date_text: str) -> RedirectResponse:
+    user = current_user(request)
+    owner_user_id = int(user["id"]) if user and user.get("id") is not None else None
+    clear_changed_for_date(date_text, owner_user_id=owner_user_id)
     return RedirectResponse(
         url=notice_url(f"/day/{date_text}", "Changed flags cleared for this day."),
         status_code=303,
@@ -2223,14 +2293,18 @@ def mark_day_viewed(date_text: str) -> RedirectResponse:
 
 
 @app.post("/day/{date_text}/mark-viewed.json")
-def mark_day_viewed_json(date_text: str) -> JSONResponse:
-    cleared = clear_changed_for_date(date_text)
+def mark_day_viewed_json(request: Request, date_text: str) -> JSONResponse:
+    user = current_user(request)
+    owner_user_id = int(user["id"]) if user and user.get("id") is not None else None
+    cleared = clear_changed_for_date(date_text, owner_user_id=owner_user_id)
     return JSONResponse({"ok": True, "cleared": cleared})
 
 
 @app.get("/shift/{shift_id}")
-def shift_view(shift_id: int) -> RedirectResponse:
-    shift = fetch_shift(shift_id)
+def shift_view(request: Request, shift_id: int) -> RedirectResponse:
+    user = current_user(request)
+    owner_user_id = int(user["id"]) if user and user.get("id") is not None else None
+    shift = fetch_shift(shift_id, owner_user_id=owner_user_id)
     if shift is None:
         raise HTTPException(status_code=404, detail="Shift not found")
     return RedirectResponse(url=f"/day/{shift['date']}", status_code=303)
@@ -2238,7 +2312,9 @@ def shift_view(shift_id: int) -> RedirectResponse:
 
 @app.post("/shift/{shift_id}/marks")
 async def save_shift_marks(shift_id: int, request: Request) -> RedirectResponse:
-    shift = fetch_shift(shift_id)
+    user = current_user(request)
+    owner_user_id = int(user["id"]) if user and user.get("id") is not None else None
+    shift = fetch_shift(shift_id, owner_user_id=owner_user_id)
     if shift is None:
         raise HTTPException(status_code=404, detail="Shift not found")
 
@@ -2251,7 +2327,7 @@ async def save_shift_marks(shift_id: int, request: Request) -> RedirectResponse:
     values["timing_adjustment_time"] = clean_time_value(str(form.get("timing_adjustment_time") or ""))
     values["timing_adjustment_last_race"] = 1 if form.get("timing_adjustment_last_race") else 0
     values["timing_adjustment_day_finished"] = 1 if form.get("timing_adjustment_day_finished") else 0
-    update_shift_marks(shift_id, values)
+    update_shift_marks(shift_id, values, owner_user_id=owner_user_id)
     return RedirectResponse(
         url=notice_url(f"/day/{shift['date']}", "Notes saved.") + f"#shift-{shift_id}",
         status_code=303,
@@ -2259,11 +2335,13 @@ async def save_shift_marks(shift_id: int, request: Request) -> RedirectResponse:
 
 
 @app.post("/shift/{shift_id}/mark-viewed")
-def mark_shift_viewed(shift_id: int) -> RedirectResponse:
-    shift = fetch_shift(shift_id)
+def mark_shift_viewed(request: Request, shift_id: int) -> RedirectResponse:
+    user = current_user(request)
+    owner_user_id = int(user["id"]) if user and user.get("id") is not None else None
+    shift = fetch_shift(shift_id, owner_user_id=owner_user_id)
     if shift is None:
         raise HTTPException(status_code=404, detail="Shift not found")
-    clear_changed_for_shift(shift_id)
+    clear_changed_for_shift(shift_id, owner_user_id=owner_user_id)
     return RedirectResponse(
         url=notice_url(f"/day/{shift['date']}", "Changed flag cleared.") + f"#shift-{shift_id}",
         status_code=303,
@@ -2328,6 +2406,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "deputy_schedule_snapshot": schedule_snapshot,
             "roster_snapshot": roster_snapshot,
             "open_schedule_shifts": visible_open_schedule_shifts(),
+            "theme_options": THEME_OPTIONS,
         },
     )
 
@@ -2337,7 +2416,7 @@ async def save_theme_settings(request: Request) -> RedirectResponse:
     user = current_user(request)
     form = await request.form()
     theme = str(form.get("theme") or "jade").strip().lower()
-    if theme not in {"jade", "steel", "moss", "rose", "amber"}:
+    if theme not in THEME_VALUES:
         theme = "jade"
     if user and user.get("id") is not None:
         update_user_display_theme(int(user["id"]), theme)
@@ -2429,10 +2508,15 @@ async def save_calendar_settings(request: Request) -> RedirectResponse:
 
 
 @app.post("/settings/clear-changed")
-def clear_all_changed() -> RedirectResponse:
-    changed = clear_all_changed_flags()
+def clear_all_changed(request: Request) -> RedirectResponse:
+    user = current_user(request)
+    owner_user_id = int(user["id"]) if user and user.get("id") is not None else None
+    if owner_user_id is None:
+        changed = clear_all_changed_flags()
+    else:
+        changed = clear_changed_flags_for_user(owner_user_id)
     return RedirectResponse(
-        url=notice_url("/settings", f"Cleared changed flags on {changed} shifts."),
+        url=notice_url("/settings", f"Cleared changed flags on {changed} of your shifts."),
         status_code=303,
     )
 

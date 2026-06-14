@@ -137,7 +137,7 @@ The app redacts calendar details by design and does not display the configured c
 
 ## Trusted Devices
 
-`TRUSTED_DEVICE_DAYS` controls how long a phone/browser is trusted after activity. The default is `730`.
+`TRUSTED_DEVICE_DAYS` controls how long a device/browser is trusted after activity. The default is `730`.
 
 The app refreshes the trusted-device expiry on each authenticated request, so the timer effectively resets while the user keeps using the app. Admin revocation, logout, clearing browser cookies, changing the app secret, or browser cookie limits can still require login again.
 

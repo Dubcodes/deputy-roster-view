@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+
+{% block title %}Help - Deputy Roster View{% endblock %}
+
+{% block content %}
+  <section class="page-heading compact-heading">
+    <div>
+      <p class="eyebrow">Help</p>
+      <h1>How Deputy Roster View Works</h1>
+    </div>
+    <div class="heading-actions">
+      <a class="button button-secondary" href="/settings">Back to settings</a>
+    </div>
+  </section>
+
+  <section class="help-layout">
+    <article class="table-panel help-panel">
+      <h2>What This App Is</h2>
+      <p>This is a read-only copy of Deputy roster data. It is built to make your roster easier to read on a phone, tablet, or desktop.</p>
+      <p>It can lag behind Deputy, so check Deputy directly if something looks urgent, missing, or payroll-critical.</p>
+    </article>
+
+    <article class="table-panel help-panel">
+      <h2>What You Should See</h2>
+      <p>Your calendar, list, day pages, timesheets, notes, and change badges are scoped to your signed-in account.</p>
+      <p>Shared crew/schedule context can show other people working the same race day because that is the whole point of the crew table.</p>
+      <p>Admin pages can see user and diagnostic information needed to keep the system working.</p>
+    </article>
+
+    <article class="table-panel help-panel">
+      <h2>Main Calendar</h2>
+      <dl class="help-list">
+        <div>
+          <dt>Month view</dt>
+          <dd>The default screen. It shows your rostered days, track, position, start time, changed badges, and fortnight timesheet markers.</dd>
+        </div>
+        <div>
+          <dt>List view</dt>
+          <dd>A more detailed month list. Use it when you want notes, locations, and hours without opening each day.</dd>
+        </div>
+        <div>
+          <dt>Previous / Next</dt>
+          <dd>Move one month backward or forward.</dd>
+        </div>
+        <div>
+          <dt>Month/List icons</dt>
+          <dd>Switch between the full calendar and the list view.</dd>
+        </div>
+        <div>
+          <dt>Gear icon</dt>
+          <dd>Opens Settings.</dd>
+        </div>
+      </dl>
+    </article>
+
+    <article class="table-panel help-panel">
+      <h2>Day Page</h2>
+      <dl class="help-list">
+        <div>
+          <dt>Top card</dt>
+          <dd>Shows your track, vehicle if known, position, race type, address, and calculated hours.</dd>
+        </div>
+        <div>
+          <dt>Race Day</dt>
+          <dd>Shows the short roster note: trucks, office/Clow Place, on-track time, first cross/live/records, race count, first race, and last race where Deputy provides it.</dd>
+        </div>
+        <div>
+          <dt>Deputy Schedule</dt>
+          <dd>Shows the crew list for the same date and track. Position is on the left, person in the middle, vehicle on the right.</dd>
+        </div>
+        <div>
+          <dt>Changed badge</dt>
+          <dd>Means your shift changed since the previous sync. Tap/open the change area to see what changed.</dd>
+        </div>
+        <div>
+          <dt>Maths</dt>
+          <dd>Shows the quick start-to-finish total. Open it for the detailed calculation.</dd>
+        </div>
+        <div>
+          <dt>Notes and timing</dt>
+          <dd>Save private notes or enter a changed last-race/finished-back time for your own checking.</dd>
+        </div>
+      </dl>
+    </article>
+
+    <article class="table-panel help-panel">
+      <h2>Settings</h2>
+      <dl class="help-list">
+        <div>
+          <dt>Sync my roster</dt>
+          <dd>Starts a Deputy sync for your account. Leave the page open if you want to watch the progress bar.</dd>
+        </div>
+        <div>
+          <dt>Theme</dt>
+          <dd>Changes your colour palette. It is saved to your user account.</dd>
+        </div>
+        <div>
+          <dt>Change PIN</dt>
+          <dd>Lets you change your local roster-viewer PIN. This is separate from your Deputy password.</dd>
+        </div>
+        <div>
+          <dt>Logout icon</dt>
+          <dd>Untrusts this device. You will need your email and PIN to sign in again.</dd>
+        </div>
+        <div>
+          <dt>Report an Error</dt>
+          <dd>Saves your message plus recent redacted diagnostics so an admin can inspect what the app saw.</dd>
+        </div>
+        <div>
+          <dt>iCal Backup Feed</dt>
+          <dd>Optional. Paste your Deputy calendar URL if you want the iCal feed used as a fallback during sync.</dd>
+        </div>
+      </dl>
+    </article>
+
+    <article class="table-panel help-panel">
+      <h2>Admin</h2>
+      <dl class="help-list">
+        <div>
+          <dt>Users</dt>
+          <dd>Admins can expand users, revoke trusted devices, and reset PINs.</dd>
+        </div>
+        <div>
+          <dt>Error Reports</dt>
+          <dd>Shows reports submitted from Settings, including the user's note and redacted diagnostic data.</dd>
+        </div>
+        <div>
+          <dt>Clear All Changed Flags</dt>
+          <dd>Clears noisy change badges globally. Normal users only clear their own roster changes from Settings.</dd>
+        </div>
+      </dl>
+    </article>
+
+    <article class="table-panel help-panel">
+      <h2>Shortcuts</h2>
+      <dl class="help-list help-shortcuts">
+        <div>
+          <dt>Swipe left/right</dt>
+          <dd>Move between months on touch devices.</dd>
+        </div>
+        <div>
+          <dt>M</dt>
+          <dd>Switch to month view.</dd>
+        </div>
+        <div>
+          <dt>L</dt>
+          <dd>Switch to list view.</dd>
+        </div>
+        <div>
+          <dt>N</dt>
+          <dd>Next month.</dd>
+        </div>
+        <div>
+          <dt>P</dt>
+          <dd>Previous month.</dd>
+        </div>
+        <div>
+          <dt>S</dt>
+          <dd>Start a sync from the calendar page.</dd>
+        </div>
+      </dl>
+    </article>
+
+    <article class="table-panel help-panel">
+      <h2>Little Things Worth Knowing</h2>
+      <ul class="help-bullets">
+        <li>The clock icon on a Sunday opens the fortnight timesheet summary.</li>
+        <li>Open shifts are listed separately from your own rostered shifts.</li>
+        <li>Opening change history marks your own changed shift as viewed.</li>
+        <li>Trusted-device login is long-lived and refreshes when you use the app.</li>
+        <li>The app never writes back to Deputy.</li>
+      </ul>
+    </article>
+
+    <article class="table-panel help-panel">
+      <h2>Admin Contacts</h2>
+      {% if not admin_contacts %}
+        <div class="empty-state">No admin accounts found.</div>
+      {% else %}
+        <div class="admin-contact-list">
+          {% for admin in admin_contacts %}
+            <div class="admin-contact-row">
+              <strong>{{ admin.display_name }}</strong>
+              <span>{{ admin.deputy_email }}</span>
+              <small>Last seen {{ admin.last_seen_at|datetime if admin.last_seen_at else "Never" }}</small>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </article>
+  </section>
+{% endblock %}
