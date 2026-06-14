@@ -12,7 +12,7 @@
 - Trusted-device auth through `app/auth.py` and `app/security.py`
 - Per-user Deputy credential conversion through `app/user_credentials.py`
 - Docker Compose deployment through `docker-compose.yml`
-- Optional temporary tunnel through the `cloudflared` compose profile or `docker-compose.tunnel.yml`
+- Optional temporary tunnel as a separate Portainer stack using `docker-compose.tunnel.yml`
 
 ## Data Sources
 

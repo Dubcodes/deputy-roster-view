@@ -1,7 +1,12 @@
 services:
-  cloudflared:
+  deputy-roster-tunnel:
     image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate --url http://deputy-roster-view:8000
-    depends_on:
-      - deputy-roster-view
+    command: tunnel --no-autoupdate --url ${TUNNEL_TARGET_URL:-http://deputy-roster-view:8000}
     restart: unless-stopped
+    networks:
+      - roster_net
+
+networks:
+  roster_net:
+    external: true
+    name: ${APP_NETWORK:-deputy-roster-view_default}

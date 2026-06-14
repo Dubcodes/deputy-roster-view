@@ -92,35 +92,34 @@ If you do have a Deputy API token, set `DEPUTY_API_TOKEN` and use Settings -> Te
 
 ## Temporary Trycloudflared URL
 
-For temporary testing, enable the built-in tunnel profile:
+For temporary testing, run `cloudflared` as a separate Portainer stack. This keeps app redeploys from recreating the tunnel container and changing the temporary URL.
 
-```env
-COMPOSE_PROFILES=tunnel
+1. In Portainer, open the app container and copy its network name. It will usually look like `deputy-roster-multi_default`.
+2. Create a second stack, for example `deputy-roster-tunnel`.
+3. Use `docker-compose.tunnel.yml` from this repo, or paste this compose:
+
+```yaml
+services:
+  deputy-roster-tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url ${TUNNEL_TARGET_URL:-http://deputy-roster-view:8000}
+    restart: unless-stopped
+    networks:
+      - roster_net
+
+networks:
+  roster_net:
+    external: true
+    name: ${APP_NETWORK:-deputy-roster-view_default}
 ```
 
-Redeploy the stack, then open the `cloudflared` container logs and copy the `trycloudflare.com` URL. This URL is temporary. If Portainer recreates the `cloudflared` container during a redeploy, Cloudflare will issue a new URL.
+4. In the tunnel stack env, set `APP_NETWORK` to the app stack network name.
+5. If the default target does not resolve, set `TUNNEL_TARGET_URL` to the actual app container name, such as `http://deputy-roster-multi-deputy-roster-view-1:8000`.
+6. Deploy the tunnel stack, then open the tunnel container logs and copy the `trycloudflare.com` URL.
 
-If you want to keep using throwaway trycloudflared URLs while the app is being redeployed often, run the tunnel as a separate Portainer stack/container and point it at the app container name and port. That keeps app updates from recreating the tunnel container. The URL can still change if the tunnel container itself restarts.
+This URL is still temporary. It should survive app redeploys, but Cloudflare may issue a new URL if the tunnel container is recreated or restarted.
 
-For a stable public URL, create a named Cloudflare Tunnel and use its token instead:
-
-```env
-COMPOSE_PROFILES=named-tunnel
-CLOUDFLARE_TUNNEL_TOKEN=your-cloudflare-tunnel-token
-```
-
-Only use one tunnel profile at a time: `tunnel` for a throwaway test URL, or `named-tunnel` for a stable Cloudflare-managed URL.
-
-If your Portainer screen supports additional compose files, you can also deploy the normal compose file plus the tunnel overlay:
-
-```text
-docker-compose.yml
-docker-compose.tunnel.yml
-```
-
-In Portainer's Git stack screen, set `docker-compose.yml` as the main compose path and add `docker-compose.tunnel.yml` under Additional paths.
-
-The tunnel points to the app over the internal Docker network at `http://deputy-roster-view:8000`. Do not put Deputy passwords or app secrets in the tunnel compose file.
+For a stable public URL, create a named Cloudflare Tunnel in Cloudflare and run that as a separate tunnel stack instead. Do not put Deputy passwords or app secrets in the tunnel compose file.
 
 ## Syncing
 

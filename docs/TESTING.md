@@ -40,7 +40,7 @@ After Portainer redeploy:
 - Confirm a failed sync shows a useful message below the status.
 - Open `/admin`.
 - Confirm each user shows next planned sync and last sync status.
-- If using the temporary tunnel, confirm the `cloudflared` container logs show a `trycloudflare.com` URL.
+- If using the temporary tunnel stack, confirm its `cloudflared` container logs show a `trycloudflare.com` URL.
 
 ## Known Test Gaps
 
