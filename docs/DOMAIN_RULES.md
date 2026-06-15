@@ -14,6 +14,7 @@
 - `Ruak` / `RUAK` should display as Ruakaka.
 - Vehicle maintenance days are `[VEH] Vehicles`.
 - Overnight/travel codes such as `8PE` should be treated as out-of-region travel context, not a normal track.
+- Short generic rows such as `Manager / Northern Ops - Contractors` can be Deputy context rows for the same race day. If they are adjacent to a real track shift and share the same roster note, merge them into the real shift for display/totals instead of showing a separate `Web / Shift` entry.
 
 ## Race-Day Timing Maths
 

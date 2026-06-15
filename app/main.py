@@ -80,7 +80,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.14.4"
+APP_BUILD = "2026.06.16.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -143,6 +143,13 @@ URL_RE = re.compile(r"https?://\S+")
 SUMMARY_RE = re.compile(r"^\[([^\]]+)\]\s*(.*)$")
 GENERIC_TRACK_LABELS = {"web", "shift", ""}
 GENERIC_ROLE_LABELS = {"shift", ""}
+CONTEXT_ONLY_ROLE_KEYS = {
+    "manager",
+    "contractor",
+    "contractors",
+    "northernops",
+    "northernopscontractors",
+}
 KNOWN_SHIFT_CONTEXT_FALLBACKS = (
     {
         "date": "2026-07-03",
@@ -906,6 +913,10 @@ def role_is_vehicleish(role_label: str | None) -> bool:
     return bool(re.fullmatch(r"\d{3,4}", normalised) or re.fullmatch(r"RAV\d+", normalised) or normalised in VEHICLE_ROLE_LABELS)
 
 
+def role_is_context_only(role_label: str | None) -> bool:
+    return schedule_label_key(role_label) in CONTEXT_ONLY_ROLE_KEYS
+
+
 def shift_header_vehicle_label(segments: list[dict[str, str]]) -> str:
     has_position = any(segment.get("kind") != "vehicle" for segment in segments)
     if not has_position:
@@ -1270,6 +1281,12 @@ def unique_description_lines(*line_groups: list[str]) -> list[str]:
 
 
 def choose_primary_shift(left: dict[str, object], right: dict[str, object]) -> dict[str, object]:
+    left_generic = shift_has_generic_track(left)
+    right_generic = shift_has_generic_track(right)
+    if left_generic and not right_generic:
+        return right
+    if right_generic and not left_generic:
+        return left
     left_role = str(left.get("role_label") or "")
     right_role = str(right.get("role_label") or "")
     if role_is_vehicleish(left_role) and not role_is_vehicleish(right_role):
@@ -1279,6 +1296,33 @@ def choose_primary_shift(left: dict[str, object], right: dict[str, object]) -> d
     return right if float(right.get("raw_hours") or 0) >= float(left.get("raw_hours") or 0) else left
 
 
+def shift_has_generic_track(shift: dict[str, object]) -> bool:
+    source_code = str(shift.get("source_code") or "").strip().lower()
+    track_label = str(shift.get("track_label") or "").strip().lower()
+    return source_code == "web" or track_label in GENERIC_TRACK_LABELS
+
+
+def roster_context_signature(shift: dict[str, object]) -> set[str]:
+    values = list(shift.get("description_lines") or [])
+    if not values:
+        values = [str(shift.get("description") or "")]
+    signature = set()
+    for value in values:
+        clean_value = re.sub(r"\s+", " ", str(value or "").strip().lower())
+        clean_value = re.split(r"(?i)\s*breaks:\s*", clean_value)[0].strip()
+        if clean_value:
+            signature.add(clean_value)
+    return signature
+
+
+def shifts_share_roster_context(left: dict[str, object], right: dict[str, object]) -> bool:
+    left_context = roster_context_signature(left)
+    right_context = roster_context_signature(right)
+    if not left_context or not right_context:
+        return False
+    return bool(left_context & right_context) or left_context.issubset(right_context) or right_context.issubset(left_context)
+
+
 def can_merge_shift(left: dict[str, object], right: dict[str, object]) -> bool:
     if int(left.get("deleted_from_source") or 0) or int(right.get("deleted_from_source") or 0):
         return False
@@ -1286,12 +1330,34 @@ def can_merge_shift(left: dict[str, object], right: dict[str, object]) -> bool:
     right_start = parse_iso_datetime(str(right.get("start_at") or ""))
     if not left_end or not right_start or left_end != right_start:
         return False
-    return (
+    if (
         left.get("date") == right.get("date")
         and left.get("track_label") == right.get("track_label")
         and left.get("location") == right.get("location")
         and left.get("race_type_label") == right.get("race_type_label")
+    ):
+        return True
+    return (
+        left.get("date") == right.get("date")
+        and shift_has_generic_track(left) != shift_has_generic_track(right)
+        and shifts_share_roster_context(left, right)
     )
+
+
+def clean_merged_role_segments(segments: list[dict[str, object]]) -> list[dict[str, object]]:
+    has_real_position = any(
+        str(segment.get("kind") or "") != "vehicle"
+        and not role_is_context_only(str(segment.get("role") or ""))
+        for segment in segments
+    )
+    if not has_real_position:
+        return segments
+    return [
+        segment
+        for segment in segments
+        if str(segment.get("kind") or "") == "vehicle"
+        or not role_is_context_only(str(segment.get("role") or ""))
+    ]
 
 
 def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[str, object]:
@@ -1322,7 +1388,9 @@ def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[
         list(right.get("description_lines") or []),
     )
     merged["roster_summary"] = parse_roster_summary(list(merged.get("description_lines") or []))
-    merged["role_segments"] = list(left.get("role_segments") or []) + list(right.get("role_segments") or [])
+    merged["role_segments"] = clean_merged_role_segments(
+        list(left.get("role_segments") or []) + list(right.get("role_segments") or [])
+    )
     merged["role_chain_label"] = role_chain_label(list(merged.get("role_segments") or []))
     merged["header_vehicle_label"] = shift_header_vehicle_label(list(merged.get("role_segments") or []))
     merged["changed_since_viewed"] = int(left.get("changed_since_viewed") or 0) or int(right.get("changed_since_viewed") or 0)
