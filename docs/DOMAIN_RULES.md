@@ -61,6 +61,8 @@ On the day page, the large heading should be the track/location first, with the 
 
 Hide `Out of Region` from the normal on-track crew list. It is noise for race-day crew display.
 
+When a generic context row is merged into a real shift, generic labels such as `Shift`, `Manager`, `Northern`, or contractor context should not appear in the visible position chain if a real position is available.
+
 Crew changed badges should only mean the person/position/open-slot assignment changed. Do not badge timing-only crew schedule changes.
 
 ## Overnight Travel

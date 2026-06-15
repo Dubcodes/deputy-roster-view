@@ -80,7 +80,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.16.1"
+APP_BUILD = "2026.06.16.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -144,7 +144,10 @@ SUMMARY_RE = re.compile(r"^\[([^\]]+)\]\s*(.*)$")
 GENERIC_TRACK_LABELS = {"web", "shift", ""}
 GENERIC_ROLE_LABELS = {"shift", ""}
 CONTEXT_ONLY_ROLE_KEYS = {
+    "",
+    "shift",
     "manager",
+    "northern",
     "contractor",
     "contractors",
     "northernops",
@@ -893,11 +896,24 @@ def apply_known_shift_context_fallback(shift: dict[str, object]) -> None:
         return
 
 
+def role_display_key(role_label: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (role_label or "").strip().lower())
+
+
+def role_is_context_only(role_label: str | None) -> bool:
+    return role_display_key(role_label) in CONTEXT_ONLY_ROLE_KEYS
+
+
 def role_chain_label(segments: list[dict[str, str]]) -> str:
+    position_segments = [segment for segment in segments if segment.get("kind") != "vehicle"]
+    real_position_segments = [
+        segment
+        for segment in position_segments
+        if not role_is_context_only(str(segment.get("role") or ""))
+    ]
+    display_segments = real_position_segments or position_segments
     labels = []
-    for segment in segments:
-        if segment.get("kind") == "vehicle":
-            continue
+    for segment in display_segments:
         role = segment.get("role") or "Shift"
         if not labels or labels[-1] != role:
             labels.append(role)
@@ -913,12 +929,12 @@ def role_is_vehicleish(role_label: str | None) -> bool:
     return bool(re.fullmatch(r"\d{3,4}", normalised) or re.fullmatch(r"RAV\d+", normalised) or normalised in VEHICLE_ROLE_LABELS)
 
 
-def role_is_context_only(role_label: str | None) -> bool:
-    return schedule_label_key(role_label) in CONTEXT_ONLY_ROLE_KEYS
-
-
 def shift_header_vehicle_label(segments: list[dict[str, str]]) -> str:
-    has_position = any(segment.get("kind") != "vehicle" for segment in segments)
+    has_position = any(
+        segment.get("kind") != "vehicle"
+        and not role_is_context_only(str(segment.get("role") or ""))
+        for segment in segments
+    )
     if not has_position:
         return ""
     vehicles = []
