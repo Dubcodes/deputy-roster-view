@@ -67,6 +67,8 @@ Roster notes sometimes shorten names. Prefer the Deputy schedule name for displa
 
 When parsing vehicle allocations from roster notes, three-digit tokens such as `684` and `685` are vehicles. Four-digit tokens such as `0845` and `0900` are clock times and must not be shown as vehicles.
 
+Roster notes can put the clock before the timing label, for example `0845 Trucks`, `0900 Clow Place`, or `0930 On track`. These are timing rows, not vehicle rows, even if extra people or vehicle allocations appear later in the same line.
+
 Crew changed badges should only mean the person/position/open-slot assignment changed. Do not badge timing-only crew schedule changes.
 
 ## Overnight Travel

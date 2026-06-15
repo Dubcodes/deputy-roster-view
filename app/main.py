@@ -80,7 +80,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.16.4"
+APP_BUILD = "2026.06.16.5"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -239,6 +239,10 @@ TIMING_LINE_PATTERNS = (
     ("On track", re.compile(r"^on\s+track\s+(.+)$", re.IGNORECASE)),
     ("First cross", re.compile(r"^first\s+cross\s+(.+)$", re.IGNORECASE)),
 )
+TIME_FIRST_TIMING_RE = re.compile(
+    r"^([0-9: ]{3,5}\s*(?:am|pm)?)\s+(trucks?|office|clow\s+place|on\s+track|first\s+cross|fx)\b(?:\s+(.+))?$",
+    re.IGNORECASE,
+)
 INLINE_TIMING_RE = re.compile(
     r"\b(first race|last race|first cross|live)\s+([0-9: ]{3,5}\s*(?:am|pm)?)",
     re.IGNORECASE,
@@ -250,10 +254,16 @@ RACE_COUNT_WITH_TIMES_RE = re.compile(
 )
 CREW_LINE_RE = re.compile(r"^([A-Za-z]{1,8}\d{0,3}|\d{3,4})\s+(.+)$")
 NON_CREW_LABELS = {"office", "trucks", "truck", "clow", "on", "first", "last", "race", "races", "breaks", "records"}
-VEHICLE_ALLOCATION_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]*\d*|\d{3}")
+VEHICLE_ALLOCATION_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]*\d*|(?<!\d)\d{3}(?!\d)")
 VEHICLE_ALLOCATION_TOKEN_RE = re.compile(r"^(?:\d{3}|rav\d+|rp\d+|ob|tender|transit)$", re.IGNORECASE)
 TIMING_LABELS = {
+    "truck": "Trucks",
+    "trucks": "Trucks",
+    "office": "Office",
+    "clow place": "Clow Place",
+    "on track": "On track",
     "first cross": "First cross",
+    "fx": "FX",
     "first race": "First race",
     "last race": "Last race",
 }
@@ -669,6 +679,12 @@ def parse_roster_summary(lines: list[str]) -> dict[str, object]:
                     "people": " ".join(str(name) for name in allocation.get("people") or []),
                 }
             )
+
+        time_first = TIME_FIRST_TIMING_RE.match(line)
+        if time_first:
+            add_timing(time_first.group(2), time_first.group(1))
+            consumed.add(index)
+            continue
 
         for label, pattern in TIMING_LINE_PATTERNS:
             match = pattern.match(line)
@@ -1215,6 +1231,10 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
     for line in shift.get("description_lines") or []:
         line_text = str(line or "").strip()
         if not line_text:
+            continue
+        time_first = TIME_FIRST_TIMING_RE.match(line_text)
+        if time_first:
+            add_row(display_label(time_first.group(2)), display_time(time_first.group(1)))
             continue
         if not any(pattern.search(line_text) for pattern in wanted_patterns):
             continue
