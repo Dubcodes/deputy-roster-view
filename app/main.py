@@ -80,7 +80,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.16.2"
+APP_BUILD = "2026.06.16.3"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -250,6 +250,8 @@ RACE_COUNT_WITH_TIMES_RE = re.compile(
 )
 CREW_LINE_RE = re.compile(r"^([A-Za-z]{1,8}\d{0,3}|\d{3,4})\s+(.+)$")
 NON_CREW_LABELS = {"office", "trucks", "truck", "clow", "on", "first", "last", "race", "races", "breaks", "records"}
+VEHICLE_ALLOCATION_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]*\d*|\d{3,4}")
+VEHICLE_ALLOCATION_TOKEN_RE = re.compile(r"^(?:\d{3,4}|rav\d+|rp\d+|ob|tender|transit)$", re.IGNORECASE)
 TIMING_LABELS = {
     "first cross": "First cross",
     "first race": "First race",
@@ -263,6 +265,11 @@ VEHICLE_ROLE_LABELS = {
     "TENDER",
     "TRANSIT",
     "RAV91",
+}
+NOTE_NAME_ALIASES = {
+    "cambo": ("campbell",),
+    "gaz": ("gary",),
+    "josh": ("joshua",),
 }
 SCHEDULE_POSITION_ALIASES = {
     "side1": ("side1", "Side 1"),
@@ -589,6 +596,58 @@ def shift_hours_value(shift: dict[str, object]) -> float:
         return 0.0
 
 
+def vehicle_note_label(value: str) -> str:
+    clean_value = value.strip()
+    upper_value = clean_value.upper()
+    if upper_value == "OB":
+        return "OB"
+    if upper_value.startswith("RAV") and upper_value[3:].isdigit():
+        return f"Rav{upper_value[3:]}"
+    if upper_value.startswith("RP") and upper_value[2:].isdigit():
+        return f"RP{upper_value[2:]}"
+    if upper_value == "TENDER":
+        return "Tender"
+    if upper_value == "TRANSIT":
+        return "Transit"
+    return clean_value
+
+
+def note_vehicle_allocations_from_text(value: str) -> list[dict[str, object]]:
+    text = re.split(r"\s+[-–]\s+", value, maxsplit=1)[-1]
+    tokens = VEHICLE_ALLOCATION_WORD_RE.findall(text)
+    if not any(VEHICLE_ALLOCATION_TOKEN_RE.match(token) for token in tokens):
+        return []
+
+    allocations: dict[str, list[str]] = {}
+    current_vehicle = ""
+    pending_people: list[str] = []
+    for token in tokens:
+        if VEHICLE_ALLOCATION_TOKEN_RE.match(token):
+            vehicle = vehicle_note_label(token)
+            if pending_people and not current_vehicle:
+                allocations.setdefault(vehicle, []).extend(pending_people)
+                pending_people = []
+                current_vehicle = ""
+            else:
+                current_vehicle = vehicle
+                allocations.setdefault(current_vehicle, [])
+            continue
+
+        person_token = token.strip(" ,")
+        if not person_token:
+            continue
+        if current_vehicle:
+            allocations.setdefault(current_vehicle, []).append(person_token)
+        else:
+            pending_people.append(person_token)
+
+    return [
+        {"vehicle": vehicle, "people": people}
+        for vehicle, people in allocations.items()
+        if vehicle and people
+    ]
+
+
 def parse_roster_summary(lines: list[str]) -> dict[str, object]:
     timings: list[dict[str, str]] = []
     production_notes: list[str] = []
@@ -603,6 +662,14 @@ def parse_roster_summary(lines: list[str]) -> dict[str, object]:
             timings.append({"label": label, "time": time_value})
 
     for index, line in enumerate(lines):
+        for allocation in note_vehicle_allocations_from_text(line):
+            crew_allocations.append(
+                {
+                    "vehicle": str(allocation.get("vehicle") or ""),
+                    "people": " ".join(str(name) for name in allocation.get("people") or []),
+                }
+            )
+
         for label, pattern in TIMING_LINE_PATTERNS:
             match = pattern.match(line)
             if match:
@@ -1535,6 +1602,101 @@ def append_unique(items: list[str], value: str) -> None:
         items.append(value)
 
 
+def person_name_keys(value: str | None) -> set[str]:
+    words = re.findall(r"[a-z0-9]+", str(value or "").lower())
+    keys = set()
+    if words:
+        keys.add("".join(words))
+        keys.add(words[0])
+    return {key for key in keys if key}
+
+
+def note_person_keys(value: str | None) -> set[str]:
+    keys = person_name_keys(value)
+    expanded = set(keys)
+    for key in keys:
+        expanded.update(NOTE_NAME_ALIASES.get(key, ()))
+    return expanded
+
+
+def schedule_person_alias_map(people: list[dict[str, object]]) -> dict[str, list[int]]:
+    aliases: dict[str, list[int]] = {}
+    for index, person in enumerate(people):
+        for key in person_name_keys(str(person.get("employee_name") or "")):
+            aliases.setdefault(key, []).append(index)
+    return aliases
+
+
+def roster_note_vehicle_allocations(shifts: list[dict[str, object]]) -> list[dict[str, str]]:
+    allocations = []
+    seen = set()
+    for shift in shifts:
+        summary = shift.get("roster_summary") if isinstance(shift.get("roster_summary"), dict) else {}
+        for allocation in summary.get("crew_allocations") or []:
+            if not isinstance(allocation, dict):
+                continue
+            vehicle = str(allocation.get("vehicle") or "").strip()
+            people_text = str(allocation.get("people") or "")
+            if not vehicle or not people_text:
+                continue
+            for name in VEHICLE_ALLOCATION_WORD_RE.findall(people_text):
+                if VEHICLE_ALLOCATION_TOKEN_RE.match(name):
+                    continue
+                key = (vehicle.lower(), name.lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                allocations.append({"vehicle": vehicle_note_label(vehicle), "name": name})
+    return allocations
+
+
+def apply_roster_note_vehicles(people: list[dict[str, object]], shifts: list[dict[str, object]]) -> None:
+    if not people:
+        return
+    alias_map = schedule_person_alias_map(people)
+    for allocation in roster_note_vehicle_allocations(shifts):
+        matched_indexes = set()
+        for key in note_person_keys(allocation.get("name")):
+            indexes = alias_map.get(key, [])
+            if len(indexes) == 1:
+                matched_indexes.add(indexes[0])
+        if len(matched_indexes) != 1:
+            continue
+        person = people[matched_indexes.pop()]
+        current_vehicle = str(person.get("vehicle_label") or "").strip()
+        vehicle = str(allocation.get("vehicle") or "").strip()
+        if current_vehicle and current_vehicle != "-":
+            vehicle_parts = [part.strip() for part in current_vehicle.split(",") if part.strip()]
+            if vehicle not in vehicle_parts:
+                vehicle_parts.append(vehicle)
+            person["vehicle_label"] = ", ".join(vehicle_parts)
+        else:
+            person["vehicle_label"] = vehicle
+
+
+def vehicle_for_user_from_schedule(
+    people: list[dict[str, object]],
+    user: object | None,
+    shift: dict[str, object],
+) -> str:
+    candidates = person_name_keys(payload_employee_name(shift))
+    if isinstance(user, dict):
+        candidates.update(person_name_keys(str(user.get("display_name") or "")))
+        candidates.update(person_name_keys(str(user.get("deputy_email") or "").split("@", 1)[0]))
+    if not candidates:
+        return ""
+
+    alias_map = schedule_person_alias_map(people)
+    matched_indexes = set()
+    for key in candidates:
+        indexes = alias_map.get(key, [])
+        if len(indexes) == 1:
+            matched_indexes.add(indexes[0])
+    if len(matched_indexes) != 1:
+        return ""
+    return str(people[matched_indexes.pop()].get("vehicle_label") or "").strip()
+
+
 def schedule_people(rows: list[object]) -> list[dict[str, object]]:
     people_by_key: dict[str, dict[str, object]] = {}
     open_entries: list[dict[str, object]] = []
@@ -2355,6 +2517,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             location_ids=schedule_location_ids or None,
         )
     )
+    apply_roster_note_vehicles(deputy_schedule_people, shifts)
     if not deputy_schedule_people and is_overnight_travel_day(shifts):
         next_day_text = (day_date + timedelta(days=1)).isoformat()
         next_day_shifts = combine_adjacent_shifts(
@@ -2367,8 +2530,13 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
                 location_ids=next_day_location_ids or None,
             )
         )
+        apply_roster_note_vehicles(deputy_schedule_people, next_day_shifts)
         if deputy_schedule_people:
             deputy_schedule_label = deputy_schedule_label_for_shifts("Deputy Schedule - Next Day Crew", next_day_shifts)
+    for shift in shifts:
+        if str(shift.get("header_vehicle_label") or "").strip():
+            continue
+        shift["header_vehicle_label"] = vehicle_for_user_from_schedule(deputy_schedule_people, user, shift)
     deputy_schedule_changed = any(bool(person.get("changed")) for person in deputy_schedule_people)
     day_total = sum(
         shift_hours_value(shift)
