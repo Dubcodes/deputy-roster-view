@@ -65,6 +65,8 @@ When a generic context row is merged into a real shift, generic labels such as `
 
 Roster notes sometimes shorten names. Prefer the Deputy schedule name for display, such as `Jayden-lee`, but allow unambiguous note aliases such as `Jayden` to fill missing vehicle allocations. If the same alias could match more than one crew member on the day, do not guess.
 
+When parsing vehicle allocations from roster notes, three-digit tokens such as `684` and `685` are vehicles. Four-digit tokens such as `0845` and `0900` are clock times and must not be shown as vehicles.
+
 Crew changed badges should only mean the person/position/open-slot assignment changed. Do not badge timing-only crew schedule changes.
 
 ## Overnight Travel

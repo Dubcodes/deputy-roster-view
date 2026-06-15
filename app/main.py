@@ -80,7 +80,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.16.3"
+APP_BUILD = "2026.06.16.4"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -250,8 +250,8 @@ RACE_COUNT_WITH_TIMES_RE = re.compile(
 )
 CREW_LINE_RE = re.compile(r"^([A-Za-z]{1,8}\d{0,3}|\d{3,4})\s+(.+)$")
 NON_CREW_LABELS = {"office", "trucks", "truck", "clow", "on", "first", "last", "race", "races", "breaks", "records"}
-VEHICLE_ALLOCATION_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]*\d*|\d{3,4}")
-VEHICLE_ALLOCATION_TOKEN_RE = re.compile(r"^(?:\d{3,4}|rav\d+|rp\d+|ob|tender|transit)$", re.IGNORECASE)
+VEHICLE_ALLOCATION_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]*\d*|\d{3}")
+VEHICLE_ALLOCATION_TOKEN_RE = re.compile(r"^(?:\d{3}|rav\d+|rp\d+|ob|tender|transit)$", re.IGNORECASE)
 TIMING_LABELS = {
     "first cross": "First cross",
     "first race": "First race",
