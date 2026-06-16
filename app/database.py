@@ -1378,6 +1378,12 @@ def _location_address(location_id: int | None, location_lookup: dict[int, dict[s
     return str(location.get("address") or DEPUTY_LOCATION_ADDRESSES.get(location_id, "") or "").strip()
 
 
+def _clean_role_name(value: object) -> str:
+    role = str(value or "").strip()
+    bracketed = re.match(r"^\[[^\]]+\]\s*(.+)$", role)
+    return bracketed.group(1).strip() if bracketed else role
+
+
 SCHEDULE_COMPARE_FIELDS = (
     ("area_name", "Position"),
     ("employee_name", "Person"),
@@ -1893,6 +1899,7 @@ def _deputy_web_shift_values(
     area_id = _optional_int(shift.get("area"))
     area = area_lookup.get(str(area_id)) if area_id is not None else None
     area_name = str(shift.get("areaName") or (area or {}).get("name") or "").strip()
+    raw_role_name = _clean_role_name(shift.get("roleName") or shift.get("role") or shift.get("title") or "")
     location_id = _optional_int(shift.get("areaLocationId"))
     if location_id is None and area:
         location_id = _optional_int(area.get("locationId"))
@@ -1901,7 +1908,7 @@ def _deputy_web_shift_values(
         location_id = _optional_int(area_override.get("location_id"))
     if location_id is None and area_override:
         location_id = _location_id_for_source_code(str(area_override.get("source_code") or ""))
-    role_label = str(area_override.get("role") or area_name or "Shift").strip()
+    role_label = str(area_override.get("role") or area_name or raw_role_name or "Shift").strip()
     source_code = str(area_override.get("source_code") or _location_source_code(location_id, location_lookup) or "WEB").strip()
     title = f"[{source_code}] {role_label}".strip()
     location = str(area_override.get("location") or _location_address(location_id, location_lookup)).strip()

@@ -1226,9 +1226,19 @@ a {
 }
 
 .shift-mini {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.25em;
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 850;
+}
+
+.shift-mini-time::before {
+  content: "·";
+  margin-right: 0.25em;
 }
 
 .shift-meta {
@@ -3327,13 +3337,34 @@ th {
   }
 
   .shift-track {
-    font-size: 0.68rem;
+    overflow: hidden;
+    font-size: 0.62rem;
     line-height: 1.05;
+    overflow-wrap: normal;
+    text-overflow: clip;
+    white-space: nowrap;
   }
 
   .shift-mini {
-    font-size: 0.6rem;
+    display: grid;
+    gap: 0;
+    overflow: hidden;
+    font-size: 0.56rem;
     line-height: 1.1;
+  }
+
+  .shift-mini-role,
+  .shift-mini-time {
+    min-width: 0;
+    overflow: hidden;
+    overflow-wrap: normal;
+    text-overflow: clip;
+    white-space: nowrap;
+  }
+
+  .shift-mini-time::before {
+    content: "";
+    margin-right: 0;
   }
 
   .shift-meta,

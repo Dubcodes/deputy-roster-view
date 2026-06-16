@@ -101,7 +101,10 @@
               {% for shift in day.shifts %}
                 <a id="shift-card-{{ shift.id }}" class="shift-card{% if shift.deleted_from_source %} is-deleted{% endif %}{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}" style="{{ shift.colour_style }}">
                   <strong class="shift-track">{{ shift.track_label }}</strong>
-                  <span class="shift-mini">{{ shift.role_chain_label or shift.role_label or shift.title or "Shift" }} · {{ shift.start_label }}</span>
+                  <span class="shift-mini">
+                    <span class="shift-mini-role">{{ shift.role_chain_label or shift.role_label or shift.title or "Shift" }}</span>
+                    <span class="shift-mini-time">{{ shift.start_label }}</span>
+                  </span>
                   {% if day.shifts|length == 1 %}
                     <span class="shift-meta">{{ shift.display_hours_label }}</span>
                   {% endif %}

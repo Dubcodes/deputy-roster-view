@@ -80,7 +80,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.16.5"
+APP_BUILD = "2026.06.16.6"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -138,6 +138,47 @@ THEME_OPTIONS = tuple(theme for group in THEME_GROUPS for theme in group["themes
 THEME_VALUES = {str(theme["value"]) for theme in THEME_OPTIONS}
 THEME_LABELS = {str(theme["value"]): str(theme["label"]) for theme in THEME_OPTIONS}
 LOCATION_COLOUR_COUNT = 10
+LOCATION_COLOUR_INDEX_BY_KEY = {
+    "20": 1,
+    "ellet": 1,
+    "ellerslie": 1,
+    "100ascotavenue": 1,
+    "29": 2,
+    "camst": 2,
+    "tcambridge": 2,
+    "cambridgesynthetic": 2,
+    "40racecourseroad": 2,
+    "63": 3,
+    "trapt": 3,
+    "terapa": 3,
+    "12sirtristramavenue": 3,
+    "tarot": 4,
+    "tearoha": 4,
+    "stanleyroadsouth": 4,
+    "68": 5,
+    "matat": 5,
+    "matamata": 5,
+    "statehighway27": 5,
+    "puket": 6,
+    "pukekohe": 6,
+    "222manukauroad": 6,
+    "56": 7,
+    "hcambridge": 7,
+    "cambridgeharness": 7,
+    "cambridge": 7,
+    "1taylorstreet": 7,
+    "rotorua": 8,
+    "tr": 8,
+    "274278fentonstreetglenholmerotorua3010": 8,
+    "66": 9,
+    "taurt": 9,
+    "tauranga": 9,
+    "1383cameronroad": 9,
+    "ruakt": 10,
+    "ruak": 10,
+    "ruakaka": 10,
+    "petersnellroad": 10,
+}
 SECRET_URL_RE = re.compile(r"(calendar\?ap=)[^&\s\"']+")
 URL_RE = re.compile(r"https?://\S+")
 SUMMARY_RE = re.compile(r"^\[([^\]]+)\]\s*(.*)$")
@@ -489,7 +530,15 @@ def normalise_theme(value: object) -> str:
     return theme if theme in THEME_VALUES else "jade"
 
 
+def location_colour_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
 def stable_location_colour_index(*values: object) -> int:
+    for value in values:
+        mapped = LOCATION_COLOUR_INDEX_BY_KEY.get(location_colour_key(value))
+        if mapped:
+            return mapped
     key = "|".join(str(value or "").strip().lower() for value in values if str(value or "").strip())
     if not key:
         return 1
@@ -872,6 +921,8 @@ def parse_shift_title(title: str | None) -> dict[str, str]:
 
     if race_type_code == "T" and track_code == "CAMBRIDGE":
         track_label = "Cambridge Synthetic"
+    elif race_type_code == "H" and track_code == "CAMBRIDGE":
+        track_label = "Cambridge Harness"
     else:
         track_label = TRACK_NAMES.get(track_code)
     if not track_label:
@@ -953,14 +1004,17 @@ def fallback_role_for_employee(employee_name: str, fallback: dict[str, object]) 
 def apply_known_shift_context_fallback(shift: dict[str, object]) -> None:
     source_code = str(shift.get("source_code") or "").strip().lower()
     track_label = str(shift.get("track_label") or "").strip().lower()
-    if track_label not in GENERIC_TRACK_LABELS and source_code not in {"web", ""}:
+    role_label = str(shift.get("role_label") or shift.get("role_full_label") or "").strip()
+    has_generic_track = track_label in GENERIC_TRACK_LABELS or source_code in {"web", ""}
+    has_generic_role = role_is_context_only(role_label) or role_display_key(role_label) in GENERIC_ROLE_LABELS
+    if not has_generic_track and not has_generic_role:
         return
 
     for fallback in KNOWN_SHIFT_CONTEXT_FALLBACKS:
         if not shift_time_matches(shift, fallback):
             continue
         employee_role = fallback_role_for_employee(payload_employee_name(shift), fallback)
-        role = employee_role or str(shift.get("role_label") or "")
+        role = employee_role or ("" if has_generic_role else str(shift.get("role_label") or ""))
         if not role or role.lower() in GENERIC_ROLE_LABELS:
             role = "Shift"
         parsed = parse_shift_title(f"[{fallback['source_code']}] {role}")
@@ -998,6 +1052,10 @@ def role_chain_label(segments: list[dict[str, str]]) -> str:
     labels = []
     for segment in display_segments:
         role = segment.get("role") or "Shift"
+        if "->" in role:
+            role_parts = [part.strip() for part in role.split("->") if part.strip()]
+            real_parts = [part for part in role_parts if not role_is_context_only(part)]
+            role = " -> ".join(real_parts or role_parts) or "Shift"
         if not labels or labels[-1] != role:
             labels.append(role)
     if not labels:
@@ -1344,6 +1402,7 @@ def decorate_shift(row: object) -> dict[str, object]:
     shift["header_vehicle_label"] = shift_header_vehicle_label(shift["role_segments"])
     location_colour_index = stable_location_colour_index(
         shift.get("schedule_location_id"),
+        shift.get("source_code"),
         shift.get("track_label"),
         shift.get("location"),
     )
