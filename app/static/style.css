@@ -1029,11 +1029,11 @@ a {
 }
 
 .data-warning {
-  margin: 0 0 12px;
+  margin: 0 0 8px;
   color: var(--muted);
-  font-size: 0.82rem;
-  font-weight: 700;
-  line-height: 1.35;
+  font-size: 0.72rem;
+  font-weight: 750;
+  line-height: 1.2;
 }
 
 .summary-strip {
@@ -3144,6 +3144,12 @@ th {
     overflow: visible;
     text-overflow: clip;
     white-space: normal;
+  }
+
+  .data-warning {
+    margin-bottom: 6px;
+    font-size: 0.58rem;
+    line-height: 1.15;
   }
 
   .month-nav {
