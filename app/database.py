@@ -442,6 +442,62 @@ def update_deputy_user_ical_url(user_id: int, encrypted_ical_url: str) -> None:
         )
 
 
+def update_deputy_user_credentials(
+    *,
+    user_id: int,
+    deputy_email: str,
+    deputy_web_url: str,
+    encrypted_email: str,
+    encrypted_password: str,
+) -> int:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    deputy_email = deputy_email.strip().lower()
+    deputy_web_url = deputy_web_url.strip()
+    with get_connection() as conn:
+        result = conn.execute(
+            """
+                UPDATE app_users
+                SET deputy_email = ?,
+                    deputy_web_url = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (deputy_email, deputy_web_url, now, user_id),
+            )
+        if result.rowcount:
+            conn.execute(
+                """
+                INSERT INTO deputy_user_secrets (
+                    user_id, encrypted_email, encrypted_password, encrypted_ical_url, encrypted_session_json, updated_at
+                )
+                VALUES (?, ?, ?, '', '', ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    encrypted_email = excluded.encrypted_email,
+                    encrypted_password = excluded.encrypted_password,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, encrypted_email, encrypted_password, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO user_sync_state (
+                    user_id, last_sync_at, next_sync_after, last_status, last_message,
+                    sync_in_progress, last_planned_reason, updated_at
+                )
+                VALUES (?, '', '', 'new', 'Deputy login updated. Run sync to test it.', 0, 'credentials_updated', ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    next_sync_after = '',
+                    last_status = 'new',
+                    last_message = 'Deputy login updated. Run sync to test it.',
+                    sync_in_progress = 0,
+                    last_planned_reason = 'credentials_updated',
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, now),
+            )
+    return result.rowcount
+
+
 def list_syncable_app_users() -> list[sqlite3.Row]:
     with get_connection() as conn:
         rows = conn.execute(
@@ -799,6 +855,99 @@ def update_user_display_theme(user_id: int, display_theme: str) -> int:
             (display_theme, now, user_id),
         )
     return result.rowcount
+
+
+def set_app_user_active(user_id: int, is_active: bool) -> int:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        result = conn.execute(
+            """
+            UPDATE app_users
+            SET is_active = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (1 if is_active else 0, now, user_id),
+        )
+        if result.rowcount and not is_active:
+            conn.execute(
+                """
+                UPDATE trusted_devices
+                SET revoked_at = COALESCE(revoked_at, ?)
+                WHERE user_id = ?
+                """,
+                (now, user_id),
+            )
+            conn.execute(
+                """
+                UPDATE user_sync_state
+                SET next_sync_after = '',
+                    last_status = 'disabled',
+                    last_message = 'User deactivated by admin.',
+                    sync_in_progress = 0,
+                    last_planned_reason = 'disabled',
+                    updated_at = ?
+                WHERE user_id = ?
+                """,
+                (now, user_id),
+            )
+        elif result.rowcount:
+            conn.execute(
+                """
+                INSERT INTO user_sync_state (
+                    user_id, last_sync_at, next_sync_after, last_status, last_message,
+                    sync_in_progress, last_planned_reason, updated_at
+                )
+                VALUES (?, '', '', 'new', 'User reactivated. Run sync to refresh roster.', 0, 'reactivated', ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    last_status = 'new',
+                    last_message = 'User reactivated. Run sync to refresh roster.',
+                    sync_in_progress = 0,
+                    last_planned_reason = 'reactivated',
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, now),
+            )
+    return result.rowcount
+
+
+def reset_user_roster_data(user_id: int) -> dict[str, int]:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        deleted_marks = conn.execute(
+            "DELETE FROM shift_marks WHERE shift_id IN (SELECT id FROM shifts WHERE owner_user_id = ?)",
+            (user_id,),
+        ).rowcount
+        deleted_changes = conn.execute(
+            "DELETE FROM shift_changes WHERE shift_id IN (SELECT id FROM shifts WHERE owner_user_id = ?)",
+            (user_id,),
+        ).rowcount
+        deleted_shifts = conn.execute(
+            "DELETE FROM shifts WHERE owner_user_id = ?",
+            (user_id,),
+        ).rowcount
+        conn.execute(
+            """
+            INSERT INTO user_sync_state (
+                user_id, last_sync_at, next_sync_after, last_status, last_message,
+                sync_in_progress, last_planned_reason, updated_at
+            )
+            VALUES (?, '', '', 'new', 'Roster data reset. Run sync to rebuild it.', 0, 'roster_reset', ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                next_sync_after = '',
+                last_status = 'new',
+                last_message = 'Roster data reset. Run sync to rebuild it.',
+                sync_in_progress = 0,
+                last_planned_reason = 'roster_reset',
+                updated_at = excluded.updated_at
+            """,
+            (user_id, now),
+        )
+    return {
+        "shifts": deleted_shifts,
+        "marks": deleted_marks,
+        "changes": deleted_changes,
+    }
 
 
 def create_error_report(

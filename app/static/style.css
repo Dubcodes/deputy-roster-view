@@ -2728,6 +2728,16 @@ textarea {
   max-width: 260px;
 }
 
+.admin-credential-form {
+  max-width: 360px;
+}
+
+.admin-account-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .admin-maintenance-panel {
   margin-bottom: 12px;
 }

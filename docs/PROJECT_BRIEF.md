@@ -25,10 +25,10 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 - Store shifts, local notes, change history, schedule rows, users, trusted devices, sync state, and sync logs in SQLite.
 - Show month calendar, list view, day details, settings, help, diagnostics, manual sync, and timesheet summaries.
 - Support one-time signup with encrypted Deputy credentials and long-lived trusted devices.
-- Let admins revoke trusted devices, reset PINs, clear noisy changed flags, and record manual overrides.
+- Let admins revoke trusted devices, update Deputy login details, reset PINs, deactivate/reactivate users, reset a user's local roster data, clear noisy changed flags, and record manual overrides.
 - Let each user choose their own display colour theme, including dark, light/gentle, and special location-colour palettes.
 - Keep a lightweight shared `Northern Crew` location list so future crew/region filtering can build from locations seen in synced roster data.
-- Let users change their own PIN and submit an error report with recent redacted diagnostics.
+- Let users change their own PIN, update their saved Deputy login details, and submit an error report with recent redacted diagnostics.
 - Keep personal roster views scoped to the signed-in user's own shifts. Shared crew context is only shown as race-day schedule context.
 - Stagger background syncs across users so Deputy is not hit by every account at once.
 - Run with Docker Compose / Portainer.

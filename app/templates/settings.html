@@ -41,6 +41,25 @@
             <button class="button button-secondary" type="submit">Save PIN</button>
           </form>
         </details>
+        <details class="inline-settings-details">
+          <summary>Update Deputy login</summary>
+          <form class="settings-form compact-settings-form" action="/settings/deputy-login" method="post">
+            <label class="form-row">
+              <span>Deputy URL</span>
+              <input type="url" name="deputy_web_url" value="{{ account_user.deputy_web_url if account_user else settings.deputy_web_url }}" autocomplete="url" required>
+            </label>
+            <label class="form-row">
+              <span>Deputy email</span>
+              <input type="email" name="deputy_email" value="{{ account_user.deputy_email if account_user else current_user.deputy_email }}" autocomplete="username" required>
+            </label>
+            <label class="form-row">
+              <span>Deputy password</span>
+              <input type="password" name="deputy_password" autocomplete="current-password" required>
+            </label>
+            <button class="button button-secondary" type="submit">Save Deputy Login</button>
+          </form>
+          <p class="muted">Use this if your Deputy password changed or the original signup details were wrong. The password is encrypted before storage.</p>
+        </details>
       {% endif %}
     </article>
 
@@ -161,7 +180,7 @@
   <details class="table-panel diagnostics-panel">
     <summary>Report An Error</summary>
     <div class="diagnostics-content">
-      <p class="muted">Tell us what looks wrong. The report saves recent sync/capture diagnostics so the admin can compare it with Deputy data.</p>
+      <p class="muted">Tell us what looks wrong. The report saves recent sync/capture diagnostics so the admin can compare it with Deputy data. You should see a saved message after submitting; admins see it under Admin > Error Reports.</p>
       <form class="settings-form error-report-form" action="/settings/error-report" method="post">
         <input type="hidden" name="page_url" data-current-page-url>
         <label class="form-row">

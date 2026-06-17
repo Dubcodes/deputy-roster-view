@@ -55,9 +55,12 @@ from .database import (
     mark_user_sync_started,
     revoke_trusted_device_for_user,
     reset_incomplete_user_syncs,
+    reset_user_roster_data,
     update_deputy_user_ical_url,
+    update_deputy_user_credentials,
     update_app_settings,
     update_shift_marks,
+    set_app_user_active,
     update_user_display_theme,
     update_user_pin_hash,
     user_has_deputy_credentials,
@@ -80,7 +83,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.16.7"
+APP_BUILD = "2026.06.17.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -2233,6 +2236,28 @@ def signup_enabled() -> bool:
     return settings.signup_enabled
 
 
+def credential_form_values(form: object, default_web_url: str = "") -> tuple[str, str, str]:
+    deputy_email = str(form.get("deputy_email") or "").strip().lower()
+    deputy_password = str(form.get("deputy_password") or "")
+    deputy_web_url = str(form.get("deputy_web_url") or default_web_url).strip()
+    return deputy_email, deputy_password, deputy_web_url
+
+
+def validate_deputy_credentials(
+    *,
+    deputy_email: str,
+    deputy_password: str,
+    deputy_web_url: str,
+) -> str:
+    if "@" not in deputy_email:
+        return "Enter the Deputy email address."
+    if not deputy_password:
+        return "Enter the Deputy password."
+    if not deputy_web_url.startswith(("http://", "https://")):
+        return "Deputy URL must start with http:// or https://."
+    return ""
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
@@ -2340,7 +2365,7 @@ async def login_submit(request: Request) -> RedirectResponse:
     deputy_email = str(form.get("deputy_email") or "").strip().lower()
     pin = str(form.get("pin") or "")
     user = get_app_user_by_email(deputy_email)
-    if user is None or not verify_pin(pin, str(user["pin_hash"] or "")):
+    if user is None or not int(user["is_active"] or 0) or not verify_pin(pin, str(user["pin_hash"] or "")):
         return RedirectResponse(url=notice_url("/login", "Email or PIN was not recognised."), status_code=303)
 
     response = RedirectResponse(url=next_url, status_code=303)
@@ -2396,6 +2421,63 @@ async def admin_reset_pin(request: Request, user_id: int) -> RedirectResponse:
         return RedirectResponse(url=notice_url("/admin", "PIN entries did not match."), status_code=303)
     updated = update_user_pin_hash(user_id, hash_pin(pin))
     message = "PIN reset." if updated else "User not found."
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/users/{user_id}/deputy-login")
+async def admin_update_user_deputy_login(request: Request, user_id: int) -> RedirectResponse:
+    require_admin_user(request)
+    settings = get_settings()
+    form = await request.form()
+    stored_user = get_app_user(user_id) or get_app_user_by_email(str(form.get("deputy_email") or ""))
+    deputy_email, deputy_password, deputy_web_url = credential_form_values(
+        form,
+        str((stored_user or {}).get("deputy_web_url") or settings.deputy_web_url),
+    )
+    error = validate_deputy_credentials(
+        deputy_email=deputy_email,
+        deputy_password=deputy_password,
+        deputy_web_url=deputy_web_url,
+    )
+    if error:
+        return RedirectResponse(url=notice_url("/admin", error), status_code=303)
+    existing = get_app_user_by_email(deputy_email)
+    if existing and int(existing["id"]) != user_id:
+        return RedirectResponse(url=notice_url("/admin", "That Deputy email belongs to another roster user."), status_code=303)
+    updated = update_deputy_user_credentials(
+        user_id=user_id,
+        deputy_email=deputy_email,
+        deputy_web_url=deputy_web_url,
+        encrypted_email=encrypt_text(deputy_email, settings),
+        encrypted_password=encrypt_text(deputy_password, settings),
+    )
+    message = "Deputy login updated. Run Sync my roster to test it." if updated else "User not found."
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/users/{user_id}/deactivate")
+def admin_deactivate_user(request: Request, user_id: int) -> RedirectResponse:
+    admin = require_admin_user(request)
+    if int(admin["id"]) == user_id:
+        return RedirectResponse(url=notice_url("/admin", "You cannot deactivate your own admin account."), status_code=303)
+    updated = set_app_user_active(user_id, False)
+    message = "User deactivated and trusted devices revoked." if updated else "User not found."
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/users/{user_id}/reactivate")
+def admin_reactivate_user(request: Request, user_id: int) -> RedirectResponse:
+    require_admin_user(request)
+    updated = set_app_user_active(user_id, True)
+    message = "User reactivated. Ask them to log in again, then sync." if updated else "User not found."
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/users/{user_id}/reset-roster")
+def admin_reset_user_roster(request: Request, user_id: int) -> RedirectResponse:
+    require_admin_user(request)
+    result = reset_user_roster_data(user_id)
+    message = f"Roster reset: {result['shifts']} shifts, {result['changes']} changes, {result['marks']} marks cleared."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
@@ -2742,6 +2824,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
         "changed": int(schedule_snapshot.get("changed_rows") or 0),
     }
     user_sync_state = get_user_sync_state(owner_user_id) if owner_user_id is not None else None
+    account_user = get_app_user(owner_user_id) if owner_user_id is not None else None
     user_last_sync_at = str(user_sync_state["last_sync_at"] or "") if user_sync_state else ""
     raw_theme = user["display_theme"] if user and user.get("display_theme") else request.cookies.get("roster_theme", "jade")
     current_theme = normalise_theme(raw_theme)
@@ -2751,6 +2834,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "request": request,
             "notice": notice,
             "current_user": user,
+            "account_user": account_user,
             "header_mode": "settings",
             "settings": settings,
             "can_sync": settings.deputy_login_configured or user_can_sync,
@@ -2815,6 +2899,39 @@ async def change_own_pin(request: Request) -> RedirectResponse:
         return RedirectResponse(url=notice_url("/settings", "Current PIN was not recognised."), status_code=303)
     update_user_pin_hash(int(user["id"]), hash_pin(new_pin))
     return RedirectResponse(url=notice_url("/settings", "PIN changed."), status_code=303)
+
+
+@app.post("/settings/deputy-login")
+async def update_own_deputy_login(request: Request) -> RedirectResponse:
+    user = current_user(request)
+    if not user or user.get("id") is None:
+        return RedirectResponse(url=notice_url("/login", "Log in before updating Deputy login details."), status_code=303)
+    settings = get_settings()
+    stored_user = get_app_user(int(user["id"]))
+    form = await request.form()
+    deputy_email, deputy_password, deputy_web_url = credential_form_values(
+        form,
+        str((stored_user or {}).get("deputy_web_url") or settings.deputy_web_url),
+    )
+    error = validate_deputy_credentials(
+        deputy_email=deputy_email,
+        deputy_password=deputy_password,
+        deputy_web_url=deputy_web_url,
+    )
+    if error:
+        return RedirectResponse(url=notice_url("/settings", error), status_code=303)
+    existing = get_app_user_by_email(deputy_email)
+    if existing and int(existing["id"]) != int(user["id"]):
+        return RedirectResponse(url=notice_url("/settings", "That Deputy email belongs to another roster user."), status_code=303)
+    updated = update_deputy_user_credentials(
+        user_id=int(user["id"]),
+        deputy_email=deputy_email,
+        deputy_web_url=deputy_web_url,
+        encrypted_email=encrypt_text(deputy_email, settings),
+        encrypted_password=encrypt_text(deputy_password, settings),
+    )
+    message = "Deputy login updated. Run Sync my roster to test it." if updated else "User not found."
+    return RedirectResponse(url=notice_url("/settings", message), status_code=303)
 
 
 @app.post("/settings/error-report")

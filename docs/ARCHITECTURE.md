@@ -48,11 +48,11 @@ All users currently belong to one shared crew pool, `Northern Crew`. When a user
 
 - `/month`: main landing calendar/list view.
 - `/day/{yyyy-mm-dd}`: shift detail, race-day timings, Deputy crew schedule, change history, timing notes.
-- `/settings`: sync control, roster snapshot, diagnostics, maintenance.
+- `/settings`: sync control, roster snapshot, user PIN/Deputy login maintenance, diagnostics, maintenance.
 - `/help`: user-facing explanation of screens, buttons, shortcuts, and admin contacts.
 - `/sync-now`: starts a background sync for the signed-in account and redirects/polls.
 - `/signup` and `/login`: one-time trusted-device flow.
-- `/admin`: user/sync health, error reports, and manual override audit.
+- `/admin`: user/sync health, trusted devices, PIN/Deputy login maintenance, deactivate/reactivate controls, roster reset, error reports, and manual override audit.
 
 ## Local State
 
@@ -65,6 +65,8 @@ Personal roster reads and shift actions are scoped by `owner_user_id` for the si
 Deputy login secrets are encrypted in `deputy_user_secrets`. The app secret comes from `APP_SECRET_KEY` or generated `data/app_secret.key`; losing/changing it means stored Deputy passwords cannot be decrypted.
 
 Error reports live in `error_reports`. They include the user's note, page/user-agent context, recent sync state, recent source payload diagnostics, and the latest redacted Deputy web capture snapshot.
+
+Admins should prefer deactivating a user over hard deletion when someone leaves. Deactivation revokes trusted devices and stops future syncs while leaving audit history intact. Roster reset is user-scoped and clears local pulled shifts, marks, and change history so the next sync can rebuild the user's roster copy.
 
 ## Change Detection
 

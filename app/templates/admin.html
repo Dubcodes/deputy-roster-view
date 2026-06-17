@@ -14,7 +14,7 @@
     <article class="settings-panel">
       <span class="summary-label">Users</span>
       <strong>{{ users|length }}</strong>
-      <p class="muted">Click a user to manage trusted devices or reset their PIN.</p>
+      <p class="muted">Click a user to manage trusted devices, login details, PINs, and account status.</p>
     </article>
     <article class="settings-panel">
       <span class="summary-label">Sync queue</span>
@@ -57,6 +57,9 @@
             <span class="admin-user-badges">
               {% if user.is_admin %}
                 <span class="badge">Admin</span>
+              {% endif %}
+              {% if not user.is_active %}
+                <span class="badge badge-danger">Inactive</span>
               {% endif %}
               <span class="badge">{{ user.active_devices }} trusted device{% if user.active_devices != 1 %}s{% endif %}</span>
               {% if user.sync_in_progress %}
@@ -113,6 +116,44 @@
                 </label>
                 <button class="button button-secondary" type="submit">Reset PIN</button>
               </form>
+            </section>
+
+            <section>
+              <h3>Deputy Login</h3>
+              <form class="settings-form admin-credential-form" action="/admin/users/{{ user.id }}/deputy-login" method="post">
+                <label class="form-row">
+                  <span>Deputy URL</span>
+                  <input type="url" name="deputy_web_url" value="{{ user.deputy_web_url or settings.deputy_web_url }}" autocomplete="url" required>
+                </label>
+                <label class="form-row">
+                  <span>Deputy email</span>
+                  <input type="email" name="deputy_email" value="{{ user.deputy_email }}" autocomplete="username" required>
+                </label>
+                <label class="form-row">
+                  <span>Deputy password</span>
+                  <input type="password" name="deputy_password" autocomplete="current-password" required>
+                </label>
+                <button class="button button-secondary" type="submit">Save Deputy Login</button>
+              </form>
+            </section>
+
+            <section>
+              <h3>Account</h3>
+              <div class="admin-account-actions">
+                {% if user.is_active %}
+                  <form action="/admin/users/{{ user.id }}/deactivate" method="post">
+                    <button class="button button-secondary" type="submit" onclick="return confirm('Deactivate this user and revoke their trusted devices?');">Deactivate User</button>
+                  </form>
+                {% else %}
+                  <form action="/admin/users/{{ user.id }}/reactivate" method="post">
+                    <button class="button button-secondary" type="submit">Reactivate User</button>
+                  </form>
+                {% endif %}
+                <form action="/admin/users/{{ user.id }}/reset-roster" method="post">
+                  <button class="button button-secondary" type="submit" onclick="return confirm('Clear pulled shifts, marks, and change history for this user?');">Reset Roster Data</button>
+                </form>
+              </div>
+              <p class="muted">Deactivate removes access without deleting history. Reset roster data clears this user's local roster copy so the next sync can rebuild it.</p>
             </section>
           </div>
         </details>
