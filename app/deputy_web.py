@@ -46,6 +46,16 @@ FULL_COPY_PATH_RE = re.compile(
     r"/api/(?:schedule/|management/v2/(?:shifts|custom-fields)|v1/my/roster)",
     re.IGNORECASE,
 )
+LOGIN_ERROR_RE = re.compile(
+    r"(incorrect|invalid|wrong|not\s+recognised|not\s+recognized|failed|unable\s+to\s+(?:log|sign)|"
+    r"try\s+again|password\s+is\s+required|email\s+is\s+required)",
+    re.IGNORECASE,
+)
+MFA_OR_SSO_RE = re.compile(
+    r"(multi[-\s]?factor|two[-\s]?factor|verification\s+code|authenticator|single\s+sign[-\s]?on|"
+    r"\bsso\b|check\s+your\s+email)",
+    re.IGNORECASE,
+)
 CAPTURE_PATH_RE = re.compile(
     r"/api/(?:schedule/|management/v2/(?:shifts|areas|custom-fields)|v1/my/roster)",
     re.IGNORECASE,
@@ -88,6 +98,15 @@ def _safe_visible_text(value: str) -> str:
     if len(cleaned) > MAX_VISIBLE_TEXT:
         return cleaned[:MAX_VISIBLE_TEXT].rstrip() + "\n..."
     return cleaned
+
+
+def _login_problem_message(page_text: str) -> str:
+    safe_text = _safe_visible_text(page_text)
+    if LOGIN_ERROR_RE.search(safe_text):
+        return "Deputy login was not accepted. Check the Deputy email/password saved for this user, then run sync again."
+    if MFA_OR_SSO_RE.search(safe_text):
+        return "Deputy is still asking for MFA/SSO verification. This app cannot complete that extra login step yet."
+    return "Deputy is still showing the login form after submitting credentials. Check the saved Deputy email/password, or whether this account needs MFA/SSO."
 
 
 def _clean_url(value: str) -> str:
@@ -510,6 +529,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     captured_employee_id = ""
     events: list[str] = []
     page_texts: list[dict[str, Any]] = []
+    login_problem_message = ""
     target_track_groups = _target_schedule_track_groups(settings)
     events.append("Target schedule view: All Locations.")
     if target_track_groups:
@@ -1042,7 +1062,9 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                 await page.wait_for_timeout(4_000)
                 login_still_visible = await page.locator("input[type='password']").count() > 0
                 if login_still_visible:
-                    events.append("Password field is still visible; login may have failed or needs MFA/SSO.")
+                    visible_text = await current_body_text()
+                    login_problem_message = _login_problem_message(visible_text)
+                    events.append(login_problem_message)
                 else:
                     await capture_extended_own_roster()
                     await capture_expanded_area_refs()
@@ -1086,7 +1108,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
 
     payload = {
         "captured_at": captured_at,
-        "status": "ok" if captured else "empty",
+        "status": "login_failed" if login_problem_message else ("ok" if captured else "empty"),
         "events": events,
         "responses": captured,
         "page_texts": page_texts,
@@ -1098,6 +1120,13 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
         ),
         "extracted_schedule_shifts": extracted_schedule_shifts,
     }
+    if login_problem_message:
+        payload["auth_status"] = "login_failed"
+        return DeputyWebCaptureResult(
+            status="login_failed",
+            message=login_problem_message,
+            payload=payload,
+        )
     if captured:
         return DeputyWebCaptureResult(
             status="ok",
