@@ -9,7 +9,13 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .config import Settings, get_settings
-from .database import get_current_or_next_shift, get_upcoming_shifts, save_deputy_web_schedule, update_app_settings
+from .database import (
+    get_current_or_next_shift,
+    get_upcoming_shifts,
+    save_deputy_web_capture_diagnostic,
+    save_deputy_web_schedule,
+    update_app_settings,
+)
 
 
 SECRET_KEY_RE = re.compile(
@@ -1064,6 +1070,13 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                 if login_still_visible:
                     visible_text = await current_body_text()
                     login_problem_message = _login_problem_message(visible_text)
+                    page_texts.append(
+                        {
+                            "label": "Deputy login page after submit",
+                            "length": len(visible_text),
+                            "text": _safe_visible_text(visible_text),
+                        }
+                    )
                     events.append(login_problem_message)
                 else:
                     await capture_extended_own_roster()
@@ -1159,7 +1172,15 @@ async def capture_and_save_deputy_web(
             "events": [message],
             "responses": [],
         }
-        update_app_settings({"last_deputy_web_capture": json.dumps(payload, ensure_ascii=True)})
+        payload_text = json.dumps(payload, ensure_ascii=True)
+        update_app_settings({"last_deputy_web_capture": payload_text})
+        save_deputy_web_capture_diagnostic(
+            owner_user_id=owner_user_id,
+            captured_at=str(payload.get("captured_at") or ""),
+            status="error",
+            message=message,
+            payload=payload_text,
+        )
         return {
             "status": "error",
             "message": message,
@@ -1171,6 +1192,14 @@ async def capture_and_save_deputy_web(
         }
 
     if result.payload:
+        payload_text = json.dumps(result.payload, ensure_ascii=True)
+        save_deputy_web_capture_diagnostic(
+            owner_user_id=owner_user_id,
+            captured_at=str(result.payload.get("captured_at") or ""),
+            status=result.status,
+            message=result.message,
+            payload=payload_text,
+        )
         save_result = save_deputy_web_schedule(result.payload, owner_user_id=owner_user_id)
         saved_own_shift_rows = int(save_result.get("own_seen", 0))
         own_shift_rows_created = int(save_result.get("own_created", 0))

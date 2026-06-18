@@ -37,6 +37,7 @@ from .database import (
     get_app_user_by_email,
     get_shift_changes_for_date,
     get_last_deputy_web_capture,
+    get_latest_deputy_web_capture_for_user,
     fetch_shift,
     fetch_shifts_between,
     fetch_shifts_for_date,
@@ -83,7 +84,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.18.1"
+APP_BUILD = "2026.06.18.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -2140,6 +2141,9 @@ def admin_user_rows() -> list[dict[str, object]]:
     for user in list_app_users():
         item = dict(user)
         item["devices"] = [dict(device) for device in list_trusted_devices_for_user(int(user["id"]))]
+        latest_capture = get_latest_deputy_web_capture_for_user(int(user["id"]))
+        item["latest_capture"] = format_capture_payload(str(latest_capture["payload"] or "")) if latest_capture else None
+        item["latest_capture_message"] = str(latest_capture["message"] or "") if latest_capture else ""
         rows.append(item)
     return rows
 
@@ -2478,6 +2482,19 @@ def admin_reset_user_roster(request: Request, user_id: int) -> RedirectResponse:
     require_admin_user(request)
     result = reset_user_roster_data(user_id)
     message = f"Roster reset: {result['shifts']} shifts, {result['changes']} changes, {result['marks']} marks cleared."
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/users/{user_id}/sync")
+def admin_sync_user(request: Request, user_id: int, background_tasks: BackgroundTasks) -> RedirectResponse:
+    require_admin_user(request)
+    target_user = get_app_user(user_id)
+    if target_user is None:
+        return RedirectResponse(url=notice_url("/admin", "User not found or inactive."), status_code=303)
+    if not user_has_deputy_credentials(user_id):
+        return RedirectResponse(url=notice_url("/admin", "That user does not have saved Deputy login details."), status_code=303)
+    started = queue_manual_sync(background_tasks, user_id=user_id)
+    message = "User sync started. Refresh Admin in a minute to copy the latest diagnostics." if started else "That user already has a sync running."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 

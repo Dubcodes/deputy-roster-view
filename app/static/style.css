@@ -2686,6 +2686,12 @@ textarea {
   margin-top: 8px;
 }
 
+.admin-capture-details {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
 .admin-user-tools {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(220px, 0.8fr);

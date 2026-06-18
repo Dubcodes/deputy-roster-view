@@ -172,6 +172,17 @@ def init_db(settings: Settings | None = None) -> None:
                 FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS deputy_web_captures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_user_id INTEGER,
+                captured_at TEXT,
+                status TEXT,
+                message TEXT,
+                payload TEXT,
+                created_at TEXT,
+                FOREIGN KEY (owner_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
             CREATE TABLE IF NOT EXISTS crew_pools (
                 name TEXT PRIMARY KEY,
                 created_at TEXT,
@@ -266,6 +277,7 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_trusted_devices_token ON trusted_devices(token_hash);
             CREATE INDEX IF NOT EXISTS idx_admin_overrides_date ON admin_overrides(target_date);
             CREATE INDEX IF NOT EXISTS idx_error_reports_created ON error_reports(created_at);
+            CREATE INDEX IF NOT EXISTS idx_deputy_web_captures_user ON deputy_web_captures(owner_user_id, captured_at DESC);
             CREATE INDEX IF NOT EXISTS idx_crew_known_locations_name ON crew_known_locations(crew_name, display_name);
             CREATE INDEX IF NOT EXISTS idx_capture_coverage_date ON capture_coverage(date);
             CREATE INDEX IF NOT EXISTS idx_user_sync_state_next ON user_sync_state(next_sync_after, sync_in_progress);
@@ -1429,6 +1441,70 @@ def get_app_setting(key: str, default: str = "") -> str:
 
 def get_last_deputy_web_capture() -> str:
     return get_app_setting("last_deputy_web_capture", "")
+
+
+def save_deputy_web_capture_diagnostic(
+    *,
+    owner_user_id: int | None,
+    captured_at: str,
+    status: str,
+    message: str,
+    payload: str,
+) -> None:
+    created_at = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO deputy_web_captures (
+                owner_user_id, captured_at, status, message, payload, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (owner_user_id, captured_at, status[:80], message[:500], payload, created_at),
+        )
+        if owner_user_id is None:
+            conn.execute(
+                """
+                DELETE FROM deputy_web_captures
+                WHERE owner_user_id IS NULL
+                  AND id NOT IN (
+                      SELECT id
+                      FROM deputy_web_captures
+                      WHERE owner_user_id IS NULL
+                      ORDER BY captured_at DESC, id DESC
+                      LIMIT 12
+                  )
+                """
+            )
+        else:
+            conn.execute(
+                """
+                DELETE FROM deputy_web_captures
+                WHERE owner_user_id = ?
+                  AND id NOT IN (
+                      SELECT id
+                      FROM deputy_web_captures
+                      WHERE owner_user_id = ?
+                      ORDER BY captured_at DESC, id DESC
+                      LIMIT 12
+                  )
+                """,
+                (owner_user_id, owner_user_id),
+            )
+
+
+def get_latest_deputy_web_capture_for_user(owner_user_id: int) -> sqlite3.Row | None:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT *
+            FROM deputy_web_captures
+            WHERE owner_user_id = ?
+            ORDER BY captured_at DESC, id DESC
+            LIMIT 1
+            """,
+            (owner_user_id,),
+        ).fetchone()
 
 
 def get_calendar_url(settings: Settings | None = None) -> str:

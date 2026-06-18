@@ -75,6 +75,27 @@
             <small>Last sync {{ user.last_sync_at|datetime if user.last_sync_at else "Never" }}{% if user.last_message %} · {{ user.last_message }}{% endif %}</small>
           </div>
 
+          <details class="admin-capture-details">
+            <summary>Deputy Login Diagnostics</summary>
+            {% if not user.latest_capture %}
+              <p class="muted">No Deputy web capture diagnostic has been saved for this user yet.</p>
+            {% else %}
+              <p class="muted">
+                Captured {{ user.latest_capture.captured_at|datetime if user.latest_capture.captured_at else "Unknown" }}
+                · {{ user.latest_capture.status }}
+                {% if user.latest_capture_message %} · {{ user.latest_capture_message }}{% endif %}
+              </p>
+              <div class="copy-panel">
+                <div class="section-heading">
+                  <h3>Copy Diagnostic Data</h3>
+                  <button class="button button-compact" type="button" data-copy-target="capture-copy-{{ loop.index }}">Copy All</button>
+                </div>
+                <textarea id="capture-copy-{{ loop.index }}" class="copy-box" rows="10" readonly>{{ user.latest_capture.copy_text }}</textarea>
+                <p class="copy-status" data-copy-status-for="capture-copy-{{ loop.index }}" aria-live="polite"></p>
+              </div>
+            {% endif %}
+          </details>
+
           <div class="admin-user-tools">
             <section>
               <h3>Trusted Devices</h3>
@@ -140,6 +161,9 @@
             <section>
               <h3>Account</h3>
               <div class="admin-account-actions">
+                <form action="/admin/users/{{ user.id }}/sync" method="post">
+                  <button class="button button-secondary" type="submit">Sync This User</button>
+                </form>
                 {% if user.is_active %}
                   <form action="/admin/users/{{ user.id }}/deactivate" method="post">
                     <button class="button button-secondary" type="submit" onclick="return confirm('Deactivate this user and revoke their trusted devices?');">Deactivate User</button>
@@ -246,4 +270,36 @@
       </div>
     {% endif %}
   </details>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    (() => {
+      document.querySelectorAll("[data-copy-target]").forEach((button) => {
+        const status = document.querySelector(`[data-copy-status-for="${button.dataset.copyTarget}"]`);
+        const setStatus = (message) => {
+          if (!status) return;
+          status.textContent = message;
+          window.setTimeout(() => {
+            if (status.textContent === message) status.textContent = "";
+          }, 3000);
+        };
+
+        button.addEventListener("click", async () => {
+          const target = document.getElementById(button.dataset.copyTarget);
+          if (!target) return;
+          target.focus();
+          target.select();
+          target.setSelectionRange(0, target.value.length);
+          try {
+            await navigator.clipboard.writeText(target.value);
+            setStatus("Copied.");
+          } catch (error) {
+            const copied = document.execCommand && document.execCommand("copy");
+            setStatus(copied ? "Copied." : "Selected. Use copy from your browser.");
+          }
+        });
+      });
+    })();
+  </script>
 {% endblock %}
