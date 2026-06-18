@@ -595,25 +595,168 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     except Exception:
                         return ""
 
-                async def first_visible_locator(selectors: tuple[str, ...]) -> Any | None:
-                    for selector in selectors:
-                        locator = page.locator(selector)
-                        try:
-                            count = await locator.count()
-                        except Exception:
+                def browser_scopes() -> list[Any]:
+                    scopes: list[Any] = [page]
+                    for frame in page.frames:
+                        if frame == page.main_frame:
                             continue
-                        for index in range(min(count, 8)):
-                            candidate = locator.nth(index)
+                        scopes.append(frame)
+                    return scopes
+
+                async def first_visible_locator(selectors: tuple[str, ...]) -> Any | None:
+                    for scope in browser_scopes():
+                        for selector in selectors:
                             try:
-                                if await candidate.is_visible(timeout=1_000):
-                                    return candidate
+                                locator = scope.locator(selector)
+                                count = await locator.count()
                             except Exception:
                                 continue
+                            for index in range(min(count, 8)):
+                                candidate = locator.nth(index)
+                                try:
+                                    if await candidate.is_visible(timeout=1_000):
+                                        return candidate
+                                except Exception:
+                                    continue
                     return None
+
+                async def login_form_diagnostics() -> str:
+                    snapshots: list[dict[str, Any]] = []
+                    for scope_index, scope in enumerate(browser_scopes(), start=1):
+                        try:
+                            url = getattr(scope, "url", page.url)
+                        except Exception:
+                            url = page.url
+                        try:
+                            rows = await scope.evaluate(
+                                """
+                                () => Array.from(document.querySelectorAll('input, button')).slice(0, 24).map((el) => {
+                                  const style = window.getComputedStyle(el);
+                                  const rect = el.getBoundingClientRect();
+                                  const visible = style.visibility !== 'hidden' &&
+                                    style.display !== 'none' &&
+                                    rect.width > 0 &&
+                                    rect.height > 0;
+                                  return {
+                                    tag: el.tagName.toLowerCase(),
+                                    type: el.getAttribute('type') || '',
+                                    name: el.getAttribute('name') || '',
+                                    id: el.getAttribute('id') || '',
+                                    placeholder: el.getAttribute('placeholder') || '',
+                                    autocomplete: el.getAttribute('autocomplete') || '',
+                                    ariaLabel: el.getAttribute('aria-label') || '',
+                                    text: el.tagName.toLowerCase() === 'button'
+                                      ? (el.innerText || '').trim().slice(0, 80)
+                                      : '',
+                                    visible,
+                                    disabled: Boolean(el.disabled)
+                                  };
+                                })
+                                """
+                            )
+                        except Exception:
+                            rows = []
+                        snapshots.append(
+                            {
+                                "scope": scope_index,
+                                "url": _clean_url(str(url)),
+                                "fields": _safe_json_sample(rows, max_depth=3, max_list_items=24, max_text=120),
+                            }
+                        )
+                    return json.dumps(snapshots, ensure_ascii=True, indent=2)
+
+                async def click_login_submit(fallback_field: Any, label: str) -> None:
+                    clicked = False
+                    button_selectors = (
+                        "button[type='submit']",
+                        "input[type='submit']",
+                        "button:has-text('Log in')",
+                        "button:has-text('Login')",
+                        "button:has-text('Sign in')",
+                        "[role='button']:has-text('Log in')",
+                        "[role='button']:has-text('Login')",
+                        "[role='button']:has-text('Sign in')",
+                    )
+                    button = await first_visible_locator(button_selectors)
+                    if button is not None:
+                        try:
+                            await button.click(timeout=10_000)
+                            clicked = True
+                            events.append(f"Clicked Deputy login button for {label}.")
+                        except Exception as exc:
+                            events.append(f"Could not click Deputy login button for {label}: {redacted_text(str(exc))[:120]}.")
+                    if not clicked:
+                        await fallback_field.press("Enter")
+                        events.append(f"Submitted Deputy login {label} with Enter.")
+
+                    await wait_for_page_to_settle(f"Login {label}", timeout=25_000)
+                    await page.wait_for_timeout(2_000)
+
+                async def login_response_events_since(start: int) -> list[str]:
+                    return login_response_events[start:]
+
+                async def find_email_field() -> Any | None:
+                    return await first_visible_locator(
+                        (
+                            "input[type='email']",
+                            "input[name*='email' i]",
+                            "input[id*='email' i]",
+                            "input[name*='username' i]",
+                            "input[id*='username' i]",
+                            "input[autocomplete='username']",
+                            "input[placeholder*='email' i]",
+                            "input[placeholder*='username' i]",
+                            "input[placeholder*='Username' i]",
+                            "input[placeholder*='Email' i]",
+                            "input[type='text']",
+                        )
+                    )
+
+                async def find_password_field() -> Any | None:
+                    return await first_visible_locator(("input[type='password']",))
+
+                async def fill_login_form() -> None:
+                    await capture_page_text("Deputy login page before submit")
+                    email_field = await find_email_field()
+                    password_field = await find_password_field()
+                    if email_field is None and password_field is None:
+                        diagnostics = await login_form_diagnostics()
+                        page_texts.append({"label": "Deputy login form diagnostics", "length": len(diagnostics), "text": diagnostics})
+                        raise RuntimeError("Could not find visible Deputy login email/password fields.")
+
+                    if email_field is not None:
+                        await email_field.fill(settings.deputy_login_email, timeout=20_000)
+                        events.append("Filled Deputy login email/username field.")
+
+                    if password_field is None:
+                        if email_field is None:
+                            diagnostics = await login_form_diagnostics()
+                            page_texts.append({"label": "Deputy login form diagnostics", "length": len(diagnostics), "text": diagnostics})
+                            raise RuntimeError("Deputy login showed no visible password field.")
+                        response_start = len(login_response_events)
+                        await click_login_submit(email_field, "email step")
+                        await log_page_context("After email submit")
+                        events.extend(await login_response_events_since(response_start))
+                        password_field = await find_password_field()
+
+                    if password_field is None:
+                        visible_text = await current_body_text()
+                        login_problem_message_text = _login_problem_message(visible_text)
+                        diagnostics = await login_form_diagnostics()
+                        page_texts.append({"label": "Deputy login page after email submit", "length": len(visible_text), "text": _safe_visible_text(visible_text)})
+                        page_texts.append({"label": "Deputy login form diagnostics", "length": len(diagnostics), "text": diagnostics})
+                        raise RuntimeError(login_problem_message_text)
+
+                    await password_field.fill(settings.deputy_login_password, timeout=20_000)
+                    events.append("Filled Deputy login password field.")
+                    response_start = len(login_response_events)
+                    await click_login_submit(password_field, "password step")
+                    await log_page_context("After password submit")
+                    events.extend(await login_response_events_since(response_start))
 
                 async def password_field_visible() -> bool:
                     try:
-                        return await first_visible_locator(("input[type='password']",)) is not None
+                        return await find_password_field() is not None
                     except Exception:
                         return False
 
@@ -626,44 +769,6 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     if title:
                         bits.append(f"title={redacted_text(title)[:120]}")
                     events.append(" · ".join(bits))
-
-                async def submit_login_form(email_field: Any, password_field: Any) -> None:
-                    await email_field.fill(settings.deputy_login_email, timeout=20_000)
-                    await password_field.fill(settings.deputy_login_password, timeout=20_000)
-                    events.append("Filled Deputy login form.")
-
-                    clicked = False
-                    button_locators = [
-                        page.get_by_role("button", name=re.compile(r"^\s*log\s*in\s*$", re.IGNORECASE)).first,
-                        page.get_by_role("button", name=re.compile(r"^\s*sign\s*in\s*$", re.IGNORECASE)).first,
-                        page.locator("button[type='submit']").first,
-                        page.locator("input[type='submit']").first,
-                    ]
-                    for locator in button_locators:
-                        try:
-                            if await locator.count() == 0:
-                                continue
-                            if not await locator.is_visible(timeout=3_000):
-                                continue
-                            await locator.click(timeout=10_000)
-                            clicked = True
-                            events.append("Clicked Deputy login button.")
-                            break
-                        except Exception:
-                            continue
-
-                    if not clicked:
-                        await password_field.press("Enter")
-                        events.append("Submitted login form with Enter.")
-
-                    await wait_for_page_to_settle("Login", timeout=25_000)
-                    await page.wait_for_timeout(2_000)
-
-                    if clicked and await password_field_visible():
-                        await password_field.press("Enter")
-                        events.append("Login form still visible after click; tried Enter fallback.")
-                        await wait_for_page_to_settle("Login Enter fallback", timeout=20_000)
-                        await page.wait_for_timeout(2_000)
 
                 async def open_schedule_page() -> None:
                     locators = [
@@ -1123,26 +1228,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                 events.append("Opened Deputy login page.")
                 await log_page_context("Login page")
 
-                email_field = await first_visible_locator(
-                    (
-                        "input[type='email']",
-                        "input[name*='email' i]",
-                        "input[id*='email' i]",
-                        "input[name*='username' i]",
-                        "input[id*='username' i]",
-                        "input[autocomplete='username']",
-                        "input[placeholder*='email' i]",
-                        "input[placeholder*='username' i]",
-                        "input[type='text']",
-                    )
-                )
-                password_field = await first_visible_locator(("input[type='password']",))
-                if email_field is None or password_field is None:
-                    raise RuntimeError("Could not find visible Deputy login email/password fields.")
-                events.append("Found visible Deputy login fields.")
-                await submit_login_form(email_field, password_field)
-                await log_page_context("After login submit")
-                events.extend(login_response_events)
+                await fill_login_form()
 
                 login_still_visible = await password_field_visible()
                 if login_still_visible:
