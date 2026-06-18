@@ -614,7 +614,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             for index in range(min(count, 8)):
                                 candidate = locator.nth(index)
                                 try:
-                                    if await candidate.is_visible(timeout=1_000):
+                                    if await candidate.is_visible():
                                         return candidate
                                 except Exception:
                                     continue
