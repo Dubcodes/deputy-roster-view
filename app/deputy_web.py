@@ -24,6 +24,10 @@ SECRET_KEY_RE = re.compile(
 )
 URL_SECRET_RE = re.compile(r"([?&][A-Za-z0-9_%-]*(?:token|key|secret|session|ap|auth)[A-Za-z0-9_%-]*=)[^&\s\"']+", re.IGNORECASE)
 INTERESTING_URL_RE = re.compile(r"/api/", re.IGNORECASE)
+LOGIN_DIAGNOSTIC_URL_RE = re.compile(
+    r"(/login|/signin|/sign-in|/oauth|/sso|/auth|/session|/identity|/account)",
+    re.IGNORECASE,
+)
 EMAIL_VALUE_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 PHONE_VALUE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{6,}\d)(?!\w)")
 SUMMARY_CODE_RE = re.compile(r"^\[([^\]]+)\]")
@@ -134,6 +138,14 @@ def _is_deputy_api_url(value: str, settings: Settings) -> bool:
 
 def _is_relevant_deputy_api_url(value: str) -> bool:
     return bool(CAPTURE_PATH_RE.search(urlsplit(value).path))
+
+
+def _is_login_diagnostic_url(value: str, settings: Settings) -> bool:
+    parsed = urlsplit(value)
+    origin = urlsplit(_origin_url(settings))
+    if parsed.netloc != origin.netloc:
+        return False
+    return bool(LOGIN_DIAGNOSTIC_URL_RE.search(parsed.path))
 
 
 def _is_schedule_api_url(value: str) -> bool:
@@ -536,6 +548,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     events: list[str] = []
     page_texts: list[dict[str, Any]] = []
     login_problem_message = ""
+    login_response_events: list[str] = []
     target_track_groups = _target_schedule_track_groups(settings)
     events.append("Target schedule view: All Locations.")
     if target_track_groups:
@@ -581,6 +594,76 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         return await page.locator("body").inner_text(timeout=8_000)
                     except Exception:
                         return ""
+
+                async def first_visible_locator(selectors: tuple[str, ...]) -> Any | None:
+                    for selector in selectors:
+                        locator = page.locator(selector)
+                        try:
+                            count = await locator.count()
+                        except Exception:
+                            continue
+                        for index in range(min(count, 8)):
+                            candidate = locator.nth(index)
+                            try:
+                                if await candidate.is_visible(timeout=1_000):
+                                    return candidate
+                            except Exception:
+                                continue
+                    return None
+
+                async def password_field_visible() -> bool:
+                    try:
+                        return await first_visible_locator(("input[type='password']",)) is not None
+                    except Exception:
+                        return False
+
+                async def log_page_context(label: str) -> None:
+                    try:
+                        title = await page.title()
+                    except Exception:
+                        title = ""
+                    bits = [f"{label}: {_clean_url(page.url)}"]
+                    if title:
+                        bits.append(f"title={redacted_text(title)[:120]}")
+                    events.append(" · ".join(bits))
+
+                async def submit_login_form(email_field: Any, password_field: Any) -> None:
+                    await email_field.fill(settings.deputy_login_email, timeout=20_000)
+                    await password_field.fill(settings.deputy_login_password, timeout=20_000)
+                    events.append("Filled Deputy login form.")
+
+                    clicked = False
+                    button_locators = [
+                        page.get_by_role("button", name=re.compile(r"^\s*log\s*in\s*$", re.IGNORECASE)).first,
+                        page.get_by_role("button", name=re.compile(r"^\s*sign\s*in\s*$", re.IGNORECASE)).first,
+                        page.locator("button[type='submit']").first,
+                        page.locator("input[type='submit']").first,
+                    ]
+                    for locator in button_locators:
+                        try:
+                            if await locator.count() == 0:
+                                continue
+                            if not await locator.is_visible(timeout=3_000):
+                                continue
+                            await locator.click(timeout=10_000)
+                            clicked = True
+                            events.append("Clicked Deputy login button.")
+                            break
+                        except Exception:
+                            continue
+
+                    if not clicked:
+                        await password_field.press("Enter")
+                        events.append("Submitted login form with Enter.")
+
+                    await wait_for_page_to_settle("Login", timeout=25_000)
+                    await page.wait_for_timeout(2_000)
+
+                    if clicked and await password_field_visible():
+                        await password_field.press("Enter")
+                        events.append("Login form still visible after click; tried Enter fallback.")
+                        await wait_for_page_to_settle("Login Enter fallback", timeout=20_000)
+                        await page.wait_for_timeout(2_000)
 
                 async def open_schedule_page() -> None:
                     locators = [
@@ -963,6 +1046,10 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                 async def capture_response(response: Any) -> None:
                     try:
                         response_url = response.url
+                        if _is_login_diagnostic_url(response_url, settings) and len(login_response_events) < 16:
+                            login_response_events.append(
+                                f"Login response: {response.request.method} {response.status} {_clean_url(response_url)}"
+                            )
                         if not _is_deputy_api_url(response_url, settings):
                             return
                         if not _is_relevant_deputy_api_url(response_url):
@@ -1034,39 +1121,30 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                 page.on("response", capture_response)
                 await page.goto(login_url, wait_until="domcontentloaded", timeout=45_000)
                 events.append("Opened Deputy login page.")
+                await log_page_context("Login page")
 
-                email_field = page.locator(
-                    "input[type='email'], input[name*='email' i], input[id*='email' i], input[type='text']"
-                ).first
-                password_field = page.locator("input[type='password']").first
-                await email_field.fill(settings.deputy_login_email, timeout=20_000)
-                await password_field.fill(settings.deputy_login_password, timeout=20_000)
-                await password_field.press("Enter")
-                events.append("Submitted login form.")
+                email_field = await first_visible_locator(
+                    (
+                        "input[type='email']",
+                        "input[name*='email' i]",
+                        "input[id*='email' i]",
+                        "input[name*='username' i]",
+                        "input[id*='username' i]",
+                        "input[autocomplete='username']",
+                        "input[placeholder*='email' i]",
+                        "input[placeholder*='username' i]",
+                        "input[type='text']",
+                    )
+                )
+                password_field = await first_visible_locator(("input[type='password']",))
+                if email_field is None or password_field is None:
+                    raise RuntimeError("Could not find visible Deputy login email/password fields.")
+                events.append("Found visible Deputy login fields.")
+                await submit_login_form(email_field, password_field)
+                await log_page_context("After login submit")
+                events.extend(login_response_events)
 
-                await wait_for_page_to_settle("Login", timeout=25_000)
-
-                await page.goto(settings.deputy_web_url, wait_until="domcontentloaded", timeout=45_000)
-                events.append("Opened Deputy web app.")
-                await wait_for_page_to_settle("Deputy web app", timeout=35_000)
-                await capture_page_text("Deputy web app")
-
-                await open_schedule_page()
-                await capture_page_text("Deputy schedule page")
-                selected_all_locations = await select_target_track(list(ALL_LOCATIONS_SCHEDULE_TARGETS))
-                if selected_all_locations:
-                    await capture_page_text("Deputy all locations schedule page")
-                elif target_track_groups:
-                    events.append("All Locations was not selectable; falling back to upcoming roster locations.")
-                    for target_tracks in target_track_groups:
-                        selected = await select_target_track(target_tracks)
-                        if selected:
-                            await capture_page_text(f"Deputy selected schedule page - {target_tracks[0]}")
-                else:
-                    await capture_page_text("Deputy selected schedule page")
-
-                await page.wait_for_timeout(4_000)
-                login_still_visible = await page.locator("input[type='password']").count() > 0
+                login_still_visible = await password_field_visible()
                 if login_still_visible:
                     visible_text = await current_body_text()
                     login_problem_message = _login_problem_message(visible_text)
@@ -1079,6 +1157,27 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     )
                     events.append(login_problem_message)
                 else:
+                    await page.goto(settings.deputy_web_url, wait_until="domcontentloaded", timeout=45_000)
+                    events.append("Opened Deputy web app.")
+                    await wait_for_page_to_settle("Deputy web app", timeout=35_000)
+                    await log_page_context("Deputy web app")
+                    await capture_page_text("Deputy web app")
+
+                    await open_schedule_page()
+                    await capture_page_text("Deputy selected schedule page")
+                    selected_all_locations = await select_target_track(list(ALL_LOCATIONS_SCHEDULE_TARGETS))
+                    if selected_all_locations:
+                        await capture_page_text("Deputy all locations schedule page")
+                    elif target_track_groups:
+                        events.append("All Locations was not selectable; falling back to upcoming roster locations.")
+                        for target_tracks in target_track_groups:
+                            selected = await select_target_track(target_tracks)
+                            if selected:
+                                await capture_page_text(f"Deputy selected schedule page - {target_tracks[0]}")
+                    else:
+                        await capture_page_text("Deputy selected schedule page")
+
+                    await page.wait_for_timeout(4_000)
                     await capture_extended_own_roster()
                     await capture_expanded_area_refs()
                     await capture_direct_schedule_searches()
