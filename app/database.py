@@ -384,6 +384,13 @@ def list_app_users() -> list[sqlite3.Row]:
                 s.last_message,
                 s.sync_in_progress,
                 s.last_planned_reason,
+                secret.updated_at AS credentials_updated_at,
+                CASE
+                    WHEN TRIM(COALESCE(secret.encrypted_email, '')) != ''
+                     AND TRIM(COALESCE(secret.encrypted_password, '')) != ''
+                    THEN 1
+                    ELSE 0
+                END AS has_deputy_credentials,
                 (
                     SELECT COUNT(*)
                     FROM trusted_devices d
@@ -393,6 +400,7 @@ def list_app_users() -> list[sqlite3.Row]:
                 ) AS active_devices
             FROM app_users u
             LEFT JOIN user_sync_state s ON s.user_id = u.id
+            LEFT JOIN deputy_user_secrets secret ON secret.user_id = u.id
             ORDER BY u.is_admin DESC, LOWER(u.display_name), LOWER(u.deputy_email)
             """,
             (datetime.now(get_settings().timezone).isoformat(timespec="seconds"),),

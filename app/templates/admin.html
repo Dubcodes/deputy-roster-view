@@ -141,6 +141,9 @@
 
             <section>
               <h3>Deputy Login</h3>
+              <p class="muted">
+                Saved login: {{ "yes" if user.has_deputy_credentials else "missing" }}{% if user.credentials_updated_at %} · updated {{ user.credentials_updated_at|datetime }}{% endif %}.
+              </p>
               <form class="settings-form admin-credential-form" action="/admin/users/{{ user.id }}/deputy-login" method="post">
                 <label class="form-row">
                   <span>Deputy URL</span>
@@ -152,10 +155,11 @@
                 </label>
                 <label class="form-row">
                   <span>Deputy password</span>
-                  <input type="password" name="deputy_password" autocomplete="current-password" required>
+                  <input type="password" name="deputy_password" autocomplete="current-password" placeholder="Leave blank to keep saved password" {% if not user.has_deputy_credentials %}required{% endif %}>
                 </label>
                 <button class="button button-secondary" type="submit">Save Deputy Login</button>
               </form>
+              <p class="muted">Email, URL, and accidental edge spaces are cleaned up before saving. Blank password keeps the saved encrypted password.</p>
             </section>
 
             <section>

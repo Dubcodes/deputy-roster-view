@@ -13,8 +13,8 @@ def settings_for_user(user_id: int, settings: Settings | None = None) -> Setting
     if secret is None:
         return None
 
-    email = decrypt_text(str(secret["encrypted_email"] or ""), settings)
-    password = decrypt_text(str(secret["encrypted_password"] or ""), settings)
+    email = decrypt_text(str(secret["encrypted_email"] or ""), settings).strip().lower()
+    password = decrypt_text(str(secret["encrypted_password"] or ""), settings).strip()
     encrypted_ical_url = str(secret["encrypted_ical_url"] or "")
     ical_url = decrypt_text(encrypted_ical_url, settings) if encrypted_ical_url else ""
     web_url = str(secret["deputy_web_url"] or settings.deputy_web_url).strip()
