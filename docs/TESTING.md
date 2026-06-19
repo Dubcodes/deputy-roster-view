@@ -25,6 +25,14 @@ Remove `.codex_tmp_jinja` after:
 $target = Resolve-Path -LiteralPath .codex_tmp_jinja; $root = Resolve-Path -LiteralPath .; if ($target.Path.StartsWith($root.Path)) { Remove-Item -LiteralPath $target.Path -Recurse -Force } else { throw "Refusing to remove outside workspace: $($target.Path)" }
 ```
 
+## Route Smoke Check
+
+Run this after changing account, settings, admin, or form-handling code. It creates a temporary SQLite database, signs up a test admin, saves Deputy login details through Settings, saves another user's Deputy login through Admin, and submits an error report.
+
+```powershell
+python scripts\smoke_route_flows.py
+```
+
 ## Manual App Checks
 
 After Portainer redeploy:
