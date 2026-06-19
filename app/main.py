@@ -85,7 +85,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.18.6"
+APP_BUILD = "2026.06.19.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -2281,6 +2281,26 @@ def validate_deputy_credentials(
     return ""
 
 
+def credential_save_failed_response(path: str, user_id: int | None, exc: Exception) -> RedirectResponse:
+    if user_id is not None:
+        try:
+            mark_user_sync_finished(
+                user_id,
+                finished_at=datetime.now(get_settings().timezone).isoformat(timespec="seconds"),
+                status="error",
+                message=f"Deputy login save failed: {type(exc).__name__}. No password was logged.",
+            )
+        except Exception:
+            pass
+    return RedirectResponse(
+        url=notice_url(
+            path,
+            "Deputy login could not be saved. Check the URL/email/password and try again, or ask an admin to update it.",
+        ),
+        status_code=303,
+    )
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
@@ -2452,40 +2472,43 @@ async def admin_reset_pin(request: Request, user_id: int) -> RedirectResponse:
 async def admin_update_user_deputy_login(request: Request, user_id: int) -> RedirectResponse:
     require_admin_user(request)
     settings = get_settings()
-    form = await request.form()
-    stored_user = get_app_user(user_id) or get_app_user_by_email(str(form.get("deputy_email") or ""))
-    deputy_email, deputy_password, deputy_web_url = credential_form_values(
-        form,
-        str((stored_user or {}).get("deputy_web_url") or settings.deputy_web_url),
-    )
-    encrypted_password, password_changed = encrypted_deputy_password_for_update(
-        user_id=user_id,
-        submitted_password=deputy_password,
-    )
-    error = validate_deputy_credentials(
-        deputy_email=deputy_email,
-        deputy_password=deputy_password,
-        deputy_web_url=deputy_web_url,
-        password_required=not bool(encrypted_password),
-    )
-    if error:
-        return RedirectResponse(url=notice_url("/admin", error), status_code=303)
-    existing = get_app_user_by_email(deputy_email)
-    if existing and int(existing["id"]) != user_id:
-        return RedirectResponse(url=notice_url("/admin", "That Deputy email belongs to another roster user."), status_code=303)
-    updated = update_deputy_user_credentials(
-        user_id=user_id,
-        deputy_email=deputy_email,
-        deputy_web_url=deputy_web_url,
-        encrypted_email=encrypt_text(deputy_email, settings),
-        encrypted_password=encrypted_password,
-    )
-    if updated:
-        password_note = " Password updated." if password_changed else " Existing password kept."
-        message = f"Deputy login updated.{password_note} Run Sync This User to test it."
-    else:
-        message = "User not found."
-    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+    try:
+        form = await request.form()
+        stored_user = get_app_user(user_id) or get_app_user_by_email(str(form.get("deputy_email") or ""))
+        deputy_email, deputy_password, deputy_web_url = credential_form_values(
+            form,
+            str((stored_user or {}).get("deputy_web_url") or settings.deputy_web_url),
+        )
+        encrypted_password, password_changed = encrypted_deputy_password_for_update(
+            user_id=user_id,
+            submitted_password=deputy_password,
+        )
+        error = validate_deputy_credentials(
+            deputy_email=deputy_email,
+            deputy_password=deputy_password,
+            deputy_web_url=deputy_web_url,
+            password_required=not bool(encrypted_password),
+        )
+        if error:
+            return RedirectResponse(url=notice_url("/admin", error), status_code=303)
+        existing = get_app_user_by_email(deputy_email)
+        if existing and int(existing["id"]) != user_id:
+            return RedirectResponse(url=notice_url("/admin", "That Deputy email belongs to another roster user."), status_code=303)
+        updated = update_deputy_user_credentials(
+            user_id=user_id,
+            deputy_email=deputy_email,
+            deputy_web_url=deputy_web_url,
+            encrypted_email=encrypt_text(deputy_email, settings),
+            encrypted_password=encrypted_password,
+        )
+        if updated:
+            password_note = " Password updated." if password_changed else " Existing password kept."
+            message = f"Deputy login updated.{password_note} Run Sync This User to test it."
+        else:
+            message = "User not found."
+        return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+    except Exception as exc:
+        return credential_save_failed_response("/admin", user_id, exc)
 
 
 @app.post("/admin/users/{user_id}/deactivate")
@@ -2958,41 +2981,44 @@ async def update_own_deputy_login(request: Request) -> RedirectResponse:
     if not user or user.get("id") is None:
         return RedirectResponse(url=notice_url("/login", "Log in before updating Deputy login details."), status_code=303)
     settings = get_settings()
-    stored_user = get_app_user(int(user["id"]))
-    form = await request.form()
-    deputy_email, deputy_password, deputy_web_url = credential_form_values(
-        form,
-        str((stored_user or {}).get("deputy_web_url") or settings.deputy_web_url),
-    )
     user_id = int(user["id"])
-    encrypted_password, password_changed = encrypted_deputy_password_for_update(
-        user_id=user_id,
-        submitted_password=deputy_password,
-    )
-    error = validate_deputy_credentials(
-        deputy_email=deputy_email,
-        deputy_password=deputy_password,
-        deputy_web_url=deputy_web_url,
-        password_required=not bool(encrypted_password),
-    )
-    if error:
-        return RedirectResponse(url=notice_url("/settings", error), status_code=303)
-    existing = get_app_user_by_email(deputy_email)
-    if existing and int(existing["id"]) != user_id:
-        return RedirectResponse(url=notice_url("/settings", "That Deputy email belongs to another roster user."), status_code=303)
-    updated = update_deputy_user_credentials(
-        user_id=user_id,
-        deputy_email=deputy_email,
-        deputy_web_url=deputy_web_url,
-        encrypted_email=encrypt_text(deputy_email, settings),
-        encrypted_password=encrypted_password,
-    )
-    if updated:
-        password_note = " Password updated." if password_changed else " Existing password kept."
-        message = f"Deputy login updated.{password_note} Run Sync my roster to test it."
-    else:
-        message = "User not found."
-    return RedirectResponse(url=notice_url("/settings", message), status_code=303)
+    try:
+        stored_user = get_app_user(user_id)
+        form = await request.form()
+        deputy_email, deputy_password, deputy_web_url = credential_form_values(
+            form,
+            str((stored_user or {}).get("deputy_web_url") or settings.deputy_web_url),
+        )
+        encrypted_password, password_changed = encrypted_deputy_password_for_update(
+            user_id=user_id,
+            submitted_password=deputy_password,
+        )
+        error = validate_deputy_credentials(
+            deputy_email=deputy_email,
+            deputy_password=deputy_password,
+            deputy_web_url=deputy_web_url,
+            password_required=not bool(encrypted_password),
+        )
+        if error:
+            return RedirectResponse(url=notice_url("/settings", error), status_code=303)
+        existing = get_app_user_by_email(deputy_email)
+        if existing and int(existing["id"]) != user_id:
+            return RedirectResponse(url=notice_url("/settings", "That Deputy email belongs to another roster user."), status_code=303)
+        updated = update_deputy_user_credentials(
+            user_id=user_id,
+            deputy_email=deputy_email,
+            deputy_web_url=deputy_web_url,
+            encrypted_email=encrypt_text(deputy_email, settings),
+            encrypted_password=encrypted_password,
+        )
+        if updated:
+            password_note = " Password updated." if password_changed else " Existing password kept."
+            message = f"Deputy login updated.{password_note} Run Sync my roster to test it."
+        else:
+            message = "User not found."
+        return RedirectResponse(url=notice_url("/settings", message), status_code=303)
+    except Exception as exc:
+        return credential_save_failed_response("/settings", user_id, exc)
 
 
 @app.post("/settings/error-report")
