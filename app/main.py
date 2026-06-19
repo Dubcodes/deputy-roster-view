@@ -85,7 +85,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.19.1"
+APP_BUILD = "2026.06.19.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -2265,6 +2265,17 @@ def encrypted_deputy_password_for_update(
     return existing_encrypted_deputy_password(user_id), False
 
 
+def row_value(row: object, key: str, default: object = "") -> object:
+    if row is None:
+        return default
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        return row[key]  # type: ignore[index]
+    except (IndexError, KeyError, TypeError):
+        return default
+
+
 def validate_deputy_credentials(
     *,
     deputy_email: str,
@@ -2477,7 +2488,7 @@ async def admin_update_user_deputy_login(request: Request, user_id: int) -> Redi
         stored_user = get_app_user(user_id) or get_app_user_by_email(str(form.get("deputy_email") or ""))
         deputy_email, deputy_password, deputy_web_url = credential_form_values(
             form,
-            str((stored_user or {}).get("deputy_web_url") or settings.deputy_web_url),
+            str(row_value(stored_user, "deputy_web_url") or settings.deputy_web_url),
         )
         encrypted_password, password_changed = encrypted_deputy_password_for_update(
             user_id=user_id,
@@ -2987,7 +2998,7 @@ async def update_own_deputy_login(request: Request) -> RedirectResponse:
         form = await request.form()
         deputy_email, deputy_password, deputy_web_url = credential_form_values(
             form,
-            str((stored_user or {}).get("deputy_web_url") or settings.deputy_web_url),
+            str(row_value(stored_user, "deputy_web_url") or settings.deputy_web_url),
         )
         encrypted_password, password_changed = encrypted_deputy_password_for_update(
             user_id=user_id,
