@@ -12,6 +12,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.gzip import GZipMiddleware
 
 from .auth import clear_trusted_device, current_user, require_admin_user, trusted_device_middleware
 from .config import get_settings
@@ -86,7 +87,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.20.1"
+APP_BUILD = "2026.06.20.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -439,12 +440,21 @@ PLACEHOLDER_SCHEDULE_POSITION_KEYS = set(SCHEDULE_POSITION_ORDER) - {"northern"}
 app = FastAPI(
     title="Deputy Roster View",
 )
+app.add_middleware(GZipMiddleware, minimum_size=500)
 app.middleware("http")(trusted_device_middleware)
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 _sync_worker_lock = threading.Lock()
 _sync_state_lock = threading.Lock()
 _manual_sync_status_by_scope: dict[str, dict[str, object]] = {}
+
+
+@app.middleware("http")
+async def static_cache_middleware(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+    return response
 
 
 def parse_iso_datetime(value: str | None) -> datetime | None:
@@ -3285,4 +3295,5 @@ templates.env.filters["datetime"] = format_datetime
 templates.env.filters["time"] = format_time
 templates.env.filters["day_short"] = format_day_short
 templates.env.filters["hours"] = format_hours
+templates.env.globals["app_build"] = APP_BUILD
 templates.env.globals["theme_values"] = THEME_VALUES

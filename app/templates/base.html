@@ -7,7 +7,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Deputy Roster View{% endblock %}</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{ app_build }}">
   </head>
   <body>
     <header class="site-header {% if header_context %}has-month-nav{% else %}no-month-nav{% endif %}">
