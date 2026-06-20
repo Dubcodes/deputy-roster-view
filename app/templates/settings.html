@@ -63,6 +63,13 @@
           </form>
           <p class="muted">Use this if your Deputy password changed or the original signup details were wrong. Email, URL, and accidental edge spaces are cleaned up before saving. Passwords are encrypted before storage.</p>
         </details>
+        <details class="inline-settings-details">
+          <summary>Deactivate my account</summary>
+          <p class="muted">This signs this device out, stops future syncs, and marks your account for deletion after 30 days unless an admin reactivates it.</p>
+          <form class="settings-form compact-settings-form" action="/settings/deactivate-account" method="post">
+            <button class="button button-secondary" type="submit" onclick="return confirm('Deactivate your roster viewer account on this system?');">Deactivate My Account</button>
+          </form>
+        </details>
       {% endif %}
     </article>
 
@@ -217,111 +224,110 @@
     </div>
   </details>
 
-  <details class="table-panel diagnostics-panel">
-    <summary>iCal Backup Feed</summary>
+  <details class="table-panel diagnostics-panel advanced-diagnostics-panel">
+    <summary>Advanced Diagnostics</summary>
     <div class="diagnostics-content">
-      <p class="muted">
-        Status: {{ "configured" if calendar_url_configured else "missing" }}{% if calendar_url_source %} · {{ calendar_url_source }}{% endif %}.
-        Paste your own Deputy calendar URL here to merge iCal details into your roster during sync.
-      </p>
-      <form class="settings-form" action="/settings/calendar" method="post">
-        <label class="form-row">
-          <span>My Deputy iCal URL</span>
-          <input type="password" name="deputy_ical_url" placeholder="Paste your calendar URL" autocomplete="off">
-        </label>
-        <label class="toggle-row">
-          <input type="checkbox" name="clear_calendar_url">
-          <span>Clear saved URL</span>
-        </label>
-        <button class="button" type="submit">Save Backup URL</button>
-      </form>
-    </div>
-  </details>
+      <p class="muted">These tools are mostly for fixing bad imports, missing Deputy data, or login issues.</p>
 
-  <details class="table-panel diagnostics-panel">
-    <summary>Most Recent iCal Data</summary>
-    <div class="diagnostics-content">
-      {% if not source_payload_shifts %}
-        <div class="empty-state">No iCal source data has been stored yet.</div>
-      {% else %}
-        <div class="copy-panel">
-          <div class="section-heading">
-            <h3>Copy iCal Data</h3>
-            <button class="button button-compact" type="button" data-copy-target="ical-copy">Copy All</button>
-          </div>
-          <textarea id="ical-copy" class="copy-box" rows="10" readonly>{% for shift in source_payload_shifts %}--- {{ shift.start_at|datetime }} · {{ shift.track_label }} · {{ shift.role_full_label or shift.role_label or shift.title or "Shift" }} ---
+      <details class="inline-settings-details">
+        <summary>iCal Backup Feed</summary>
+        <p class="muted">
+          Status: {{ "configured" if calendar_url_configured else "missing" }}{% if calendar_url_source %} · {{ calendar_url_source }}{% endif %}.
+          Paste your own Deputy calendar URL here to merge iCal details into your roster during sync.
+        </p>
+        <form class="settings-form" action="/settings/calendar" method="post">
+          <label class="form-row">
+            <span>My Deputy iCal URL</span>
+            <input type="password" name="deputy_ical_url" placeholder="Paste your calendar URL" autocomplete="off">
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" name="clear_calendar_url">
+            <span>Clear saved URL</span>
+          </label>
+          <button class="button" type="submit">Save Backup URL</button>
+        </form>
+      </details>
+
+      <details class="inline-settings-details">
+        <summary>Most Recent iCal Data</summary>
+        {% if not source_payload_shifts %}
+          <div class="empty-state">No iCal source data has been stored yet.</div>
+        {% else %}
+          <div class="copy-panel">
+            <div class="section-heading">
+              <h3>Copy iCal Data</h3>
+              <button class="button button-compact" type="button" data-copy-target="ical-copy">Copy All</button>
+            </div>
+            <textarea id="ical-copy" class="copy-box" rows="10" readonly>{% for shift in source_payload_shifts %}--- {{ shift.start_at|datetime }} · {{ shift.track_label }} · {{ shift.role_full_label or shift.role_label or shift.title or "Shift" }} ---
 {{ shift.source_payload_pretty }}
 
 {% endfor %}</textarea>
-          <p class="copy-status" data-copy-status-for="ical-copy" aria-live="polite"></p>
-        </div>
-      {% endif %}
-    </div>
-  </details>
-
-  <details class="table-panel diagnostics-panel">
-    <summary>Most Recent Deputy Web Capture</summary>
-    <div class="diagnostics-content">
-      {% if not deputy_web_capture %}
-        <div class="empty-state">No Deputy web capture has run yet.</div>
-      {% else %}
-        <p class="muted">Captured {{ deputy_web_capture.captured_at }} · {{ deputy_web_capture.status }}</p>
-        <div class="copy-panel">
-          <div class="section-heading">
-            <h3>Copy Capture Data</h3>
-            <button class="button button-compact" type="button" data-copy-target="deputy-web-copy">Copy All</button>
+            <p class="copy-status" data-copy-status-for="ical-copy" aria-live="polite"></p>
           </div>
-          <textarea id="deputy-web-copy" class="copy-box" rows="12" readonly>{{ deputy_web_capture.copy_text }}</textarea>
-          <p class="copy-status" data-copy-status-for="deputy-web-copy" aria-live="polite"></p>
+        {% endif %}
+      </details>
+
+      <details class="inline-settings-details">
+        <summary>Most Recent Deputy Web Capture</summary>
+        {% if not deputy_web_capture %}
+          <div class="empty-state">No Deputy web capture has run yet.</div>
+        {% else %}
+          <p class="muted">Captured {{ deputy_web_capture.captured_at }} · {{ deputy_web_capture.status }}</p>
+          <div class="copy-panel">
+            <div class="section-heading">
+              <h3>Copy Capture Data</h3>
+              <button class="button button-compact" type="button" data-copy-target="deputy-web-copy">Copy All</button>
+            </div>
+            <textarea id="deputy-web-copy" class="copy-box" rows="12" readonly>{{ deputy_web_capture.copy_text }}</textarea>
+            <p class="copy-status" data-copy-status-for="deputy-web-copy" aria-live="polite"></p>
+          </div>
+        {% endif %}
+      </details>
+
+      <details class="inline-settings-details">
+        <summary>Maintenance And Sync Logs</summary>
+        <div class="stacked-actions">
+          <form action="/settings/clear-changed" method="post">
+            <button class="button button-secondary" type="submit">Clear Changed Flags</button>
+          </form>
         </div>
-      {% endif %}
-    </div>
-  </details>
 
-  <details class="table-panel diagnostics-panel">
-    <summary>Maintenance</summary>
-    <div class="diagnostics-content">
-      <div class="stacked-actions">
-        <form action="/settings/clear-changed" method="post">
-          <button class="button button-secondary" type="submit">Clear Changed Flags</button>
-        </form>
-      </div>
-
-      <div class="section-heading sync-log-heading">
-        <h2>Sync Logs</h2>
-      </div>
-      {% if not sync_logs %}
-        <div class="empty-state">No syncs have run yet.</div>
-      {% else %}
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Started</th>
-                <th>Status</th>
-                <th>Message</th>
-                <th>Seen</th>
-                <th>New</th>
-                <th>Changed</th>
-                <th>Cancelled</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for log in sync_logs %}
+        <div class="section-heading sync-log-heading">
+          <h2>Sync Logs</h2>
+        </div>
+        {% if not sync_logs %}
+          <div class="empty-state">No syncs have run yet.</div>
+        {% else %}
+          <div class="table-wrap">
+            <table>
+              <thead>
                 <tr>
-                  <td>{{ log.started_at|datetime }}</td>
-                  <td><span class="badge {% if log.status != 'ok' %}badge-danger{% endif %}">{{ log.status }}</span></td>
-                  <td>{{ log.message }}</td>
-                  <td>{{ log.events_seen }}</td>
-                  <td>{{ log.events_created }}</td>
-                  <td>{{ log.events_updated }}</td>
-                  <td>{{ log.events_marked_deleted }}</td>
+                  <th>Started</th>
+                  <th>Status</th>
+                  <th>Message</th>
+                  <th>Seen</th>
+                  <th>New</th>
+                  <th>Changed</th>
+                  <th>Cancelled</th>
                 </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% endif %}
+              </thead>
+              <tbody>
+                {% for log in sync_logs %}
+                  <tr>
+                    <td>{{ log.started_at|datetime }}</td>
+                    <td><span class="badge {% if log.status != 'ok' %}badge-danger{% endif %}">{{ log.status }}</span></td>
+                    <td>{{ log.message }}</td>
+                    <td>{{ log.events_seen }}</td>
+                    <td>{{ log.events_created }}</td>
+                    <td>{{ log.events_updated }}</td>
+                    <td>{{ log.events_marked_deleted }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% endif %}
+      </details>
     </div>
   </details>
 {% endblock %}

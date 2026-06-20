@@ -10,6 +10,7 @@
 ## Important Track/Location Labels
 
 - `Office` and `Clow Place` both mean the base/start-of-day location.
+- `Clow Pl` is a common shorthand for `Clow Place`.
 - `On track` is the arrival time at the track.
 - `Ruak` / `RUAK` should display as Ruakaka.
 - Vehicle maintenance days are `[VEH] Vehicles`.
@@ -28,6 +29,10 @@ For normal race days with enough roster-note timing data:
 6. Add 1 hour pack-up.
 7. Add return travel time.
 8. Total is calculated finish minus base start.
+
+If a roster note is missing either the base/start time or the on-track time, the app may use a saved default travel time for that track. Manual admin defaults are preferred over learned defaults. Learned defaults come from previous roster notes where both base and on-track times were present.
+
+Default travel times are only a fallback. If the roster note gives both base and on-track times, use the note.
 
 Manual override rules:
 

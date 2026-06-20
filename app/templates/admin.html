@@ -37,9 +37,88 @@
     <div class="section-heading">
       <h2>Maintenance</h2>
     </div>
-    <form action="/admin/clear-changed" method="post">
-      <button class="button button-secondary" type="submit">Clear All Changed Flags</button>
+    <div class="settings-action-row">
+      <form action="/admin/clear-changed" method="post">
+        <button class="button button-secondary" type="submit">Clear All Changed Flags</button>
+      </form>
+      <form action="/admin/cleanup" method="post">
+        <button class="button button-secondary" type="submit">Purge Old Inactive Data</button>
+      </form>
+    </div>
+    <p class="muted">Inactive users and untrusted devices are automatically purged after 30 days. This runs the same cleanup now.</p>
+  </section>
+
+  <section class="table-panel">
+    <div class="section-heading">
+      <h2>Default Travel Times</h2>
+    </div>
+    <p class="muted">Used only when a roster note is missing either the base start time or the on-track time. Learned entries come from previous roster notes; manual entries win.</p>
+    <form class="marks-form admin-override-form" action="/admin/travel-defaults" method="post">
+      <div class="form-grid-two">
+        <label class="form-row">
+          <span>Track</span>
+          <input type="text" name="track_label" placeholder="Te Aroha" required>
+        </label>
+        <label class="form-row">
+          <span>Base</span>
+          <select name="base_label">
+            <option value="Clow Place">Clow Place</option>
+            <option value="Office">Office</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-grid-two">
+        <label class="form-row">
+          <span>Travel minutes</span>
+          <input type="number" name="travel_minutes" min="1" max="480" placeholder="60" required>
+        </label>
+        <label class="form-row">
+          <span>Note</span>
+          <input type="text" name="note" placeholder="Optional hotel/base note">
+        </label>
+      </div>
+      <button class="button button-secondary" type="submit">Save Travel Time</button>
     </form>
+    {% if not travel_defaults %}
+      <div class="empty-state">No travel defaults learned or saved yet.</div>
+    {% else %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Track</th>
+              <th>Base</th>
+              <th>Each way</th>
+              <th>Source</th>
+              <th>Seen</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in travel_defaults %}
+              <tr>
+                <td>{{ item.track_label }}</td>
+                <td>{{ item.base_label }}</td>
+                <td>{{ item.travel_label }}</td>
+                <td><span class="badge">{{ item.source }}</span></td>
+                <td>
+                  {% if item.source == "learned" %}
+                    {{ item.sample_count }} sample{% if item.sample_count != 1 %}s{% endif %}{% if item.last_seen_at %} · last {{ item.last_seen_at }}{% endif %}
+                  {% else %}
+                    manual
+                  {% endif %}
+                </td>
+                <td>
+                  <form action="/admin/travel-defaults/{{ item.id }}/delete" method="post">
+                    <button class="button button-compact button-secondary" type="submit" onclick="return confirm('Delete this travel default?');">Delete</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
   </section>
 
   <section class="table-panel">
@@ -175,6 +254,9 @@
                 {% else %}
                   <form action="/admin/users/{{ user.id }}/reactivate" method="post">
                     <button class="button button-secondary" type="submit">Reactivate User</button>
+                  </form>
+                  <form action="/admin/users/{{ user.id }}/purge" method="post">
+                    <button class="button button-secondary" type="submit" onclick="return confirm('Permanently delete this inactive user, their credentials, devices, and local roster data?');">Purge User Data</button>
                   </form>
                 {% endif %}
                 <form action="/admin/users/{{ user.id }}/reset-roster" method="post">

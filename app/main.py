@@ -4,6 +4,7 @@ import calendar
 import json
 import re
 import threading
+from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -21,6 +22,7 @@ from .database import (
     clear_changed_flags_for_user,
     clear_changed_for_date,
     clear_changed_for_shift,
+    count_active_admins,
     count_app_users,
     create_admin_override,
     create_app_user,
@@ -32,6 +34,7 @@ from .database import (
     fetch_open_deputy_schedule_shifts,
     fetch_deputy_schedule_for_date,
     fetch_deputy_schedule_areas_for_locations,
+    fetch_shifts_for_travel_learning,
     get_calendar_url,
     get_calendar_url_source,
     get_deputy_user_secret,
@@ -47,6 +50,7 @@ from .database import (
     get_last_successful_sync,
     get_next_upcoming_shift,
     get_recent_source_payloads,
+    get_travel_time_default,
     get_recent_sync_logs,
     get_upcoming_shifts,
     get_user_sync_state,
@@ -54,17 +58,22 @@ from .database import (
     list_admin_overrides,
     list_app_users,
     list_error_reports,
+    list_travel_time_defaults,
     list_trusted_devices_for_user,
     mark_user_sync_finished,
     mark_user_sync_started,
     revoke_trusted_device_for_user,
     reset_incomplete_user_syncs,
     reset_user_roster_data,
+    purge_app_user,
+    purge_old_inactive_records,
     update_deputy_user_ical_url,
     update_deputy_user_credentials,
     update_app_settings,
     update_shift_marks,
     set_app_user_active,
+    upsert_travel_time_default,
+    delete_travel_time_default,
     update_user_display_theme,
     update_user_pin_hash,
     user_has_deputy_credentials,
@@ -87,7 +96,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.20.3"
+APP_BUILD = "2026.06.21.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -283,12 +292,12 @@ HIDDEN_CHANGE_FIELDS = {"break_minutes", "paid_hours"}
 TIMING_LINE_PATTERNS = (
     ("Trucks", re.compile(r"^trucks?\s+(.+)$", re.IGNORECASE)),
     ("Office", re.compile(r"^office\s+(.+)$", re.IGNORECASE)),
-    ("Clow Place", re.compile(r"^clow\s+place\s+(.+)$", re.IGNORECASE)),
+    ("Clow Place", re.compile(r"^clow\s+(?:place|pl)\s+(.+)$", re.IGNORECASE)),
     ("On track", re.compile(r"^on\s+track\s+(.+)$", re.IGNORECASE)),
     ("First cross", re.compile(r"^first\s+cross\s+(.+)$", re.IGNORECASE)),
 )
 TIME_FIRST_TIMING_RE = re.compile(
-    r"^([0-9: ]{3,5}\s*(?:am|pm)?)\s+(trucks?|office|clow\s+place|on\s+track|first\s+cross|fx)\b(?:\s+(.+))?$",
+    r"^([0-9: ]{3,5}\s*(?:am|pm)?)\s+(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+cross|fx)\b(?:\s+(.+))?$",
     re.IGNORECASE,
 )
 INLINE_TIMING_RE = re.compile(
@@ -309,6 +318,7 @@ TIMING_LABELS = {
     "trucks": "Trucks",
     "office": "Office",
     "clow place": "Clow Place",
+    "clow pl": "Clow Place",
     "on track": "On track",
     "first cross": "First cross",
     "fx": "FX",
@@ -561,6 +571,34 @@ def stable_location_colour_index(*values: object) -> int:
         return 1
     total = sum((index + 1) * ord(char) for index, char in enumerate(key))
     return (total % LOCATION_COLOUR_COUNT) + 1
+
+
+def travel_default_key(value: object) -> str:
+    return location_colour_key(value)
+
+
+def travel_default_keys_for_shift(shift: dict[str, object]) -> list[str]:
+    values = [
+        shift.get("track_label"),
+        shift.get("source_code"),
+        shift.get("location"),
+        shift.get("schedule_location_id"),
+    ]
+    keys = []
+    for value in values:
+        key = travel_default_key(value)
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def travel_default_for_shift(shift: dict[str, object], base_label: str = "Clow Place") -> dict[str, object] | None:
+    keys = travel_default_keys_for_shift(shift)
+    row = get_travel_time_default(keys, base_label=base_label)
+    if row is None and base_label.lower() in {"office", "clow place"}:
+        fallback_base = "Office" if base_label.lower() == "clow place" else "Clow Place"
+        row = get_travel_time_default(keys, base_label=fallback_base)
+    return dict(row) if row else None
 
 
 def redact_secret_text(value: str) -> str:
@@ -1178,10 +1216,19 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
         "lines": [],
         "formula": "",
     }
-    if not base_clock:
-        return result
+    default_row = travel_default_for_shift(shift, base_label)
+    default_travel_minutes = int(default_row["travel_minutes"]) if default_row else 0
+    default_source = str(default_row["source"] or "default") if default_row else ""
 
-    start_at = clock_datetime_for_shift(shift, base_clock)
+    start_at = clock_datetime_for_shift(shift, base_clock) if base_clock else None
+    inferred_start = False
+    inferred_on_track = False
+    if start_at is None and on_track_clock and default_travel_minutes:
+        on_track_for_start = clock_datetime_for_shift(shift, on_track_clock)
+        if on_track_for_start is not None:
+            start_at = on_track_for_start - timedelta(minutes=default_travel_minutes)
+            inferred_start = True
+            base_clock = start_at.strftime("%H:%M")
     if start_at is None:
         return result
 
@@ -1213,6 +1260,11 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
         )
         return result
 
+    if not on_track_clock and start_at is not None and default_travel_minutes:
+        on_track_at = start_at + timedelta(minutes=default_travel_minutes)
+        on_track_clock = on_track_at.strftime("%H:%M")
+        inferred_on_track = True
+
     if not on_track_clock or not last_race_clock:
         return result
 
@@ -1230,6 +1282,8 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
         {
             "available": True,
             "source": "race_day",
+            "used_default_travel": bool(inferred_start or inferred_on_track),
+            "default_travel_source": default_source,
             "start_label": start_at.strftime("%H:%M"),
             "on_track_label": on_track_at.strftime("%H:%M"),
             "last_race_label": last_race_at.strftime("%H:%M"),
@@ -1240,8 +1294,8 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
             "hours": hours,
             "hours_label": format_hours(hours),
             "lines": [
-                {"label": base_label, "value": start_at.strftime("%H:%M")},
-                {"label": "On track", "value": on_track_at.strftime("%H:%M")},
+                {"label": f"{base_label}{' inferred' if inferred_start else ''}", "value": start_at.strftime("%H:%M")},
+                {"label": f"On track{' inferred' if inferred_on_track else ''}", "value": on_track_at.strftime("%H:%M")},
                 {"label": "Travel each way", "value": format_minutes_duration(travel_minutes)},
                 {"label": "Last race", "value": last_race_at.strftime("%H:%M")},
                 {"label": "Race cleared", "value": race_clear_at.strftime("%H:%M")},
@@ -1260,17 +1314,19 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     )
     if use_last_race_adjustment:
         result["formula"] = f"Using changed last race time. {result['formula']}"
+    if inferred_start or inferred_on_track:
+        result["formula"] = f"Using {default_source or 'saved'} default travel time. {result['formula']}"
     return result
 
 
 def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object]) -> dict[str, object]:
     rows: list[dict[str, str]] = []
     wanted_patterns = (
-        re.compile(r"^(trucks?|office|clow\s+place|on\s+track|first\s+cross|fx)\b", re.IGNORECASE),
+        re.compile(r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+cross|fx)\b", re.IGNORECASE),
         re.compile(r"\b(records|live|first race|last race|\d+\s+races?)\b", re.IGNORECASE),
     )
     simple_timing_re = re.compile(
-        r"^(trucks?|office|clow\s+place|on\s+track|first\s+cross|fx)\s+(.+)$",
+        r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+cross|fx)\s+(.+)$",
         re.IGNORECASE,
     )
     paired_timing_re = re.compile(
@@ -1291,6 +1347,7 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
             "trucks": "Trucks",
             "office": "Office",
             "clow place": "Clow Place",
+            "clow pl": "Clow Place",
             "on track": "On track",
             "first cross": "First cross",
             "first race": "First race",
@@ -1313,7 +1370,7 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
             continue
         if not any(pattern.search(line_text) for pattern in wanted_patterns):
             continue
-        if re.match(r"^(trucks?|office|clow\s+place|on\s+track)\b", line_text, re.IGNORECASE):
+        if re.match(r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track)\b", line_text, re.IGNORECASE):
             line_text = re.split(r"\s+[-–]\s+", line_text, maxsplit=1)[0].strip()
 
         race_times = RACE_COUNT_WITH_TIMES_RE.search(line_text)
@@ -2308,6 +2365,74 @@ def admin_contact_rows() -> list[dict[str, object]]:
     return contacts
 
 
+def refresh_learned_travel_defaults() -> int:
+    groups: dict[tuple[str, str, str], list[dict[str, object]]] = {}
+    for row in fetch_shifts_for_travel_learning():
+        shift = dict(row)
+        parsed = parse_shift_title(str(shift.get("title") or ""))
+        normalised = source_payload_normalised(str(shift.get("source_payload") or ""))
+        track_label = str(
+            parsed.get("track_label")
+            or normalised.get("location_name")
+            or normalised.get("source_code")
+            or ""
+        ).strip()
+        if not track_label or track_label.lower() in GENERIC_TRACK_LABELS:
+            continue
+        summary = parse_roster_summary(description_lines(str(shift.get("description") or "")))
+        timings = timing_lookup(summary)
+        base_label = "Office" if timings.get("office") else "Clow Place"
+        base_clock = timings.get("office") or timings.get("clow place")
+        on_track_clock = timings.get("on track")
+        if not base_clock or not on_track_clock:
+            continue
+        start_at = clock_datetime_for_shift(shift, base_clock)
+        on_track_at = clock_datetime_for_shift(shift, on_track_clock, start_at)
+        if start_at is None or on_track_at is None:
+            continue
+        travel_minutes = int(round((on_track_at - start_at).total_seconds() / 60))
+        if travel_minutes <= 0 or travel_minutes > 8 * 60:
+            continue
+        track_key = travel_default_key(track_label)
+        if not track_key:
+            continue
+        groups.setdefault((track_key, track_label, base_label), []).append(
+            {
+                "travel_minutes": travel_minutes,
+                "date": str(shift.get("date") or ""),
+            }
+        )
+
+    saved = 0
+    for (track_key, track_label, base_label), samples in groups.items():
+        counts = Counter(int(sample["travel_minutes"]) for sample in samples)
+        travel_minutes, _ = counts.most_common(1)[0]
+        dates = sorted(str(sample["date"] or "") for sample in samples if str(sample["date"] or ""))
+        upsert_travel_time_default(
+            track_key=track_key,
+            track_label=track_label,
+            base_label=base_label,
+            travel_minutes=travel_minutes,
+            source="learned",
+            sample_count=len(samples),
+            first_seen_at=dates[0] if dates else "",
+            last_seen_at=dates[-1] if dates else "",
+            note="Learned from previous roster notes.",
+        )
+        saved += 1
+    return saved
+
+
+def travel_default_rows() -> list[dict[str, object]]:
+    refresh_learned_travel_defaults()
+    rows = []
+    for row in list_travel_time_defaults():
+        item = dict(row)
+        item["travel_label"] = format_minutes_duration(int(item.get("travel_minutes") or 0))
+        rows.append(item)
+    return rows
+
+
 def diagnostic_source_payloads(limit: int = 8) -> list[dict[str, object]]:
     payloads = []
     for row in get_recent_source_payloads(limit):
@@ -2459,6 +2584,7 @@ def credential_save_failed_response(path: str, user_id: int | None, exc: Excepti
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    purge_old_inactive_records(days=30)
     reset_incomplete_user_syncs()
     start_scheduler()
 
@@ -2583,6 +2709,7 @@ def logout_view(request: Request) -> RedirectResponse:
 def admin_view(request: Request, notice: str | None = None) -> object:
     user = require_admin_user(request)
     settings = get_settings()
+    travel_defaults = travel_default_rows()
     return templates.TemplateResponse(
         "admin.html",
         {
@@ -2596,6 +2723,7 @@ def admin_view(request: Request, notice: str | None = None) -> object:
             "users": admin_user_rows(),
             "overrides": list_admin_overrides(),
             "error_reports": format_error_reports(),
+            "travel_defaults": travel_defaults,
         },
     )
 
@@ -2671,6 +2799,9 @@ def admin_deactivate_user(request: Request, user_id: int) -> RedirectResponse:
     admin = require_admin_user(request)
     if int(admin["id"]) == user_id:
         return RedirectResponse(url=notice_url("/admin", "You cannot deactivate your own admin account."), status_code=303)
+    target = get_app_user(user_id)
+    if target and int(target["is_admin"] or 0) and count_active_admins(excluding_user_id=user_id) < 1:
+        return RedirectResponse(url=notice_url("/admin", "Keep at least one active admin account."), status_code=303)
     updated = set_app_user_active(user_id, False)
     message = "User deactivated and trusted devices revoked." if updated else "User not found."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
@@ -2692,6 +2823,30 @@ def admin_reset_user_roster(request: Request, user_id: int) -> RedirectResponse:
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
+@app.post("/admin/users/{user_id}/purge")
+def admin_purge_user(request: Request, user_id: int) -> RedirectResponse:
+    admin = require_admin_user(request)
+    if int(admin["id"]) == user_id:
+        return RedirectResponse(url=notice_url("/admin", "You cannot purge your own admin account."), status_code=303)
+    result = purge_app_user(user_id)
+    message = (
+        f"Purged inactive user data: {result['shifts']} shifts, {result['devices']} devices."
+        if result.get("users")
+        else "Only inactive users can be purged."
+    )
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/cleanup")
+def admin_cleanup_old_records(request: Request) -> RedirectResponse:
+    require_admin_user(request)
+    result = purge_old_inactive_records(days=30)
+    return RedirectResponse(
+        url=notice_url("/admin", f"Cleanup complete: purged {result['users']} inactive users and {result['devices']} old revoked devices."),
+        status_code=303,
+    )
+
+
 @app.post("/admin/users/{user_id}/sync")
 def admin_sync_user(request: Request, user_id: int, background_tasks: BackgroundTasks) -> RedirectResponse:
     require_admin_user(request)
@@ -2710,6 +2865,40 @@ def admin_clear_changed(request: Request) -> RedirectResponse:
     require_admin_user(request)
     changed = clear_all_changed_flags()
     return RedirectResponse(url=notice_url("/admin", f"Cleared changed flags on {changed} items."), status_code=303)
+
+
+@app.post("/admin/travel-defaults")
+async def admin_save_travel_default(request: Request) -> RedirectResponse:
+    require_admin_user(request)
+    form = await request.form()
+    track_label = str(form.get("track_label") or "").strip()
+    base_label = str(form.get("base_label") or "Clow Place").strip() or "Clow Place"
+    minutes_text = str(form.get("travel_minutes") or "").strip()
+    note = str(form.get("note") or "").strip()
+    try:
+        travel_minutes = int(minutes_text)
+    except ValueError:
+        travel_minutes = 0
+    if not track_label or travel_minutes <= 0:
+        return RedirectResponse(url=notice_url("/admin", "Track and travel minutes are required."), status_code=303)
+    upsert_travel_time_default(
+        track_key=travel_default_key(track_label),
+        track_label=track_label,
+        base_label=base_label,
+        travel_minutes=travel_minutes,
+        source="manual",
+        sample_count=0,
+        note=note,
+    )
+    return RedirectResponse(url=notice_url("/admin", "Travel default saved."), status_code=303)
+
+
+@app.post("/admin/travel-defaults/{default_id}/delete")
+def admin_delete_travel_default(request: Request, default_id: int) -> RedirectResponse:
+    require_admin_user(request)
+    deleted = delete_travel_time_default(default_id)
+    message = "Travel default deleted." if deleted else "Travel default not found."
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
 @app.post("/admin/overrides")
@@ -3199,6 +3388,23 @@ async def submit_error_report(request: Request) -> RedirectResponse:
         diagnostics=diagnostics,
     )
     return RedirectResponse(url=notice_url("/settings", "Error report saved with the latest diagnostics."), status_code=303)
+
+
+@app.post("/settings/deactivate-account")
+def deactivate_own_account(request: Request) -> RedirectResponse:
+    user = current_user(request)
+    if not user or user.get("id") is None:
+        return RedirectResponse(url=notice_url("/login", "Log in before changing account status."), status_code=303)
+    user_id = int(user["id"])
+    if int(user.get("is_admin") or 0) and count_active_admins(excluding_user_id=user_id) < 1:
+        return RedirectResponse(url=notice_url("/settings", "Keep at least one active admin account."), status_code=303)
+    set_app_user_active(user_id, False)
+    response = RedirectResponse(
+        url=notice_url("/login", "Your roster viewer account was deactivated. Its data will be purged after 30 days unless an admin reactivates it."),
+        status_code=303,
+    )
+    clear_trusted_device(request, response)
+    return response
 
 
 @app.post("/settings/calendar")

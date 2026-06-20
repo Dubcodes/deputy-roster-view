@@ -31,8 +31,8 @@ def main() -> None:
 
     from fastapi.testclient import TestClient
 
-    from app.database import create_app_user, get_app_user_by_email, init_db
-    from app.main import app, schedule_people
+    from app.database import create_app_user, get_app_user_by_email, init_db, upsert_travel_time_default
+    from app.main import app, build_race_day_calculation, build_race_day_summary, parse_roster_summary, schedule_people
     from app.security import encrypt_text, hash_pin
 
     init_db()
@@ -91,6 +91,44 @@ def main() -> None:
 
     if get_app_user_by_email("crew@example.com") is None:
         raise AssertionError("Expected admin-created crew user to remain queryable.")
+
+    roster_lines = [
+        "Trucks 0815",
+        "Clow Pl 0830",
+        "On track 0930",
+        "8 races 1138 | 1550",
+    ]
+    roster_summary = parse_roster_summary(roster_lines)
+    timings = {(item["label"], item["time"]) for item in roster_summary["timings"]}
+    if ("Clow Place", "08:30") not in timings or ("On track", "09:30") not in timings:
+        raise AssertionError(f"Expected Clow Pl shorthand to parse as Clow Place timing, got {roster_summary!r}")
+    race_day = build_race_day_summary({"description_lines": roster_lines}, {})
+    if {"label": "Clow Place", "value": "08:30"} not in race_day["rows"]:
+        raise AssertionError(f"Expected Race Day summary to show Clow Place, got {race_day!r}")
+
+    upsert_travel_time_default(
+        track_key="matamata",
+        track_label="Matamata",
+        base_label="Clow Place",
+        travel_minutes=60,
+        source="manual",
+        note="route smoke default",
+    )
+    inferred_summary = parse_roster_summary(["On track 0930", "8 races 1138 | 1550"])
+    inferred_calc = build_race_day_calculation(
+        {
+            "track_label": "Matamata",
+            "source_code": "T-Matamata",
+            "location": "State Highway 27",
+            "start_at": "2026-06-21T09:30:00+12:00",
+            "end_at": "2026-06-21T18:00:00+12:00",
+            "roster_summary": inferred_summary,
+        }
+    )
+    if not inferred_calc.get("available") or not inferred_calc.get("used_default_travel"):
+        raise AssertionError(f"Expected saved travel default to infer missing base timing, got {inferred_calc!r}")
+    if inferred_calc.get("start_label") != "08:30":
+        raise AssertionError(f"Expected inferred Clow Place start at 08:30, got {inferred_calc!r}")
 
     people = schedule_people(
         [

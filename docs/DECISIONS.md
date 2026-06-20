@@ -75,3 +75,13 @@ The day page should keep Race Day close to the Deputy roster-note wording, not s
 - `10 races` / `11:10 | 16:24`
 
 Free-text roster note remains available behind Raw roster note.
+
+## Default Travel Times
+
+Some Deputy notes omit base or on-track timing. The app stores default travel times per track/base so maths can still show a useful breakdown. Manual admin defaults win over learned defaults. Learned defaults are derived from previous roster notes only when both base and on-track times were present.
+
+Office and Clow Place are treated as equivalent base labels for lookup.
+
+## Public Racing Calendars
+
+Love Racing's public RaceInfo/calendar pages expose meeting date, club/meeting, and racecourse information in the page content, but not dependable Trackside start/finish/crew data. That can be useful later as a faint grey planning overlay for known tracks, but it must stay visually and logically separate from Deputy rostered shifts. It should never overlap or override Deputy data.

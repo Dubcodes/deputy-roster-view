@@ -108,7 +108,8 @@ def init_db(settings: Settings | None = None) -> None:
                 is_active INTEGER DEFAULT 1,
                 created_at TEXT,
                 updated_at TEXT,
-                last_seen_at TEXT
+                last_seen_at TEXT,
+                deactivated_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS trusted_devices (
@@ -230,6 +231,21 @@ def init_db(settings: Settings | None = None) -> None:
                 FOREIGN KEY (source_user_id) REFERENCES app_users(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS travel_time_defaults (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                track_key TEXT,
+                track_label TEXT,
+                base_label TEXT DEFAULT 'Clow Place',
+                travel_minutes INTEGER,
+                source TEXT DEFAULT 'manual',
+                sample_count INTEGER DEFAULT 0,
+                first_seen_at TEXT,
+                last_seen_at TEXT,
+                updated_at TEXT,
+                note TEXT,
+                UNIQUE(track_key, base_label)
+            );
+
             CREATE TABLE IF NOT EXISTS deputy_schedule_areas (
                 area_id INTEGER PRIMARY KEY,
                 name TEXT,
@@ -281,6 +297,7 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_crew_known_locations_name ON crew_known_locations(crew_name, display_name);
             CREATE INDEX IF NOT EXISTS idx_capture_coverage_date ON capture_coverage(date);
             CREATE INDEX IF NOT EXISTS idx_user_sync_state_next ON user_sync_state(next_sync_after, sync_in_progress);
+            CREATE INDEX IF NOT EXISTS idx_travel_time_defaults_track ON travel_time_defaults(track_key, base_label);
             """
         )
         _ensure_default_crew_pool(conn)
@@ -310,6 +327,7 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "app_users", "deputy_web_url", "TEXT")
         _ensure_column(conn, "app_users", "display_theme", "TEXT DEFAULT 'jade'")
         _ensure_column(conn, "deputy_user_secrets", "encrypted_ical_url", "TEXT")
+        _ensure_column(conn, "app_users", "deactivated_at", "TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_location ON deputy_schedule_shifts(date, area_location_id)"
         )
@@ -406,6 +424,26 @@ def list_app_users() -> list[sqlite3.Row]:
             (datetime.now(get_settings().timezone).isoformat(timespec="seconds"),),
         ).fetchall()
     return rows
+
+
+def count_active_admins(excluding_user_id: int | None = None) -> int:
+    with get_connection() as conn:
+        params: list[object] = []
+        exclude_sql = ""
+        if excluding_user_id is not None:
+            exclude_sql = "AND id != ?"
+            params.append(excluding_user_id)
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM app_users
+            WHERE is_active = 1
+              AND is_admin = 1
+              {exclude_sql}
+            """,
+            params,
+        ).fetchone()
+    return int(row["count"] or 0) if row else 0
 
 
 def get_app_user(user_id: int) -> sqlite3.Row | None:
@@ -884,10 +922,11 @@ def set_app_user_active(user_id: int, is_active: bool) -> int:
             """
             UPDATE app_users
             SET is_active = ?,
-                updated_at = ?
+                updated_at = ?,
+                deactivated_at = CASE WHEN ? THEN NULL ELSE COALESCE(deactivated_at, ?) END
             WHERE id = ?
             """,
-            (1 if is_active else 0, now, user_id),
+            (1 if is_active else 0, now, 1 if is_active else 0, now, user_id),
         )
         if result.rowcount and not is_active:
             conn.execute(
@@ -929,6 +968,74 @@ def set_app_user_active(user_id: int, is_active: bool) -> int:
                 (user_id, now),
             )
     return result.rowcount
+
+
+def purge_app_user(user_id: int) -> dict[str, int]:
+    with get_connection() as conn:
+        user = conn.execute(
+            "SELECT * FROM app_users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if user is None:
+            return {"users": 0, "devices": 0, "shifts": 0, "marks": 0, "changes": 0}
+        if int(user["is_active"] or 0):
+            return {"users": 0, "devices": 0, "shifts": 0, "marks": 0, "changes": 0}
+
+        deleted_marks = conn.execute(
+            "DELETE FROM shift_marks WHERE shift_id IN (SELECT id FROM shifts WHERE owner_user_id = ?)",
+            (user_id,),
+        ).rowcount
+        deleted_changes = conn.execute(
+            "DELETE FROM shift_changes WHERE shift_id IN (SELECT id FROM shifts WHERE owner_user_id = ?)",
+            (user_id,),
+        ).rowcount
+        deleted_shifts = conn.execute(
+            "DELETE FROM shifts WHERE owner_user_id = ?",
+            (user_id,),
+        ).rowcount
+        conn.execute("DELETE FROM deputy_user_secrets WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM user_sync_state WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM user_crew_memberships WHERE user_id = ?", (user_id,))
+        conn.execute("UPDATE error_reports SET user_id = NULL WHERE user_id = ?", (user_id,))
+        conn.execute("UPDATE deputy_web_captures SET owner_user_id = NULL WHERE owner_user_id = ?", (user_id,))
+        conn.execute("UPDATE crew_known_locations SET source_user_id = NULL WHERE source_user_id = ?", (user_id,))
+        conn.execute("UPDATE capture_coverage SET source_user_id = NULL WHERE source_user_id = ?", (user_id,))
+        deleted_devices = conn.execute("DELETE FROM trusted_devices WHERE user_id = ?", (user_id,)).rowcount
+        deleted_user = conn.execute("DELETE FROM app_users WHERE id = ?", (user_id,)).rowcount
+    return {
+        "users": deleted_user,
+        "devices": deleted_devices,
+        "shifts": deleted_shifts,
+        "marks": deleted_marks,
+        "changes": deleted_changes,
+    }
+
+
+def purge_old_inactive_records(days: int = 30) -> dict[str, int]:
+    cutoff = (datetime.now(get_settings().timezone) - timedelta(days=max(1, int(days)))).isoformat(timespec="seconds")
+    purged_users = 0
+    with get_connection() as conn:
+        revoked_devices = conn.execute(
+            """
+            DELETE FROM trusted_devices
+            WHERE revoked_at IS NOT NULL
+              AND revoked_at < ?
+            """,
+            (cutoff,),
+        ).rowcount
+        inactive_users = conn.execute(
+            """
+            SELECT id
+            FROM app_users
+            WHERE is_active = 0
+              AND COALESCE(deactivated_at, updated_at, created_at) < ?
+            """,
+            (cutoff,),
+        ).fetchall()
+    for user in inactive_users:
+        result = purge_app_user(int(user["id"]))
+        purged_users += int(result.get("users", 0))
+    return {"users": purged_users, "devices": revoked_devices}
 
 
 def reset_user_roster_data(user_id: int) -> dict[str, int]:
@@ -1051,6 +1158,131 @@ def list_admin_overrides(limit: int = 40) -> list[sqlite3.Row]:
             (limit,),
         ).fetchall()
     return rows
+
+
+def list_travel_time_defaults() -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT *
+            FROM travel_time_defaults
+            ORDER BY
+                CASE source WHEN 'manual' THEN 0 ELSE 1 END,
+                LOWER(track_label),
+                LOWER(base_label)
+            """
+        ).fetchall()
+
+
+def get_travel_time_default(track_keys: list[str], base_label: str = "Clow Place") -> sqlite3.Row | None:
+    keys = [key.strip().lower() for key in track_keys if str(key or "").strip()]
+    if not keys:
+        return None
+    placeholders = ",".join("?" for _ in keys)
+    params: list[object] = [*keys, base_label.strip() or "Clow Place"]
+    with get_connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT *
+            FROM travel_time_defaults
+            WHERE track_key IN ({placeholders})
+              AND LOWER(base_label) = LOWER(?)
+            ORDER BY CASE source WHEN 'manual' THEN 0 ELSE 1 END, sample_count DESC, updated_at DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+
+
+def upsert_travel_time_default(
+    *,
+    track_key: str,
+    track_label: str,
+    base_label: str,
+    travel_minutes: int,
+    source: str,
+    sample_count: int = 0,
+    first_seen_at: str = "",
+    last_seen_at: str = "",
+    note: str = "",
+) -> None:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    clean_source = "manual" if source != "learned" else "learned"
+    clean_base = base_label.strip() or "Clow Place"
+    clean_key = track_key.strip().lower()
+    if not clean_key or not track_label.strip() or travel_minutes <= 0:
+        return
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO travel_time_defaults (
+                track_key, track_label, base_label, travel_minutes, source,
+                sample_count, first_seen_at, last_seen_at, updated_at, note
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(track_key, base_label) DO UPDATE SET
+                track_label = excluded.track_label,
+                travel_minutes = CASE
+                    WHEN travel_time_defaults.source = 'manual' AND excluded.source = 'learned'
+                    THEN travel_time_defaults.travel_minutes
+                    ELSE excluded.travel_minutes
+                END,
+                source = CASE
+                    WHEN travel_time_defaults.source = 'manual' AND excluded.source = 'learned'
+                    THEN travel_time_defaults.source
+                    ELSE excluded.source
+                END,
+                sample_count = CASE
+                    WHEN travel_time_defaults.source = 'manual' AND excluded.source = 'learned'
+                    THEN travel_time_defaults.sample_count
+                    ELSE excluded.sample_count
+                END,
+                first_seen_at = COALESCE(NULLIF(travel_time_defaults.first_seen_at, ''), excluded.first_seen_at),
+                last_seen_at = excluded.last_seen_at,
+                updated_at = excluded.updated_at,
+                note = CASE
+                    WHEN travel_time_defaults.source = 'manual' AND excluded.source = 'learned'
+                    THEN travel_time_defaults.note
+                    ELSE excluded.note
+                END
+            """,
+            (
+                clean_key,
+                track_label.strip(),
+                clean_base,
+                max(1, int(travel_minutes)),
+                clean_source,
+                max(0, int(sample_count or 0)),
+                first_seen_at,
+                last_seen_at,
+                now,
+                note.strip(),
+            ),
+        )
+
+
+def delete_travel_time_default(default_id: int) -> int:
+    with get_connection() as conn:
+        result = conn.execute(
+            "DELETE FROM travel_time_defaults WHERE id = ?",
+            (default_id,),
+        )
+    return result.rowcount
+
+
+def fetch_shifts_for_travel_learning(limit: int = 800) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT id, title, description, location, start_at, end_at, date, source_payload
+            FROM shifts
+            WHERE deleted_from_source = 0
+              AND TRIM(COALESCE(description, '')) != ''
+            ORDER BY date DESC, start_at DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit or 800)),),
+        ).fetchall()
 
 
 def ensure_shift_mark(conn: sqlite3.Connection, shift_id: int) -> None:
