@@ -30,6 +30,7 @@ from .database import (
     fetch_open_deputy_schedule_between,
     fetch_open_deputy_schedule_shifts,
     fetch_deputy_schedule_for_date,
+    fetch_deputy_schedule_areas_for_locations,
     get_calendar_url,
     get_calendar_url_source,
     get_deputy_user_secret,
@@ -85,7 +86,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.19.2"
+APP_BUILD = "2026.06.20.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -432,6 +433,7 @@ SCHEDULE_POSITION_ORDER = {
 HIDDEN_SCHEDULE_POSITION_KEYS = {
     "outofregion",
 }
+PLACEHOLDER_SCHEDULE_POSITION_KEYS = set(SCHEDULE_POSITION_ORDER) - {"northern"}
 
 
 app = FastAPI(
@@ -1655,6 +1657,7 @@ def decorate_schedule_row(row: object) -> dict[str, object]:
     item["area_display"] = display_schedule_area(str(item.get("area_name") or ""))
     item["duration_label"] = format_hours(item.get("duration"))
     item["area_sort_order"] = schedule_sort_value(item.get("area_roster_sort_order"))
+    item["schedule_location_id"] = item.get("schedule_location_id") or item.get("area_location_id")
     item["display_sort_order"] = schedule_display_sort(item["area_display"], item["area_sort_order"])
     item["is_vehicle_area"] = schedule_area_is_vehicle(str(item.get("area_display") or ""))
     item["changed"] = bool(int(item.get("changed_since_viewed") or 0))
@@ -1781,14 +1784,140 @@ def vehicle_for_user_from_schedule(
     return str(people[matched_indexes.pop()].get("vehicle_label") or "").strip()
 
 
-def schedule_people(rows: list[object]) -> list[dict[str, object]]:
+def schedule_item_position_key(item: dict[str, object]) -> str:
+    alias = schedule_label_alias(str(item.get("area_display") or ""))
+    if alias:
+        return alias[0]
+    area_id = item.get("area_id")
+    if area_id not in (None, ""):
+        return f"area:{area_id}"
+    return schedule_label_key(str(item.get("area_display") or ""))
+
+
+def schedule_items_overlap(left: dict[str, object], right: dict[str, object]) -> bool:
+    left_start = parse_iso_datetime(str(left.get("start_at") or ""))
+    left_end = parse_iso_datetime(str(left.get("end_at") or ""))
+    right_start = parse_iso_datetime(str(right.get("start_at") or ""))
+    right_end = parse_iso_datetime(str(right.get("end_at") or ""))
+    if not left_start or not left_end or not right_start or not right_end:
+        return True
+    return left_start < right_end and right_start < left_end
+
+
+def schedule_item_newer(left: dict[str, object], right: dict[str, object]) -> bool:
+    left_key = (str(left.get("captured_at") or ""), int(left.get("source_shift_id") or 0))
+    right_key = (str(right.get("captured_at") or ""), int(right.get("source_shift_id") or 0))
+    return left_key > right_key
+
+
+def replacement_change_summary(old_item: dict[str, object], new_item: dict[str, object]) -> str:
+    old_name = str(old_item.get("employee_name") or "blank").strip() or "blank"
+    new_name = str(new_item.get("employee_name") or "blank").strip() or "blank"
+    area_label = str(new_item.get("area_display") or old_item.get("area_display") or "Position").strip()
+    if old_name == new_name:
+        return str(new_item.get("assignment_change_summary") or old_item.get("assignment_change_summary") or "Changed")
+    return f"{area_label}: {old_name} -> {new_name}"
+
+
+def dedupe_schedule_items(items: list[dict[str, object]]) -> list[dict[str, object]]:
+    deduped: list[dict[str, object]] = []
+    for item in items:
+        if item.get("is_vehicle_area"):
+            deduped.append(item)
+            continue
+        item_key = (
+            item.get("schedule_location_id"),
+            schedule_item_position_key(item),
+        )
+        replacement_index = None
+        for index, existing in enumerate(deduped):
+            if existing.get("is_vehicle_area"):
+                continue
+            existing_key = (
+                existing.get("schedule_location_id"),
+                schedule_item_position_key(existing),
+            )
+            if existing_key == item_key and schedule_items_overlap(existing, item):
+                replacement_index = index
+                break
+        if replacement_index is None:
+            deduped.append(item)
+            continue
+
+        existing = deduped[replacement_index]
+        if schedule_item_newer(item, existing):
+            if existing.get("assignment_changed") or existing.get("changed"):
+                item["assignment_changed"] = True
+                item["changed"] = True
+                item["assignment_change_summary"] = replacement_change_summary(existing, item)
+            deduped[replacement_index] = item
+        elif item.get("assignment_changed") and not existing.get("assignment_changed"):
+            existing["assignment_changed"] = True
+            existing["changed"] = True
+            existing["assignment_change_summary"] = replacement_change_summary(item, existing)
+    return deduped
+
+
+def expected_schedule_placeholders(
+    expected_areas: list[object] | None,
+    items: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    if not expected_areas or not items:
+        return []
+    present_keys = {
+        (item.get("schedule_location_id"), schedule_item_position_key(item))
+        for item in items
+        if not item.get("is_vehicle_area")
+    }
+    present_position_keys = {position_key for _, position_key in present_keys}
+    placeholders = []
+    seen = set()
+    for area in expected_areas:
+        area_row = dict(area)
+        area_display = display_schedule_area(str(area_row.get("name") or ""))
+        if schedule_area_is_hidden(area_display) or schedule_area_is_vehicle(area_display):
+            continue
+        alias = schedule_label_alias(area_display)
+        position_key = alias[0] if alias else schedule_label_key(area_display)
+        if position_key not in PLACEHOLDER_SCHEDULE_POSITION_KEYS:
+            continue
+        if position_key in {"sound", "vt"} and "soundvt" in present_position_keys:
+            continue
+        if position_key == "soundvt" and ({"sound", "vt"} & present_position_keys):
+            continue
+        location_id = area_row.get("location_id")
+        placeholder_key = (location_id, position_key)
+        if placeholder_key in present_keys or placeholder_key in seen:
+            continue
+        seen.add(placeholder_key)
+        placeholders.append(
+            {
+                "employee_name": "TBC",
+                "position_label": area_display,
+                "vehicle_label": "",
+                "sort_order": schedule_display_sort(area_display, area_row.get("roster_sort_order")),
+                "changed": False,
+                "change_summary": "",
+                "placeholder": True,
+            }
+        )
+    return placeholders
+
+
+def schedule_people(rows: list[object], expected_areas: list[object] | None = None) -> list[dict[str, object]]:
     people_by_key: dict[str, dict[str, object]] = {}
     open_entries: list[dict[str, object]] = []
+    items = []
     for row in rows:
         item = decorate_schedule_row(row)
+        if not schedule_area_is_hidden(str(item.get("area_display") or "Role")):
+            items.append(item)
+
+    items = dedupe_schedule_items(items)
+    placeholders = expected_schedule_placeholders(expected_areas, items)
+
+    for item in items:
         area_label = str(item.get("area_display") or "Role")
-        if schedule_area_is_hidden(area_label):
-            continue
         area_sort = schedule_sort_value(item.get("display_sort_order"))
         employee_name = str(item.get("employee_name") or "").strip()
         is_vehicle = bool(item.get("is_vehicle_area"))
@@ -1803,6 +1932,7 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
                     "sort_order": area_sort,
                     "changed": bool(item.get("assignment_changed")),
                     "change_summary": item.get("assignment_change_summary") or "",
+                    "placeholder": False,
                 }
             )
             continue
@@ -1847,8 +1977,10 @@ def schedule_people(rows: list[object]) -> list[dict[str, object]]:
                 "sort_order": sort_order,
                 "changed": bool(person.get("changed")),
                 "change_summary": "; ".join(list(person.get("change_parts") or [])),
+                "placeholder": False,
             }
         )
+    people.extend(placeholders)
     people.extend(open_entries)
     return sorted(
         people,
@@ -2751,12 +2883,14 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
         shift["changes"] = compact_shift_changes(list(shift.get("changes") or []))
         shift["change_summary_text"] = build_shift_change_summary(list(shift.get("changes") or []))
     schedule_location_ids = shift_schedule_location_ids(shifts)
+    schedule_expected_areas = fetch_deputy_schedule_areas_for_locations(schedule_location_ids)
     deputy_schedule_label = deputy_schedule_label_for_shifts("Deputy Schedule", shifts)
     deputy_schedule_people = schedule_people(
         fetch_deputy_schedule_for_date(
             date_text,
             location_ids=schedule_location_ids or None,
-        )
+        ),
+        expected_areas=schedule_expected_areas,
     )
     apply_roster_note_vehicles(deputy_schedule_people, shifts)
     if not deputy_schedule_people and is_overnight_travel_day(shifts):
@@ -2765,11 +2899,13 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             [decorate_shift(row) for row in fetch_shifts_for_date(next_day_text, owner_user_id=owner_user_id)]
         )
         next_day_location_ids = shift_schedule_location_ids(next_day_shifts) or schedule_location_ids
+        next_day_expected_areas = fetch_deputy_schedule_areas_for_locations(next_day_location_ids)
         deputy_schedule_people = schedule_people(
             fetch_deputy_schedule_for_date(
                 next_day_text,
                 location_ids=next_day_location_ids or None,
-            )
+            ),
+            expected_areas=next_day_expected_areas,
         )
         apply_roster_note_vehicles(deputy_schedule_people, next_day_shifts)
         if deputy_schedule_people:
@@ -2779,6 +2915,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             continue
         shift["header_vehicle_label"] = vehicle_for_user_from_schedule(deputy_schedule_people, user, shift)
     deputy_schedule_changed = any(bool(person.get("changed")) for person in deputy_schedule_people)
+    deputy_schedule_changes = [person for person in deputy_schedule_people if person.get("changed")]
     day_total = sum(
         shift_hours_value(shift)
         for shift in shifts
@@ -2800,6 +2937,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             "deputy_schedule_people": deputy_schedule_people,
             "deputy_schedule_label": deputy_schedule_label,
             "deputy_schedule_changed": deputy_schedule_changed,
+            "deputy_schedule_changes": deputy_schedule_changes,
             "day_total": day_total,
             "has_changed": has_changed,
             "mark_fields": MARK_FIELDS,

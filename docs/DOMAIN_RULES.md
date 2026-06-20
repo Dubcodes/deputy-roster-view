@@ -71,6 +71,12 @@ Roster notes can put the clock before the timing label, for example `0845 Trucks
 
 Crew changed badges should only mean the person/position/open-slot assignment changed. Do not badge timing-only crew schedule changes.
 
+Opening a changed badge or the Change History section must not automatically clear the changed flag. The app should only clear change flags through explicit clear actions, otherwise phone taps can make important changes disappear before the user has read them.
+
+Deputy schedule rows can leave stale local rows behind when an assignment is replaced with a new Deputy shift id. For display, overlapping rows for the same date/location/position should prefer the latest captured assignment and suppress the older one. If the older row carried an assignment-change flag, carry that change summary onto the displayed replacement row.
+
+If Deputy has known schedule areas for the user's race-day location but no current employee row for one of the normal production positions, show a muted `TBC` placeholder row. This makes likely contractor/unknown slots visible without pretending the person is known. Keep this inferred from Deputy's area list for now; do not add a heavy manual region/default-position UI yet.
+
 ## Overnight Travel
 
 Known but not fully solved. For now:

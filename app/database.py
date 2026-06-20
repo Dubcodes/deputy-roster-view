@@ -1304,6 +1304,32 @@ def fetch_deputy_schedule_for_date(
     return rows
 
 
+def fetch_deputy_schedule_areas_for_locations(
+    location_ids: list[int] | tuple[int, ...] | set[int] | None = None,
+) -> list[sqlite3.Row]:
+    location_ids = _normalise_int_list(location_ids)
+    if not location_ids:
+        return []
+    placeholders = ", ".join("?" for _ in location_ids)
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                area_id,
+                name,
+                location_id,
+                roster_sort_order
+            FROM deputy_schedule_areas
+            WHERE location_id IN ({placeholders})
+            ORDER BY
+                COALESCE(roster_sort_order, 999999),
+                name
+            """,
+            location_ids,
+        ).fetchall()
+    return rows
+
+
 def has_deputy_schedule_changes_for_date(
     date_text: str,
     location_ids: list[int] | tuple[int, ...] | set[int] | None = None,

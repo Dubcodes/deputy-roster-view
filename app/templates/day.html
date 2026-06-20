@@ -127,12 +127,12 @@
                 <span role="columnheader">Vehicle</span>
               </div>
               {% for person in deputy_schedule_people %}
-                <div class="crew-roster-row{% if person.changed %} has-change{% endif %}" role="row">
+                <div class="crew-roster-row{% if person.changed %} has-change{% endif %}{% if person.placeholder %} is-placeholder{% endif %}" role="row">
                   <span role="cell">{{ person.position_label }}</span>
                   <strong class="crew-name" role="cell">
                     <span>{{ person.employee_name }}</span>
                     {% if person.changed %}
-                      <details class="crew-change-details" data-mark-viewed-url="/day/{{ date_text }}/mark-viewed.json">
+                      <details class="crew-change-details">
                         <summary class="badge badge-warn crew-change-badge">Changed</summary>
                         <p>{{ person.change_summary or "Changed from the previous capture." }}</p>
                       </details>
@@ -145,10 +145,20 @@
           </section>
         {% endif %}
 
-        {% if shift.changes %}
-          <details class="change-panel" data-mark-viewed-url="/day/{{ date_text }}/mark-viewed.json">
+        {% if shift.changes or (loop.first and deputy_schedule_changes) %}
+          <details class="change-panel">
             <summary>Change History</summary>
             <ul class="change-lines">
+              {% if loop.first and deputy_schedule_changes %}
+                {% for person in deputy_schedule_changes %}
+                  <li>
+                    <span>
+                      <strong>Crew: {{ person.position_label }}</strong>
+                      {{ person.change_summary or "Assignment changed." }}
+                    </span>
+                  </li>
+                {% endfor %}
+              {% endif %}
               {% for change in shift.changes[:12] %}
                 <li>
                   <span>
@@ -233,30 +243,4 @@
       </article>
     {% endfor %}
   </section>
-{% endblock %}
-
-{% block scripts %}
-  <script>
-    document.querySelectorAll("[data-mark-viewed-url]").forEach((panel) => {
-      panel.addEventListener("toggle", () => {
-        if (!panel.open || panel.dataset.viewed === "1") return;
-        panel.dataset.viewed = "1";
-        fetch(panel.dataset.markViewedUrl, { method: "POST", credentials: "same-origin" })
-          .then((response) => {
-            if (!response.ok) throw new Error("mark viewed failed");
-            const card = panel.closest(".detail-card");
-            card?.querySelectorAll(".badge-warn").forEach((badge) => {
-              const badgeText = badge.textContent.trim();
-              if (badgeText === "Changed" || badgeText === "Crew changed") {
-                badge.closest("details")?.remove();
-                badge.remove();
-              }
-            });
-          })
-          .catch(() => {
-            panel.dataset.viewed = "0";
-          });
-      });
-    });
-  </script>
 {% endblock %}

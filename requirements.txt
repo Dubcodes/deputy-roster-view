@@ -6,4 +6,5 @@ python-multipart==0.0.20
 requests==2.32.3
 playwright==1.53.0
 cryptography==43.0.3
+httpx==0.28.1
 uvicorn[standard]==0.34.0

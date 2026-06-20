@@ -1913,6 +1913,15 @@ a {
   border-top: 0;
 }
 
+.crew-roster-row.is-placeholder {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-raised) 84%, var(--surface-soft) 16%);
+}
+
+.crew-roster-row.is-placeholder .crew-name {
+  font-style: italic;
+}
+
 .crew-roster-head {
   background: var(--surface);
   color: var(--muted);

@@ -32,7 +32,7 @@ def main() -> None:
     from fastapi.testclient import TestClient
 
     from app.database import create_app_user, get_app_user_by_email, init_db
-    from app.main import app
+    from app.main import app, schedule_people
     from app.security import encrypt_text, hash_pin
 
     init_db()
@@ -91,6 +91,57 @@ def main() -> None:
 
     if get_app_user_by_email("crew@example.com") is None:
         raise AssertionError("Expected admin-created crew user to remain queryable.")
+
+    people = schedule_people(
+        [
+            {
+                "source_shift_id": 100,
+                "captured_at": "2026-06-19T05:00:00+12:00",
+                "area_id": 1182,
+                "area_name": "Start",
+                "area_location_id": 58,
+                "area_roster_sort_order": 7,
+                "employee_id": 109,
+                "employee_name": "Campbell Stephens",
+                "start_at": "2026-06-20T09:00:00+12:00",
+                "end_at": "2026-06-20T19:00:00+12:00",
+                "duration": 10,
+                "is_open": 0,
+                "is_published": 1,
+                "changed_since_viewed": 1,
+                "change_summary": "Person: Campbell Stephens -> Elliot",
+            },
+            {
+                "source_shift_id": 101,
+                "captured_at": "2026-06-20T08:49:00+12:00",
+                "area_id": 1182,
+                "area_name": "Start",
+                "area_location_id": 58,
+                "area_roster_sort_order": 7,
+                "employee_id": 11,
+                "employee_name": "Elliot",
+                "start_at": "2026-06-20T09:00:00+12:00",
+                "end_at": "2026-06-20T19:00:00+12:00",
+                "duration": 10,
+                "is_open": 0,
+                "is_published": 1,
+                "changed_since_viewed": 0,
+                "change_summary": "",
+            },
+        ],
+        expected_areas=[
+            {"area_id": 1178, "name": "Side 1", "location_id": 58, "roster_sort_order": 1},
+            {"area_id": 1182, "name": "Start", "location_id": 58, "roster_sort_order": 7},
+        ],
+    )
+    start_rows = [person for person in people if person["position_label"] == "Start"]
+    if len(start_rows) != 1 or start_rows[0]["employee_name"] != "Elliot":
+        raise AssertionError(f"Expected stale Start assignment to collapse to Elliot, got {start_rows!r}")
+    if not start_rows[0]["changed"] or "Campbell Stephens -> Elliot" not in str(start_rows[0]["change_summary"]):
+        raise AssertionError(f"Expected replacement change summary on Start row, got {start_rows[0]!r}")
+    side_one_rows = [person for person in people if person["position_label"] == "Side 1"]
+    if len(side_one_rows) != 1 or side_one_rows[0]["employee_name"] != "TBC":
+        raise AssertionError(f"Expected missing Side 1 placeholder, got {side_one_rows!r}")
 
     print("route smoke flows ok")
 
