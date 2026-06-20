@@ -87,7 +87,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.20.2"
+APP_BUILD = "2026.06.20.3"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -1974,7 +1974,9 @@ def schedule_people(rows: list[object], expected_areas: list[object] | None = No
     for person in people_by_key.values():
         position_parts = list(person.get("position_parts") or [])
         vehicle_parts = list(person.get("vehicle_parts") or [])
-        position_label = ", ".join(position_parts) if position_parts else "Vehicle"
+        if not position_parts:
+            continue
+        position_label = ", ".join(position_parts)
         vehicle_label = ", ".join(vehicle_parts)
         sort_order = schedule_sort_value(person.get("position_sort"))
         if sort_order == 999999:

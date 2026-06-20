@@ -57,6 +57,8 @@ Crew data must be scoped by date and Deputy location/track, not only by date. Mu
 
 The race-day crew table should stay as three columns: position, name, vehicle. A user's own vehicle can be shown beside their position in the day header, but should not be merged into the crew table position column.
 
+Vehicle-only schedule rows should not create standalone crew table rows. Use vehicle rows to attach a vehicle to someone who also has a production position, but hide people who only have a vehicle/travel assignment so forgotten vehicle rows do not look like confirmed working positions.
+
 On the day page, the large heading should be the track/location first, with the user's vehicle beside it when known. The role/position belongs on the subtitle line with race type and hours.
 
 Hide `Out of Region` from the normal on-track crew list. It is noise for race-day crew display.
