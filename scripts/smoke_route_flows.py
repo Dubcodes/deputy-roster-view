@@ -130,6 +130,10 @@ def main() -> None:
     if inferred_calc.get("start_label") != "08:30":
         raise AssertionError(f"Expected inferred Clow Place start at 08:30, got {inferred_calc!r}")
 
+    admin_page = client.get("/admin")
+    if admin_page.status_code != 200 or "Default Travel Times" not in admin_page.text or "/admin/travel-defaults/" not in admin_page.text:
+        raise AssertionError("Expected admin page to render editable travel defaults.")
+
     people = schedule_people(
         [
             {

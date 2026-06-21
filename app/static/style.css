@@ -2788,6 +2788,37 @@ textarea {
   margin-top: 10px;
 }
 
+.table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.compact-row-details {
+  margin-top: 0;
+  border-top: 0;
+  padding-top: 0;
+}
+
+.compact-row-details summary.button {
+  color: var(--accent);
+  list-style: none;
+}
+
+.compact-row-details summary.button::-webkit-details-marker {
+  display: none;
+}
+
+.compact-row-details .settings-form {
+  min-width: min(260px, 72vw);
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
 .error-report-form {
   max-width: 760px;
 }

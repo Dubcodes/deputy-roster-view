@@ -74,6 +74,7 @@ from .database import (
     set_app_user_active,
     upsert_travel_time_default,
     delete_travel_time_default,
+    update_travel_time_default,
     update_user_display_theme,
     update_user_pin_hash,
     user_has_deputy_credentials,
@@ -96,7 +97,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.21.1"
+APP_BUILD = "2026.06.21.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -263,6 +264,7 @@ TRACK_NAMES = {
 RACE_TYPES = {
     "T": "Thoroughbred racing",
     "H": "Harness racing",
+    "G": "Greyhound racing",
 }
 ROLE_NAMES = {
     "DIR": "Director",
@@ -479,6 +481,18 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
 def format_datetime(value: str | None, fmt: str = "%a %d %b %H:%M") -> str:
     dt = parse_iso_datetime(value)
     return dt.strftime(fmt) if dt else ""
+
+
+def latest_iso_datetime(*values: object) -> str:
+    latest: datetime | None = None
+    latest_text = ""
+    for value in values:
+        text = str(value or "").strip()
+        dt = parse_iso_datetime(text)
+        if dt and (latest is None or dt > latest):
+            latest = dt
+            latest_text = text
+    return latest_text
 
 
 def format_day_short(value: str | None) -> str:
@@ -978,6 +992,8 @@ def parse_shift_title(title: str | None) -> dict[str, str]:
         track_label = "Cambridge Synthetic"
     elif race_type_code == "H" and track_code == "CAMBRIDGE":
         track_label = "Cambridge Harness"
+    elif race_type_code == "G" and track_code == "CAMBRIDGE":
+        track_label = "Cambridge Greyhound"
     else:
         track_label = TRACK_NAMES.get(track_code)
     if not track_label:
@@ -1453,6 +1469,10 @@ def decorate_shift(row: object) -> dict[str, object]:
         shift["time_range"] += " +1d"
     shift["paid_label"] = format_hours(shift.get("paid_hours"))
     shift["raw_label"] = format_hours(shift.get("raw_hours"))
+    shift["change_time_label"] = format_datetime(str(shift.get("last_changed_at") or ""), "%d %b %H:%M")
+    shift["change_badge_label"] = (
+        f"Changed · {shift['change_time_label']}" if shift["change_time_label"] else "Changed"
+    )
     shift["mark_badges"] = [label for field, label in MARK_FIELDS if int(shift.get(field) or 0)]
     shift["schedule_location_id"] = schedule_location_id
     shift["schedule_location_ids"] = [schedule_location_id] if schedule_location_id is not None else []
@@ -1630,6 +1650,11 @@ def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[
     merged["role_chain_label"] = role_chain_label(list(merged.get("role_segments") or []))
     merged["header_vehicle_label"] = shift_header_vehicle_label(list(merged.get("role_segments") or []))
     merged["changed_since_viewed"] = int(left.get("changed_since_viewed") or 0) or int(right.get("changed_since_viewed") or 0)
+    merged["last_changed_at"] = latest_iso_datetime(left.get("last_changed_at"), right.get("last_changed_at"))
+    merged["change_time_label"] = format_datetime(str(merged.get("last_changed_at") or ""), "%d %b %H:%M")
+    merged["change_badge_label"] = (
+        f"Changed · {merged['change_time_label']}" if merged["change_time_label"] else "Changed"
+    )
     merged["combined_shift_ids"] = list(left.get("combined_shift_ids") or [left["id"]]) + list(
         right.get("combined_shift_ids") or [right["id"]]
     )
@@ -1729,6 +1754,7 @@ def decorate_schedule_row(row: object) -> dict[str, object]:
     item["is_vehicle_area"] = schedule_area_is_vehicle(str(item.get("area_display") or ""))
     item["changed"] = bool(int(item.get("changed_since_viewed") or 0))
     item["change_summary"] = str(item.get("change_summary") or "")
+    item["change_time_label"] = format_datetime(str(item.get("last_changed_at") or ""), "%d %b %H:%M")
     item["assignment_changed"] = schedule_assignment_changed(item["change_summary"])
     item["assignment_change_summary"] = schedule_assignment_change_summary(item["change_summary"])
     return item
@@ -1917,11 +1943,15 @@ def dedupe_schedule_items(items: list[dict[str, object]]) -> list[dict[str, obje
                 item["assignment_changed"] = True
                 item["changed"] = True
                 item["assignment_change_summary"] = replacement_change_summary(existing, item)
+                item["last_changed_at"] = latest_iso_datetime(existing.get("last_changed_at"), item.get("last_changed_at"))
+                item["change_time_label"] = format_datetime(str(item.get("last_changed_at") or ""), "%d %b %H:%M")
             deduped[replacement_index] = item
         elif item.get("assignment_changed") and not existing.get("assignment_changed"):
             existing["assignment_changed"] = True
             existing["changed"] = True
             existing["assignment_change_summary"] = replacement_change_summary(item, existing)
+            existing["last_changed_at"] = latest_iso_datetime(existing.get("last_changed_at"), item.get("last_changed_at"))
+            existing["change_time_label"] = format_datetime(str(existing.get("last_changed_at") or ""), "%d %b %H:%M")
     return deduped
 
 
@@ -1965,6 +1995,7 @@ def expected_schedule_placeholders(
                 "sort_order": schedule_display_sort(area_display, area_row.get("roster_sort_order")),
                 "changed": False,
                 "change_summary": "",
+                "change_time_label": "",
                 "placeholder": True,
             }
         )
@@ -1999,6 +2030,7 @@ def schedule_people(rows: list[object], expected_areas: list[object] | None = No
                     "sort_order": area_sort,
                     "changed": bool(item.get("assignment_changed")),
                     "change_summary": item.get("assignment_change_summary") or "",
+                    "change_time_label": item.get("change_time_label") or "",
                     "placeholder": False,
                 }
             )
@@ -2012,6 +2044,7 @@ def schedule_people(rows: list[object], expected_areas: list[object] | None = No
                 "position_parts": [],
                 "vehicle_parts": [],
                 "change_parts": [],
+                "change_times": [],
                 "changed": False,
                 "position_sort": 999999,
                 "vehicle_sort": 999999,
@@ -2020,6 +2053,7 @@ def schedule_people(rows: list[object], expected_areas: list[object] | None = No
         if item.get("assignment_changed"):
             person["changed"] = True
             append_unique(person["change_parts"], str(item.get("assignment_change_summary") or "Changed"))
+            append_unique(person["change_times"], str(item.get("last_changed_at") or ""))
         if is_vehicle:
             append_unique(person["vehicle_parts"], area_label)
             person["vehicle_sort"] = min(schedule_sort_value(person.get("vehicle_sort")), area_sort)
@@ -2046,6 +2080,7 @@ def schedule_people(rows: list[object], expected_areas: list[object] | None = No
                 "sort_order": sort_order,
                 "changed": bool(person.get("changed")),
                 "change_summary": "; ".join(list(person.get("change_parts") or [])),
+                "change_time_label": format_datetime(latest_iso_datetime(*list(person.get("change_times") or [])), "%d %b %H:%M"),
                 "placeholder": False,
             }
         )
@@ -2901,6 +2936,32 @@ def admin_delete_travel_default(request: Request, default_id: int) -> RedirectRe
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
+@app.post("/admin/travel-defaults/{default_id}/edit")
+async def admin_edit_travel_default(request: Request, default_id: int) -> RedirectResponse:
+    require_admin_user(request)
+    form = await request.form()
+    track_label = str(form.get("track_label") or "").strip()
+    base_label = str(form.get("base_label") or "Clow Place").strip() or "Clow Place"
+    minutes_text = str(form.get("travel_minutes") or "").strip()
+    note = str(form.get("note") or "").strip()
+    try:
+        travel_minutes = int(minutes_text)
+    except ValueError:
+        travel_minutes = 0
+    if not track_label or travel_minutes <= 0:
+        return RedirectResponse(url=notice_url("/admin", "Track and travel minutes are required."), status_code=303)
+    updated = update_travel_time_default(
+        default_id,
+        track_key=travel_default_key(track_label),
+        track_label=track_label,
+        base_label=base_label,
+        travel_minutes=travel_minutes,
+        note=note,
+    )
+    message = "Travel default updated." if updated else "Travel default not found."
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
 @app.post("/admin/overrides")
 async def admin_create_override(request: Request) -> RedirectResponse:
     user = require_admin_user(request)
@@ -3082,6 +3143,13 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             for change in changes_by_shift.get(shift_id, [])
         ]
         shift["changes"] = compact_shift_changes(list(shift.get("changes") or []))
+        latest_change_at = latest_iso_datetime(
+            shift.get("last_changed_at"),
+            *(change.get("changed_at") for change in shift.get("changes") or []),
+        )
+        if latest_change_at:
+            shift["change_time_label"] = format_datetime(latest_change_at, "%d %b %H:%M")
+            shift["change_badge_label"] = f"Changed · {shift['change_time_label']}"
         shift["change_summary_text"] = build_shift_change_summary(list(shift.get("changes") or []))
     schedule_location_ids = shift_schedule_location_ids(shifts)
     schedule_expected_areas = fetch_deputy_schedule_areas_for_locations(schedule_location_ids)

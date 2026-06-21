@@ -4,6 +4,7 @@
 
 - `T-` means Thoroughbred racing.
 - `H-` means Harness racing.
+- `G-` means Greyhound racing. At Cambridge this is the same physical venue as Cambridge Harness, but keep it logically distinct unless a future admin mapping says otherwise.
 - `T-Cambridge` should display as Cambridge Synthetic when that is the track code from the user's roster.
 - `H-Cambridge` is Cambridge Harness. The current captured Deputy location ID is `56`.
 

@@ -48,7 +48,7 @@
                       <span class="badge badge-danger">Cancelled</span>
                     {% endif %}
                     {% if shift.changed_since_viewed %}
-                      <span class="badge badge-warn">Changed</span>
+                      <span class="badge badge-warn">{{ shift.change_badge_label or "Changed" }}</span>
                     {% endif %}
                   </span>
                 {% endif %}
@@ -114,7 +114,7 @@
                         <span class="badge badge-danger">Cancelled</span>
                       {% endif %}
                       {% if shift.changed_since_viewed %}
-                        <span class="badge badge-warn">Changed</span>
+                        <span class="badge badge-warn">{{ shift.change_badge_label or "Changed" }}</span>
                       {% endif %}
                     </span>
                   {% endif %}

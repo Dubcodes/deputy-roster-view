@@ -45,7 +45,7 @@
         <button class="button button-secondary" type="submit">Purge Old Inactive Data</button>
       </form>
     </div>
-    <p class="muted">Inactive users and untrusted devices are automatically purged after 30 days. This runs the same cleanup now.</p>
+    <p class="muted">Deactivated accounts and untrusted devices are automatically purged after 30 days. Active users are not purged. This runs the same cleanup now.</p>
   </section>
 
   <section class="table-panel">
@@ -91,7 +91,7 @@
               <th>Each way</th>
               <th>Source</th>
               <th>Seen</th>
-              <th></th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -108,7 +108,32 @@
                     manual
                   {% endif %}
                 </td>
-                <td>
+                <td class="table-actions">
+                  <details class="inline-settings-details compact-row-details">
+                    <summary class="button button-compact button-secondary">Edit</summary>
+                    <form class="settings-form compact-settings-form" action="/admin/travel-defaults/{{ item.id }}/edit" method="post">
+                      <label class="form-row">
+                        <span>Track</span>
+                        <input type="text" name="track_label" value="{{ item.track_label }}" required>
+                      </label>
+                      <label class="form-row">
+                        <span>Base</span>
+                        <select name="base_label">
+                          <option value="Clow Place" {% if item.base_label == "Clow Place" %}selected{% endif %}>Clow Place</option>
+                          <option value="Office" {% if item.base_label == "Office" %}selected{% endif %}>Office</option>
+                        </select>
+                      </label>
+                      <label class="form-row">
+                        <span>Travel minutes</span>
+                        <input type="number" name="travel_minutes" min="1" max="480" value="{{ item.travel_minutes }}" required>
+                      </label>
+                      <label class="form-row">
+                        <span>Note</span>
+                        <input type="text" name="note" value="{{ item.note or '' }}">
+                      </label>
+                      <button class="button button-compact" type="submit">Save</button>
+                    </form>
+                  </details>
                   <form action="/admin/travel-defaults/{{ item.id }}/delete" method="post">
                     <button class="button button-compact button-secondary" type="submit" onclick="return confirm('Delete this travel default?');">Delete</button>
                   </form>

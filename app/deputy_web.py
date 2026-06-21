@@ -195,10 +195,10 @@ def _shift_track_candidates(shift: object) -> list[str]:
     if source_code and source_code != "VEH":
         race_type = ""
         track_code = source_code
-        if len(source_code) > 2 and source_code[1] == "-" and source_code[0] in {"T", "H"}:
+        if len(source_code) > 2 and source_code[1] == "-" and source_code[0] in {"T", "H", "G"}:
             race_type = source_code[0]
             track_code = source_code[2:]
-        elif len(source_code) > 2 and source_code[-2] == "-" and source_code[-1] in {"T", "H"}:
+        elif len(source_code) > 2 and source_code[-2] == "-" and source_code[-1] in {"T", "H", "G"}:
             race_type = source_code[-1]
             track_code = source_code[:-2]
         if not race_type:

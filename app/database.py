@@ -1270,6 +1270,47 @@ def delete_travel_time_default(default_id: int) -> int:
     return result.rowcount
 
 
+def update_travel_time_default(
+    default_id: int,
+    *,
+    track_key: str,
+    track_label: str,
+    base_label: str,
+    travel_minutes: int,
+    note: str = "",
+) -> int:
+    clean_key = track_key.strip().lower()
+    clean_label = track_label.strip()
+    clean_base = base_label.strip() or "Clow Place"
+    if not clean_key or not clean_label or travel_minutes <= 0:
+        return 0
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        result = conn.execute(
+            """
+            UPDATE travel_time_defaults
+            SET track_key = ?,
+                track_label = ?,
+                base_label = ?,
+                travel_minutes = ?,
+                source = 'manual',
+                updated_at = ?,
+                note = ?
+            WHERE id = ?
+            """,
+            (
+                clean_key,
+                clean_label,
+                clean_base,
+                max(1, int(travel_minutes)),
+                now,
+                note.strip(),
+                default_id,
+            ),
+        )
+    return result.rowcount
+
+
 def fetch_shifts_for_travel_learning(limit: int = 800) -> list[sqlite3.Row]:
     with get_connection() as conn:
         return conn.execute(

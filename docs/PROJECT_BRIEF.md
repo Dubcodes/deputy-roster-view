@@ -29,7 +29,7 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 - Let each user choose their own display colour theme, including dark, light/gentle, and special location-colour palettes.
 - Keep a lightweight shared `Northern Crew` location list so future crew/region filtering can build from locations seen in synced roster data.
 - Let users change their own PIN, update their saved Deputy login details, and submit an error report with recent redacted diagnostics.
-- Let users deactivate their own account, with inactive account/device data purged after a 30-day cooling-off period.
+- Let users deactivate their own account, with deactivated account/device data purged after a 30-day cooling-off period.
 - Let admins manage default track travel times used when Deputy roster notes are missing base/on-track timing.
 - Keep personal roster views scoped to the signed-in user's own shifts. Shared crew context is only shown as race-day schedule context.
 - Stagger background syncs across users so Deputy is not hit by every account at once.
