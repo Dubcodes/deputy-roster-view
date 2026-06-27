@@ -26,9 +26,9 @@
 
 It should prefer an All Locations schedule capture. If that is not selectable, it falls back to upcoming known roster locations.
 
-After login, it also asks Deputy's own web endpoint for the user's personal published shifts over a rolling window. Defaults are 35 days back and 56 days forward, configurable with `OWN_ROSTER_LOOKBACK_DAYS` and `OWN_ROSTER_LOOKAHEAD_DAYS`. The capture is split into weekly requests because Deputy can return only the first page/chunk when asked for one large date range.
+After login, it also asks Deputy's own web endpoint for the user's personal published shifts over a rolling window. Defaults are 35 days back and 56 days forward, configurable with `OWN_ROSTER_LOOKBACK_DAYS` and `OWN_ROSTER_LOOKAHEAD_DAYS`. The capture is split into weekly requests because Deputy can return only the first page/chunk when asked for one large date range. Row-level Deputy `location` and `locationName` values from this endpoint are treated as authoritative for the user's own shifts.
 
-For crew coverage, the capture also learns Deputy's primary location list and then performs batched weekly schedule-search requests for upcoming racing locations. This avoids relying only on the visible roster page when All Locations cannot be selected and helps fill shared crew rows for other users. Direct shared schedule capture is capped at 42 days ahead by default to keep multi-user syncs polite.
+For crew coverage, the capture also learns Deputy's primary location list and then performs weekly all-location schedule-search requests. If that broad read fails, it falls back to batched selected-location searches for known racing locations. This avoids relying only on the visible roster page when All Locations cannot be selected and helps fill shared crew rows for other users. Direct shared schedule capture is capped at 42 days ahead by default to keep multi-user syncs polite.
 
 If the broad location search misses a user's own roster area, the capture follows up with a targeted roster-area search. It includes the user's own area IDs and, when possible, sibling areas for the same missed Deputy location. This helps Harness/other sparse areas resolve without scanning unrelated locations.
 
@@ -37,6 +37,12 @@ Schedule display is scoped by both date and Deputy location ID. This keeps split
 ### Crew/Location Groundwork
 
 All users currently belong to one shared crew pool, `Northern Crew`. When a user's rostered shift syncs with a usable location, the app records that location in `crew_known_locations` for the shared crew. This does not filter open shifts or change the UI yet; it only leaves a clean data shape for future location, crew, or region tagging.
+
+### Love Racing Planning Calendar
+
+`app/love_racing.py` reads Love Racing's public race information page and extracts future meeting dates for racecourses already known from the app's collected roster/location data. Saved rows live in `love_racing_meetings` and are rendered as planning hints on `/month`.
+
+These rows are intentionally not shifts. They have no crew, start time, or hours, and the month view suppresses a planning hint when the signed-in user's Deputy roster already has a shift for that same date/location. Deputy data always takes priority.
 
 ### Multi-User Sync Queue
 

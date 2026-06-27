@@ -10,6 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .config import Settings, get_settings
 from .database import (
+    DEPUTY_LOCATION_CODES,
     get_current_or_next_shift,
     get_upcoming_shifts,
     save_deputy_web_capture_diagnostic,
@@ -53,7 +54,7 @@ SCHEDULE_COUNT_PATTERNS = {
     "unavailable_count": re.compile(r"\b(\d+)\s+unavailable\b", re.IGNORECASE),
 }
 FULL_COPY_PATH_RE = re.compile(
-    r"/api/(?:schedule/|management/v2/(?:shifts|custom-fields)|v1/my/roster)",
+    r"/api/(?:schedule/|management/v2/(?:shifts|locations|custom-fields)|v1/my/roster)",
     re.IGNORECASE,
 )
 LOGIN_ERROR_RE = re.compile(
@@ -67,7 +68,7 @@ MFA_OR_SSO_RE = re.compile(
     re.IGNORECASE,
 )
 CAPTURE_PATH_RE = re.compile(
-    r"/api/(?:schedule/|management/v2/(?:shifts|areas|custom-fields)|v1/my/roster)",
+    r"/api/(?:schedule/|management/v2/(?:shifts|areas|locations|custom-fields)|v1/my/roster)",
     re.IGNORECASE,
 )
 TRACK_NAMES = {
@@ -317,6 +318,9 @@ def _extract_management_shifts(data: Any) -> list[dict[str, Any]]:
                         "label",
                     ),
                 ),
+                "areaLocationId": _first_value(item, ("areaLocationId", "locationId", "location_id")),
+                "location": item.get("location"),
+                "locationName": _first_value(item, ("locationName", "LocationName")),
                 "roleName": _first_value(item, ("role", "roleName", "RoleName", "title", "Title")),
                 "start": item.get("start"),
                 "end": item.get("end"),
@@ -410,19 +414,27 @@ def _first_value(item: dict[str, Any], keys: tuple[str, ...]) -> Any:
     return None
 
 
+def _is_direct_schedule_location_code(value: str) -> bool:
+    compact_value = re.sub(r"\s+", "", value.strip().upper())
+    return bool(re.match(r"^[TH]-", compact_value) or re.search(r"-[TH]$", compact_value))
+
+
 def _direct_schedule_location_ids(location_refs_by_id: dict[str, dict[str, Any]]) -> list[int]:
-    ids = []
+    ids = {
+        int(location_id)
+        for location_id, source_code in DEPUTY_LOCATION_CODES.items()
+        if _is_direct_schedule_location_code(str(source_code or ""))
+    }
     for location in location_refs_by_id.values():
         location_id = location.get("id")
         name = str(location.get("name") or "").strip()
-        compact_name = re.sub(r"\s+", "", name.upper())
-        if not re.match(r"^[TH]-", compact_name):
+        if not _is_direct_schedule_location_code(name):
             continue
         try:
-            ids.append(int(location_id))
+            ids.add(int(location_id))
         except (TypeError, ValueError):
             continue
-    return sorted(set(ids))
+    return sorted(ids)
 
 
 def _chunks(items: list[int], size: int) -> Any:
@@ -441,18 +453,27 @@ def _extract_location_refs(data: Any) -> list[dict[str, Any]]:
     if not isinstance(data, dict):
         return []
     payload = data.get("data")
-    if not isinstance(payload, dict) or not isinstance(payload.get("primaryLocations"), list):
+    if isinstance(payload, list):
+        source_locations = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("primaryLocations"), list):
+        source_locations = payload["primaryLocations"]
+    else:
         return []
 
     locations = []
-    for item in payload["primaryLocations"]:
+    for item in source_locations:
         if not isinstance(item, dict) or item.get("id") is None:
             continue
+        address = item.get("address") or {}
+        if isinstance(address, dict):
+            address_text = address.get("print") or address.get("street") or ""
+        else:
+            address_text = address or ""
         locations.append(
             {
                 "id": item.get("id"),
                 "name": item.get("name") or str(item.get("id")),
-                "address": item.get("address") or item.get("streetAddress") or "",
+                "address": address_text or item.get("streetAddress") or "",
             }
         )
     return locations
@@ -497,6 +518,9 @@ def _extract_schedule_shifts(data: Any) -> list[dict[str, Any]]:
                     ),
                 ),
                 "roleName": _first_value(item, ("role", "roleName", "RoleName", "title", "Title")),
+                "areaLocationId": _first_value(item, ("areaLocationId", "locationId", "location_id")),
+                "location": item.get("location"),
+                "locationName": _first_value(item, ("locationName", "LocationName")),
                 "start": item.get("start"),
                 "end": item.get("end"),
                 "duration": item.get("duration"),
@@ -1030,8 +1054,11 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     paths = [
                         "/api/management/v2/areas?limit=50000&excludeSoft=0",
                         "/api/management/v2/areas?limit=50000",
+                        "/api/management/v2/locations?limit=50000&excludeSoft=0",
+                        "/api/management/v2/locations?limit=50000",
                     ]
                     initial_area_ids = set(area_refs_by_id)
+                    initial_location_ids = set(location_refs_by_id)
                     request_count = 0
                     failed_requests = 0
                     for path in paths:
@@ -1071,24 +1098,27 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             area_id = str(area.get("id") or "")
                             if area_id:
                                 area_refs_by_id[area_id] = area
+                        for location in _extract_location_refs(body):
+                            location_id = str(location.get("id") or "")
+                            if location_id:
+                                location_refs_by_id[location_id] = location
 
                     added = len(set(area_refs_by_id) - initial_area_ids)
+                    locations_added = len(set(location_refs_by_id) - initial_location_ids)
                     events.append(
                         "Expanded area reference capture checked "
-                        f"{request_count} area endpoints and added {added} area refs."
+                        f"{request_count} reference endpoints and added {added} area refs "
+                        f"and {locations_added} location refs."
                     )
                     if failed_requests:
-                        events.append(f"Expanded area reference capture had {failed_requests} failed requests.")
+                        events.append(f"Expanded reference capture had {failed_requests} failed requests.")
 
                 async def capture_direct_schedule_searches() -> None:
                     location_ids = _direct_schedule_location_ids(location_refs_by_id)
-                    if not location_ids:
-                        events.append("Direct schedule search skipped because no racing location list was captured.")
-                        return
-
                     start_at, end_at = schedule_capture_bounds()
                     initial_shift_ids = set(extracted_schedule_shifts_by_id)
                     request_count = 0
+                    all_request_count = 0
                     failed_requests = 0
                     rows_seen = 0
                     window_start = start_at
@@ -1098,38 +1128,79 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             window_start + timedelta(days=6, hours=23, minutes=59, seconds=59),
                             end_at,
                         )
-                        for batch_location_ids in _chunks(location_ids, DIRECT_SCHEDULE_LOCATION_BATCH_SIZE):
-                            body_data = {
-                                "start": window_start.isoformat(),
-                                "end": window_end.isoformat(),
-                                "expandMetadata": True,
-                                "locationMode": "SELECTED",
-                                "locationIds": batch_location_ids,
-                            }
-                            try:
-                                result = await fetch_schedule_search(body_data)
-                            except Exception as exc:
-                                failed_requests += 1
-                                events.append(
-                                    "Direct schedule search failed for "
-                                    f"{window_start.date().isoformat()} to {window_end.date().isoformat()}: "
-                                    f"{redacted_text(str(exc))[:180]}."
-                                )
-                                continue
+                        body_data = {
+                            "start": window_start.isoformat(),
+                            "end": window_end.isoformat(),
+                            "expandMetadata": True,
+                            "locationMode": "ALL",
+                            "locationIds": [],
+                        }
+                        try:
+                            result = await fetch_schedule_search(body_data)
+                        except Exception as exc:
+                            result = {"ok": False, "status": 0, "body": None}
+                            events.append(
+                                "Direct all-locations schedule search failed for "
+                                f"{window_start.date().isoformat()} to {window_end.date().isoformat()}: "
+                                f"{redacted_text(str(exc))[:180]}."
+                            )
 
-                            request_count += 1
-                            body = result.get("body") if isinstance(result, dict) else None
-                            status = int(result.get("status") or 0) if isinstance(result, dict) else 0
-                            if not isinstance(result, dict) or not result.get("ok"):
-                                failed_requests += 1
-                                events.append(
-                                    "Direct schedule search returned "
-                                    f"HTTP {status or 'unknown'} for "
-                                    f"{window_start.date().isoformat()} to {window_end.date().isoformat()}."
-                                )
-                                continue
-
+                        request_count += 1
+                        all_request_count += 1
+                        body = result.get("body") if isinstance(result, dict) else None
+                        status = int(result.get("status") or 0) if isinstance(result, dict) else 0
+                        if isinstance(result, dict) and result.get("ok"):
                             rows_seen += store_schedule_search_body(body)
+                        elif location_ids:
+                            failed_requests += 1
+                            events.append(
+                                "Direct all-locations schedule search returned "
+                                f"HTTP {status or 'unknown'} for "
+                                f"{window_start.date().isoformat()} to {window_end.date().isoformat()}; "
+                                "falling back to selected racing locations."
+                            )
+                            for batch_location_ids in _chunks(location_ids, DIRECT_SCHEDULE_LOCATION_BATCH_SIZE):
+                                fallback_body = {
+                                    "start": window_start.isoformat(),
+                                    "end": window_end.isoformat(),
+                                    "expandMetadata": True,
+                                    "locationMode": "SELECTED",
+                                    "locationIds": batch_location_ids,
+                                }
+                                try:
+                                    fallback_result = await fetch_schedule_search(fallback_body)
+                                except Exception as exc:
+                                    failed_requests += 1
+                                    events.append(
+                                        "Selected-location schedule search failed for "
+                                        f"{window_start.date().isoformat()} to {window_end.date().isoformat()}: "
+                                        f"{redacted_text(str(exc))[:180]}."
+                                    )
+                                    continue
+
+                                request_count += 1
+                                fallback_payload = (
+                                    fallback_result.get("body") if isinstance(fallback_result, dict) else None
+                                )
+                                fallback_status = (
+                                    int(fallback_result.get("status") or 0) if isinstance(fallback_result, dict) else 0
+                                )
+                                if not isinstance(fallback_result, dict) or not fallback_result.get("ok"):
+                                    failed_requests += 1
+                                    events.append(
+                                        "Selected-location schedule search returned "
+                                        f"HTTP {fallback_status or 'unknown'} for "
+                                        f"{window_start.date().isoformat()} to {window_end.date().isoformat()}."
+                                    )
+                                    continue
+                                rows_seen += store_schedule_search_body(fallback_payload)
+                        else:
+                            failed_requests += 1
+                            events.append(
+                                "Direct schedule search returned "
+                                f"HTTP {status or 'unknown'} and no fallback location list was available for "
+                                f"{window_start.date().isoformat()} to {window_end.date().isoformat()}."
+                            )
 
                         window_start = (window_end + timedelta(seconds=1)).replace(
                             hour=0,
@@ -1142,7 +1213,9 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     events.append(
                         "Direct schedule search covered "
                         f"{start_at.date().isoformat()} to {end_at.date().isoformat()} "
-                        f"across {len(location_ids)} racing locations in {request_count} batched requests, "
+                        f"using {all_request_count} all-location request windows"
+                        f"{f' plus selected-location fallback across {len(location_ids)} racing locations' if request_count > all_request_count else ''} "
+                        f"in {request_count} total requests, "
                         f"saw {rows_seen} crew rows, and added {added} crew rows."
                     )
                     if failed_requests:
@@ -1206,6 +1279,11 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 area_id = str(area.get("id") or "")
                                 if area_id:
                                     area_refs_by_id[area_id] = area
+                        if "/api/management/v2/locations" in response_url:
+                            for location in _extract_location_refs(data):
+                                location_id = str(location.get("id") or "")
+                                if location_id:
+                                    location_refs_by_id[location_id] = location
                         if "/api/schedule/v2/components/filters" in response_url:
                             for location in _extract_location_refs(data):
                                 location_id = str(location.get("id") or "")

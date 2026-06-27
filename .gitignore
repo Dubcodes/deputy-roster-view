@@ -3,6 +3,7 @@ data/
 __pycache__/
 *.pyc
 .venv/
+.codex_diagnostics/
+.codex_tmp_*/
 *.tar
 *.zip
-

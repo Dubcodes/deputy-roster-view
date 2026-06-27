@@ -32,6 +32,7 @@ from .database import (
     ensure_user_sync_state,
     fetch_open_deputy_schedule_between,
     fetch_open_deputy_schedule_shifts,
+    fetch_love_racing_meetings_between,
     fetch_deputy_schedule_for_date,
     fetch_deputy_schedule_areas_for_locations,
     fetch_shifts_for_travel_learning,
@@ -44,6 +45,7 @@ from .database import (
     get_shift_changes_for_date,
     get_last_deputy_web_capture,
     get_latest_deputy_web_capture_for_user,
+    get_love_racing_snapshot,
     fetch_shift,
     fetch_shifts_between,
     fetch_shifts_for_date,
@@ -55,6 +57,7 @@ from .database import (
     get_upcoming_shifts,
     get_user_sync_state,
     init_db,
+    list_known_racecourse_names,
     list_admin_overrides,
     list_app_users,
     list_error_reports,
@@ -67,6 +70,7 @@ from .database import (
     reset_user_roster_data,
     purge_app_user,
     purge_old_inactive_records,
+    save_love_racing_meetings,
     update_deputy_user_ical_url,
     update_deputy_user_credentials,
     update_app_settings,
@@ -82,6 +86,7 @@ from .database import (
 )
 from .deputy_api import test_deputy_roster_api
 from .deputy_web import capture_and_save_deputy_web, format_capture_payload
+from .love_racing import LOVE_RACING_URL, fetch_love_racing_meetings
 from .scheduler import get_pre_shift_status, shutdown_scheduler, start_scheduler, sync_roster_sources
 from .security import (
     SESSION_COOKIE_NAME,
@@ -97,7 +102,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.21.2"
+APP_BUILD = "2026.06.28.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -156,11 +161,10 @@ THEME_VALUES = {str(theme["value"]) for theme in THEME_OPTIONS}
 THEME_LABELS = {str(theme["value"]): str(theme["label"]) for theme in THEME_OPTIONS}
 LOCATION_COLOUR_COUNT = 10
 LOCATION_COLOUR_INDEX_BY_KEY = {
-    "20": 1,
     "ellet": 1,
     "ellerslie": 1,
     "100ascotavenue": 1,
-    "29": 2,
+    "64": 2,
     "camst": 2,
     "tcambridge": 2,
     "cambridgesynthetic": 2,
@@ -176,14 +180,16 @@ LOCATION_COLOUR_INDEX_BY_KEY = {
     "matat": 5,
     "matamata": 5,
     "statehighway27": 5,
+    "62": 6,
     "puket": 6,
     "pukekohe": 6,
     "222manukauroad": 6,
-    "56": 7,
+    "121": 7,
     "hcambridge": 7,
     "cambridgeharness": 7,
     "cambridge": 7,
     "1taylorstreet": 7,
+    "129": 8,
     "rotorua": 8,
     "tr": 8,
     "274278fentonstreetglenholmerotorua3010": 8,
@@ -218,7 +224,7 @@ KNOWN_SHIFT_CONTEXT_FALLBACKS = (
         "end": "21:00",
         "source_code": "H-Cambridge",
         "location": "1 Taylor Street",
-        "location_id": 56,
+        "location_id": 121,
         "role_by_name": (
             ("jayden", "Director"),
             ("josh", "Side 1"),
@@ -1028,10 +1034,11 @@ def apply_known_area_override(shift: dict[str, object]) -> None:
             shift[key] = value
     if override.get("location") and not str(shift.get("location") or "").strip():
         shift["location"] = str(override.get("location") or "")
-    if override.get("location_id") and not shift.get("schedule_location_id"):
-        shift["schedule_location_id"] = safe_int(override.get("location_id"))
+    override_location_id = safe_int(override.get("location_id"))
+    if override_location_id is not None:
+        shift["schedule_location_id"] = override_location_id
         shift["schedule_location_ids"] = unique_ints(
-            list(shift.get("schedule_location_ids") or []) + [shift.get("schedule_location_id")]
+            [override_location_id] + list(shift.get("schedule_location_ids") or [])
         )
 
 
@@ -1135,10 +1142,14 @@ def role_chain_label(segments: list[dict[str, str]]) -> str:
 
 
 def role_is_vehicleish(role_label: str | None) -> bool:
-    normalised = re.sub(r"\s+", "", (role_label or "").strip().upper())
+    raw_value = (role_label or "").strip()
+    if "->" in raw_value:
+        role_parts = [part.strip() for part in raw_value.split("->") if part.strip()]
+        return bool(role_parts) and all(role_is_vehicleish(part) for part in role_parts)
+    normalised = re.sub(r"\s+", "", raw_value.upper())
     if not normalised:
         return False
-    return bool(re.fullmatch(r"\d{3,4}", normalised) or re.fullmatch(r"RAV\d+", normalised) or normalised in VEHICLE_ROLE_LABELS)
+    return bool(re.fullmatch(r"\d{3}", normalised) or re.fullmatch(r"RAV\d+", normalised) or normalised in VEHICLE_ROLE_LABELS)
 
 
 def shift_header_vehicle_label(segments: list[dict[str, str]]) -> str:
@@ -1558,6 +1569,10 @@ def shift_has_generic_track(shift: dict[str, object]) -> bool:
     return source_code == "web" or track_label in GENERIC_TRACK_LABELS
 
 
+def shift_role_label(shift: dict[str, object]) -> str:
+    return str(shift.get("role_label") or shift.get("role_full_label") or "").strip()
+
+
 def roster_context_signature(shift: dict[str, object]) -> set[str]:
     values = list(shift.get("description_lines") or [])
     if not values:
@@ -1579,6 +1594,49 @@ def shifts_share_roster_context(left: dict[str, object], right: dict[str, object
     return bool(left_context & right_context) or left_context.issubset(right_context) or right_context.issubset(left_context)
 
 
+def shift_duration_hours_value(shift: dict[str, object]) -> float:
+    start_at = parse_iso_datetime(str(shift.get("start_at") or ""))
+    end_at = parse_iso_datetime(str(shift.get("end_at") or ""))
+    if not start_at or not end_at:
+        return float(shift.get("raw_hours") or 0)
+    return max(0.0, round((end_at - start_at).total_seconds() / 3600, 2))
+
+
+def shift_has_race_timing_context(shift: dict[str, object]) -> bool:
+    text = " ".join(str(line or "") for line in shift.get("description_lines") or [])
+    if not text:
+        text = str(shift.get("description") or "")
+    return bool(
+        re.search(
+            r"\b(office|clow\s+(?:place|pl)|on\s+track|first\s+cross|first\s+race|last\s+race|\d+\s+races?)\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def shift_location_id_values(shift: dict[str, object]) -> list[int]:
+    return unique_ints(list(shift.get("schedule_location_ids") or []) + [shift.get("schedule_location_id")])
+
+
+def shift_is_vehicle_context_pair(left: dict[str, object], right: dict[str, object]) -> bool:
+    if left.get("date") != right.get("date"):
+        return False
+    left_is_vehicle = role_is_vehicleish(shift_role_label(left))
+    right_is_vehicle = role_is_vehicleish(shift_role_label(right))
+    if left_is_vehicle == right_is_vehicle:
+        return False
+    if shifts_share_roster_context(left, right):
+        return True
+    vehicle_shift = left if left_is_vehicle else right
+    role_shift = right if left_is_vehicle else left
+    return (
+        shift_duration_hours_value(vehicle_shift) <= 3
+        and shift_has_race_timing_context(vehicle_shift)
+        and shift_has_race_timing_context(role_shift)
+    )
+
+
 def can_merge_shift(left: dict[str, object], right: dict[str, object]) -> bool:
     if int(left.get("deleted_from_source") or 0) or int(right.get("deleted_from_source") or 0):
         return False
@@ -1592,6 +1650,8 @@ def can_merge_shift(left: dict[str, object], right: dict[str, object]) -> bool:
         and left.get("location") == right.get("location")
         and left.get("race_type_label") == right.get("race_type_label")
     ):
+        return True
+    if shift_is_vehicle_context_pair(left, right):
         return True
     return (
         left.get("date") == right.get("date")
@@ -1618,6 +1678,8 @@ def clean_merged_role_segments(segments: list[dict[str, object]]) -> list[dict[s
 
 def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[str, object]:
     primary = choose_primary_shift(left, right)
+    other = right if primary is left else left
+    vehicle_context_pair = shift_is_vehicle_context_pair(left, right)
     merged = dict(primary)
     start_at = parse_iso_datetime(str(left.get("start_at") or ""))
     end_at = parse_iso_datetime(str(right.get("end_at") or ""))
@@ -1639,10 +1701,13 @@ def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[
                 "break_minutes": break_minutes,
             }
         )
-    merged["description_lines"] = unique_description_lines(
-        list(left.get("description_lines") or []),
-        list(right.get("description_lines") or []),
-    )
+    if vehicle_context_pair and list(primary.get("description_lines") or []):
+        merged["description_lines"] = unique_description_lines(list(primary.get("description_lines") or []))
+    else:
+        merged["description_lines"] = unique_description_lines(
+            list(left.get("description_lines") or []),
+            list(right.get("description_lines") or []),
+        )
     merged["roster_summary"] = parse_roster_summary(list(merged.get("description_lines") or []))
     merged["role_segments"] = clean_merged_role_segments(
         list(left.get("role_segments") or []) + list(right.get("role_segments") or [])
@@ -1658,11 +1723,12 @@ def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[
     merged["combined_shift_ids"] = list(left.get("combined_shift_ids") or [left["id"]]) + list(
         right.get("combined_shift_ids") or [right["id"]]
     )
-    merged["schedule_location_ids"] = unique_ints(
-        list(left.get("schedule_location_ids") or [])
-        + list(right.get("schedule_location_ids") or [])
-        + [left.get("schedule_location_id"), right.get("schedule_location_id")]
-    )
+    primary_location_ids = shift_location_id_values(primary)
+    other_location_ids = shift_location_id_values(other)
+    if vehicle_context_pair and primary_location_ids:
+        merged["schedule_location_ids"] = primary_location_ids
+    else:
+        merged["schedule_location_ids"] = unique_ints(primary_location_ids + other_location_ids)
     merged["schedule_location_id"] = merged["schedule_location_ids"][0] if merged["schedule_location_ids"] else None
     apply_timing_math(merged)
     return merged
@@ -2134,6 +2200,137 @@ def visible_open_schedule_shifts(limit: int = 8) -> list[dict[str, object]]:
             continue
         shifts.append(item)
     return shifts
+
+
+def location_compare_key(*values: object) -> str:
+    for value in values:
+        key = location_colour_key(value)
+        if key and key not in GENERIC_TRACK_LABELS:
+            return key
+    return ""
+
+
+def deputy_location_keys_for_shifts(shifts: list[dict[str, object]]) -> set[str]:
+    keys: set[str] = set()
+    for shift in shifts:
+        for value in (
+            shift.get("track_label"),
+            shift.get("source_code"),
+            shift.get("location"),
+            shift.get("schedule_location_id"),
+        ):
+            key = location_colour_key(value)
+            if key and key not in GENERIC_TRACK_LABELS:
+                keys.add(key)
+        track_key = location_colour_key(shift.get("track_label"))
+        if "cambridge" in track_key:
+            keys.add("cambridge")
+    return keys
+
+
+def decorate_love_racing_meeting(row: object) -> dict[str, object]:
+    meeting = dict(row)
+    racecourse = str(meeting.get("racecourse") or "Race day").strip()
+    racecourse_key = str(meeting.get("racecourse_key") or location_colour_key(racecourse)).strip()
+    colour_index = stable_location_colour_index(racecourse_key, racecourse)
+    meeting["date"] = str(meeting.get("meeting_date") or meeting.get("date") or "")
+    meeting["location_label"] = racecourse
+    meeting["source_label"] = "Love Racing"
+    meeting["colour_style"] = (
+        f"--shift-location-colour: var(--location-colour-{colour_index}); "
+        f"--location-colour: var(--location-colour-{colour_index});"
+    )
+    try:
+        meeting_date = date.fromisoformat(str(meeting["date"]))
+        meeting["date_label"] = meeting_date.strftime("%a %d %b")
+    except ValueError:
+        meeting["date_label"] = str(meeting["date"])
+    return meeting
+
+
+def love_racing_by_date(
+    start_date: str,
+    end_date: str,
+    shifts_by_date: dict[str, list[dict[str, object]]],
+) -> dict[str, list[dict[str, object]]]:
+    by_date: dict[str, list[dict[str, object]]] = {}
+    for row in fetch_love_racing_meetings_between(start_date, end_date):
+        meeting = decorate_love_racing_meeting(row)
+        date_key = str(meeting.get("date") or "")
+        deputy_keys = deputy_location_keys_for_shifts(shifts_by_date.get(date_key, []))
+        meeting_key = location_compare_key(meeting.get("racecourse_key"), meeting.get("racecourse"))
+        if meeting_key and (meeting_key in deputy_keys or ("cambridge" in meeting_key and "cambridge" in deputy_keys)):
+            continue
+        by_date.setdefault(date_key, []).append(meeting)
+    return by_date
+
+
+def bar_items(counter: Counter, limit: int = 8) -> list[dict[str, object]]:
+    top = counter.most_common(limit)
+    max_value = max((value for _label, value in top), default=0)
+    items = []
+    for label, value in top:
+        items.append(
+            {
+                "label": label,
+                "value": value,
+                "percent": round((float(value) / max_value) * 100) if max_value else 0,
+            }
+        )
+    return items
+
+
+def build_roster_insights(owner_user_id: int | None, today: date) -> dict[str, object]:
+    start_date = (today - timedelta(days=90)).isoformat()
+    end_date = (today + timedelta(days=180)).isoformat()
+    shifts = [
+        decorate_shift(row)
+        for row in fetch_shifts_between(start_date, end_date, owner_user_id=owner_user_id)
+        if not int(row["deleted_from_source"] or 0)
+    ]
+    past_30_start = today - timedelta(days=30)
+    past_90_start = today - timedelta(days=90)
+    past_30 = [
+        shift for shift in shifts
+        if past_30_start.isoformat() <= str(shift.get("date") or "") <= today.isoformat()
+    ]
+    past_90 = [
+        shift for shift in shifts
+        if past_90_start.isoformat() <= str(shift.get("date") or "") <= today.isoformat()
+    ]
+    upcoming = [
+        shift for shift in shifts
+        if str(shift.get("date") or "") >= today.isoformat()
+    ]
+    track_counts: Counter[str] = Counter()
+    role_counts: Counter[str] = Counter()
+    track_hours: Counter[str] = Counter()
+    weekday_counts: Counter[str] = Counter()
+    for shift in shifts:
+        track = str(shift.get("track_label") or "Unknown").strip() or "Unknown"
+        role = str(shift.get("role_chain_label") or shift.get("role_full_label") or shift.get("role_label") or "Shift").strip()
+        shift_date = str(shift.get("date") or "")
+        track_counts[track] += 1
+        role_counts[role] += 1
+        track_hours[track] += float(shift_hours_value(shift) or 0)
+        try:
+            weekday_counts[date.fromisoformat(shift_date).strftime("%a")] += 1
+        except ValueError:
+            pass
+    return {
+        "shift_count": len(shifts),
+        "past_30_count": len(past_30),
+        "past_30_hours": sum(float(shift_hours_value(shift) or 0) for shift in past_30),
+        "past_90_count": len(past_90),
+        "past_90_hours": sum(float(shift_hours_value(shift) or 0) for shift in past_90),
+        "upcoming_count": len(upcoming),
+        "changed_count": sum(1 for shift in shifts if int(shift.get("changed_since_viewed") or 0)),
+        "track_count": len(track_counts),
+        "top_tracks": bar_items(track_counts),
+        "top_roles": bar_items(role_counts),
+        "track_hours": bar_items(Counter({label: round(value, 2) for label, value in track_hours.items()})),
+        "weekday_counts": bar_items(weekday_counts, limit=7),
+    }
 
 
 def is_overnight_travel_day(shifts: list[dict[str, object]]) -> bool:
@@ -3014,6 +3211,7 @@ def month_view(
         shifts_by_date.setdefault(row["date"], []).append(decorate_shift(row))
     for date_key, day_shifts in list(shifts_by_date.items()):
         shifts_by_date[date_key] = combine_adjacent_shifts(day_shifts)
+    love_racing_by_day = love_racing_by_date(grid_start, grid_end, shifts_by_date)
 
     weeks = []
     active_days = []
@@ -3024,6 +3222,7 @@ def month_view(
         for day_item in week:
             day_shifts = shifts_by_date.get(day_item.isoformat(), [])
             day_open_shifts = open_shifts_by_date.get(day_item.isoformat(), [])
+            day_love_racing = love_racing_by_day.get(day_item.isoformat(), [])
             timesheet = timesheet_marker(day_item)
             day_total = sum(
                 shift_hours_value(shift)
@@ -3042,17 +3241,19 @@ def month_view(
                     "is_today": day_item == today,
                     "shifts": day_shifts,
                     "open_shifts": day_open_shifts,
+                    "love_racing_meetings": day_love_racing,
                     "total": day_total,
                     "timesheet": timesheet,
                 }
             )
-            if day_item.month == month and (day_shifts or timesheet or day_open_shifts):
+            if day_item.month == month and (day_shifts or timesheet or day_open_shifts or day_love_racing):
                 active_days.append(
                     {
                         "date": day_item,
                         "iso": day_item.isoformat(),
                         "shifts": day_shifts,
                         "open_shifts": day_open_shifts,
+                        "love_racing_meetings": day_love_racing,
                         "total": day_total,
                         "timesheet": timesheet,
                     }
@@ -3310,6 +3511,12 @@ def settings_view(request: Request, notice: str | None = None) -> object:
         "warnings": int(capture_stats.get("warning_count") or 0),
         "changed": int(schedule_snapshot.get("changed_rows") or 0),
     }
+    roster_insights = build_roster_insights(owner_user_id, now.date())
+    love_racing_snapshot = get_love_racing_snapshot(now.date().isoformat())
+    love_racing_snapshot["upcoming"] = [
+        decorate_love_racing_meeting(item)
+        for item in love_racing_snapshot.get("upcoming", [])
+    ]
     user_sync_state = get_user_sync_state(owner_user_id) if owner_user_id is not None else None
     account_user = get_app_user(owner_user_id) if owner_user_id is not None else None
     account_secret = get_deputy_user_secret(owner_user_id) if owner_user_id is not None else None
@@ -3347,7 +3554,10 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "deputy_web_capture": deputy_web_capture,
             "deputy_schedule_snapshot": schedule_snapshot,
             "roster_snapshot": roster_snapshot,
+            "roster_insights": roster_insights,
+            "love_racing_snapshot": love_racing_snapshot,
             "open_schedule_shifts": visible_open_schedule_shifts(),
+            "love_racing_url": LOVE_RACING_URL,
             "theme_groups": THEME_GROUPS,
             "current_theme": current_theme,
             "current_theme_label": THEME_LABELS.get(current_theme, "Jade dark"),
@@ -3371,6 +3581,30 @@ async def save_theme_settings(request: Request) -> RedirectResponse:
         samesite="lax",
     )
     return response
+
+
+@app.post("/settings/love-racing-refresh")
+def refresh_love_racing_calendar(request: Request) -> RedirectResponse:
+    settings = get_settings()
+    today = datetime.now(settings.timezone).date()
+    try:
+        result = fetch_love_racing_meetings(list_known_racecourse_names(), today=today)
+        saved = save_love_racing_meetings(result.meetings, datetime.now(settings.timezone).isoformat(timespec="seconds"))
+        update_app_settings(
+            {
+                "love_racing_last_sync_at": datetime.now(settings.timezone).isoformat(timespec="seconds"),
+                "love_racing_last_message": f"{saved} known future race days saved from {result.fetched_rows} public rows.",
+            }
+        )
+        message = f"Love Racing planning calendar updated. {saved} known future race days saved."
+    except Exception as exc:
+        update_app_settings(
+            {
+                "love_racing_last_message": f"Love Racing scan failed: {type(exc).__name__}",
+            }
+        )
+        message = "Love Racing scan failed. Try again later or check diagnostics."
+    return RedirectResponse(url=notice_url("/settings", message), status_code=303)
 
 
 @app.post("/settings/pin")

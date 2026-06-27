@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import hashlib
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Iterable
@@ -283,6 +284,21 @@ def init_db(settings: Settings | None = None) -> None:
                 raw_payload TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS love_racing_meetings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                meeting_date TEXT,
+                racecourse_key TEXT,
+                racecourse TEXT,
+                club_name TEXT,
+                source_url TEXT,
+                source_hash TEXT UNIQUE,
+                raw_text TEXT,
+                first_seen_at TEXT,
+                last_seen_at TEXT,
+                last_synced_at TEXT,
+                is_active INTEGER DEFAULT 1
+            );
+
             CREATE INDEX IF NOT EXISTS idx_shifts_date ON shifts(date);
             CREATE INDEX IF NOT EXISTS idx_shifts_start_at ON shifts(start_at);
             CREATE INDEX IF NOT EXISTS idx_shifts_changed ON shifts(changed_since_viewed);
@@ -298,6 +314,7 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_capture_coverage_date ON capture_coverage(date);
             CREATE INDEX IF NOT EXISTS idx_user_sync_state_next ON user_sync_state(next_sync_after, sync_in_progress);
             CREATE INDEX IF NOT EXISTS idx_travel_time_defaults_track ON travel_time_defaults(track_key, base_label);
+            CREATE INDEX IF NOT EXISTS idx_love_racing_meetings_date ON love_racing_meetings(meeting_date, racecourse_key);
             """
         )
         _ensure_default_crew_pool(conn)
@@ -328,6 +345,7 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "app_users", "display_theme", "TEXT DEFAULT 'jade'")
         _ensure_column(conn, "deputy_user_secrets", "encrypted_ical_url", "TEXT")
         _ensure_column(conn, "app_users", "deactivated_at", "TEXT")
+        _ensure_column(conn, "love_racing_meetings", "is_active", "INTEGER DEFAULT 1")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_location ON deputy_schedule_shifts(date, area_location_id)"
         )
@@ -382,6 +400,10 @@ def _ensure_user_default_crew(conn: sqlite3.Connection, user_id: int) -> None:
 
 def row_to_dict(row: sqlite3.Row | None) -> dict | None:
     return dict(row) if row is not None else None
+
+
+def calendar_location_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
 
 
 def count_app_users() -> int:
@@ -1174,6 +1196,180 @@ def list_travel_time_defaults() -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def list_known_racecourse_names() -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: object) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        text = re.sub(r"^[THG]-", "", text, flags=re.IGNORECASE).strip()
+        if not text or text.lower() in {"web", "shift", "vehicles", "travel"}:
+            return
+        key = calendar_location_key(text)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        names.append(text)
+
+    with get_connection() as conn:
+        for row in conn.execute(
+            """
+            SELECT display_name AS name
+            FROM crew_known_locations
+            WHERE TRIM(COALESCE(display_name, '')) != ''
+            UNION
+            SELECT name
+            FROM deputy_schedule_locations
+            WHERE TRIM(COALESCE(name, '')) != ''
+            UNION
+            SELECT track_label AS name
+            FROM travel_time_defaults
+            WHERE TRIM(COALESCE(track_label, '')) != ''
+            UNION
+            SELECT location AS name
+            FROM shifts
+            WHERE TRIM(COALESCE(location, '')) != ''
+            """
+        ).fetchall():
+            add(row["name"])
+
+        for row in conn.execute(
+            """
+            SELECT title
+            FROM shifts
+            WHERE TRIM(COALESCE(title, '')) != ''
+            """
+        ).fetchall():
+            match = re.match(r"^\[([^\]]+)\]", str(row["title"] or ""))
+            if match:
+                add(match.group(1))
+
+    if not names:
+        for fallback in (
+            "Cambridge",
+            "Cambridge Synthetic",
+            "Ellerslie",
+            "Matamata",
+            "Pukekohe",
+            "Rotorua",
+            "Ruakaka",
+            "Tauranga",
+            "Te Aroha",
+            "Te Rapa",
+        ):
+            add(fallback)
+    return names
+
+
+def save_love_racing_meetings(meetings: list[dict[str, object]], synced_at: str | None = None) -> int:
+    synced_at = synced_at or datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    saved = 0
+    with get_connection() as conn:
+        for meeting in meetings:
+            meeting_date = str(meeting.get("date") or meeting.get("meeting_date") or "").strip()
+            racecourse = str(meeting.get("racecourse") or "").strip()
+            if not meeting_date or not racecourse:
+                continue
+            racecourse_key = str(meeting.get("racecourse_key") or calendar_location_key(racecourse)).strip()
+            club_name = str(meeting.get("club_name") or "").strip()
+            source_url = str(meeting.get("source_url") or "").strip()
+            raw_text = str(meeting.get("raw_text") or "").strip()
+            source_hash = str(meeting.get("source_hash") or "").strip()
+            if not source_hash:
+                source_hash = hashlib.sha256(
+                    "|".join([meeting_date, racecourse_key, club_name, raw_text]).encode("utf-8")
+                ).hexdigest()
+            conn.execute(
+                """
+                INSERT INTO love_racing_meetings (
+                    meeting_date, racecourse_key, racecourse, club_name,
+                    source_url, source_hash, raw_text, first_seen_at,
+                    last_seen_at, last_synced_at, is_active
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                ON CONFLICT(source_hash) DO UPDATE SET
+                    meeting_date = excluded.meeting_date,
+                    racecourse_key = excluded.racecourse_key,
+                    racecourse = excluded.racecourse,
+                    club_name = excluded.club_name,
+                    source_url = excluded.source_url,
+                    raw_text = excluded.raw_text,
+                    last_seen_at = excluded.last_seen_at,
+                    last_synced_at = excluded.last_synced_at,
+                    is_active = 1
+                """,
+                (
+                    meeting_date,
+                    racecourse_key,
+                    racecourse,
+                    club_name,
+                    source_url,
+                    source_hash,
+                    raw_text,
+                    synced_at,
+                    synced_at,
+                    synced_at,
+                ),
+            )
+            saved += 1
+    return saved
+
+
+def fetch_love_racing_meetings_between(start_date: str, end_date: str) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT *
+            FROM love_racing_meetings
+            WHERE is_active = 1
+              AND meeting_date BETWEEN ? AND ?
+            ORDER BY meeting_date ASC, racecourse ASC, id ASC
+            """,
+            (start_date, end_date),
+        ).fetchall()
+
+
+def get_love_racing_snapshot(today: str | None = None) -> dict[str, object]:
+    today = today or datetime.now(get_settings().timezone).date().isoformat()
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total_rows,
+                SUM(CASE WHEN meeting_date >= ? THEN 1 ELSE 0 END) AS upcoming_rows,
+                COUNT(DISTINCT racecourse_key) AS location_count,
+                MIN(meeting_date) AS first_date,
+                MAX(meeting_date) AS last_date,
+                MAX(last_synced_at) AS last_synced_at
+            FROM love_racing_meetings
+            WHERE is_active = 1
+            """,
+            (today,),
+        ).fetchone()
+        upcoming = conn.execute(
+            """
+            SELECT *
+            FROM love_racing_meetings
+            WHERE is_active = 1
+              AND meeting_date >= ?
+            ORDER BY meeting_date ASC, racecourse ASC
+            LIMIT 8
+            """,
+            (today,),
+        ).fetchall()
+    return {
+        "total_rows": int(row["total_rows"] or 0) if row else 0,
+        "upcoming_rows": int(row["upcoming_rows"] or 0) if row else 0,
+        "location_count": int(row["location_count"] or 0) if row else 0,
+        "first_date": row["first_date"] or "" if row else "",
+        "last_date": row["last_date"] or "" if row else "",
+        "last_synced_at": row["last_synced_at"] or "" if row else "",
+        "upcoming": [dict(item) for item in upcoming],
+    }
+
+
 def get_travel_time_default(track_keys: list[str], base_label: str = "Clow Place") -> sqlite3.Row | None:
     keys = [key.strip().lower() for key in track_keys if str(key or "").strip()]
     if not keys:
@@ -1847,25 +2043,41 @@ def update_app_settings(values: dict[str, str]) -> None:
 
 
 DEPUTY_LOCATION_CODES = {
-    20: "ELLE-T",
-    29: "CAMS-T",
-    56: "H-Cambridge",
+    29: "G-Cambridge",
+    62: "T-Pukekohe",
     63: "TRAP-T",
+    64: "CAMS-T",
     66: "TAUR-T",
     68: "MATA-T",
+    69: "TARO-T",
     105: "8PE",
+    121: "H-Cambridge",
+    129: "T-Rotorua",
 }
 DEPUTY_LOCATION_ADDRESSES = {
-    20: "100 Ascot Avenue",
-    29: "40 Racecourse Road",
-    56: "1 Taylor Street",
+    29: "1 Taylor Street",
+    62: "222 Manukau Road",
     63: "12 Sir Tristram Avenue",
+    64: "40 Racecourse Road",
     66: "1383 Cameron Road",
     68: "State Highway 27",
+    69: "Stanley Road South",
     105: "National",
+    121: "1 Taylor Street",
+    129: "274-278 Fenton Street, Glenholme, Rotorua 3010",
+}
+
+H_CAMBRIDGE_AREA_CONTEXT = {
+    "source_code": "H-Cambridge",
+    "location": "1 Taylor Street",
+    "location_id": 121,
 }
 DEPUTY_AREA_OVERRIDES = {
-    1192: {"source_code": "H-Cambridge", "role": "Side 1", "location": "1 Taylor Street", "location_id": 56},
+    1192: {**H_CAMBRIDGE_AREA_CONTEXT, "role": "Side 1"},
+    1193: {**H_CAMBRIDGE_AREA_CONTEXT, "role": "Side 2"},
+    1194: {**H_CAMBRIDGE_AREA_CONTEXT, "role": "Head On"},
+    1196: {**H_CAMBRIDGE_AREA_CONTEXT, "role": "DIR"},
+    1550: {**H_CAMBRIDGE_AREA_CONTEXT, "role": "684"},
     1488: {"source_code": "VEH", "role": "Vehicles", "location": "6 Clow Place"},
 }
 
@@ -2006,6 +2218,36 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                 (location_id, name, address, captured_at),
             )
 
+        for shift in list(own_shifts) + list(shifts):
+            if not isinstance(shift, dict):
+                continue
+            location_id = _optional_int(shift.get("location") or shift.get("locationId") or shift.get("location_id"))
+            name = str(shift.get("locationName") or shift.get("LocationName") or "").strip()
+            if location_id is None or not name:
+                continue
+            address = DEPUTY_LOCATION_ADDRESSES.get(location_id, "")
+            location_lookup[location_id] = {
+                "id": location_id,
+                "name": name,
+                "address": address,
+            }
+            conn.execute(
+                """
+                INSERT INTO deputy_schedule_locations (
+                    location_id, name, address, updated_at
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(location_id) DO UPDATE SET
+                    name = excluded.name,
+                    address = CASE
+                        WHEN TRIM(excluded.address) != '' THEN excluded.address
+                        ELSE deputy_schedule_locations.address
+                    END,
+                    updated_at = excluded.updated_at
+                """,
+                (location_id, name, address, captured_at),
+            )
+
         for row in conn.execute("SELECT * FROM deputy_schedule_areas").fetchall():
             area_id = _optional_int(row["area_id"])
             if area_id is None:
@@ -2060,7 +2302,9 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
             area_override = DEPUTY_AREA_OVERRIDES.get(area_id or -1, {})
             area = area_lookup.get(str(area_id)) if area_id is not None else None
             area_name = str(shift.get("areaName") or (area or {}).get("name") or area_override.get("role") or area_id or "")
-            area_location_id = _optional_int(shift.get("areaLocationId"))
+            area_location_id = _optional_int(shift.get("location") or shift.get("locationId") or shift.get("location_id"))
+            if area_location_id is None:
+                area_location_id = _optional_int(shift.get("areaLocationId"))
             if area_location_id is None and area:
                 area_location_id = _optional_int(area.get("locationId"))
             if area_location_id is None and area_override:
@@ -2432,7 +2676,17 @@ def _deputy_web_shift_values(
     area = area_lookup.get(str(area_id)) if area_id is not None else None
     area_name = str(shift.get("areaName") or (area or {}).get("name") or "").strip()
     raw_role_name = _clean_role_name(shift.get("roleName") or shift.get("role") or shift.get("title") or "")
-    location_id = _optional_int(shift.get("areaLocationId"))
+    shift_location_name = str(shift.get("locationName") or shift.get("LocationName") or "").strip()
+    location_id = _optional_int(shift.get("location") or shift.get("locationId") or shift.get("location_id"))
+    if location_id is not None and shift_location_name:
+        existing_location = location_lookup.get(location_id) or {}
+        location_lookup[location_id] = {
+            "id": location_id,
+            "name": shift_location_name,
+            "address": existing_location.get("address") or DEPUTY_LOCATION_ADDRESSES.get(location_id, ""),
+        }
+    if location_id is None:
+        location_id = _optional_int(shift.get("areaLocationId"))
     if location_id is None and area:
         location_id = _optional_int(area.get("locationId"))
     area_override = DEPUTY_AREA_OVERRIDES.get(area_id or -1, {})
@@ -2441,9 +2695,9 @@ def _deputy_web_shift_values(
     if location_id is None and area_override:
         location_id = _location_id_for_source_code(str(area_override.get("source_code") or ""))
     role_label = str(area_override.get("role") or area_name or raw_role_name or "Shift").strip()
-    source_code = str(area_override.get("source_code") or _location_source_code(location_id, location_lookup) or "WEB").strip()
+    source_code = str(shift_location_name or area_override.get("source_code") or _location_source_code(location_id, location_lookup) or "WEB").strip()
     title = f"[{source_code}] {role_label}".strip()
-    location = str(area_override.get("location") or _location_address(location_id, location_lookup)).strip()
+    location = str(_location_address(location_id, location_lookup) or area_override.get("location") or "").strip()
     raw_hours = round((end_dt - start_dt).total_seconds() / 3600, 2)
     break_minutes = 0
     paid_hours = raw_hours
@@ -2465,7 +2719,7 @@ def _deputy_web_shift_values(
         "area_id": area_id,
         "area_name": area_name,
         "area_location_id": location_id,
-        "location_name": str((location_lookup.get(location_id or -1) or {}).get("name") or ""),
+        "location_name": shift_location_name or str((location_lookup.get(location_id or -1) or {}).get("name") or ""),
         "employee_id": _optional_int(shift.get("employee")),
         "status": source_status,
         "captured_at": captured_at,

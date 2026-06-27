@@ -6,7 +6,9 @@
 - `H-` means Harness racing.
 - `G-` means Greyhound racing. At Cambridge this is the same physical venue as Cambridge Harness, but keep it logically distinct unless a future admin mapping says otherwise.
 - `T-Cambridge` should display as Cambridge Synthetic when that is the track code from the user's roster.
-- `H-Cambridge` is Cambridge Harness. The current captured Deputy location ID is `56`.
+- `H-Cambridge` is Cambridge Harness. The current captured Deputy location ID seen on personal shift rows is `121`; older/static `56` references were stale and should not be used for Harness.
+- Deputy can put an adjacent vehicle/travel row on the wrong meeting location while the real production-position row is correct. If the same person's rows touch end-to-start and share the same roster note, merge them and let the real position row supply the location and race type.
+- Deputy can also split vehicle context into short adjacent rows before the real production row, with the first short row carrying an older/stale note. If the rows touch and both sides have race-day timing context, merge the short vehicle lead-in into the real production row and keep the production row's location/race type.
 
 ## Important Track/Location Labels
 
@@ -93,3 +95,12 @@ Known but not fully solved. For now:
 - The travel day and next race day usually involve the same crew.
 - If the travel day has no useful crew list, it can borrow the next day's crew list and label it as next-day crew.
 - Hotel/stay location and travel timing rules need a real current example before building more logic.
+
+## Public Race-Day Planning
+
+Love Racing data is public planning information only. Use it to show future race days at known worked locations, but do not treat it as a roster source.
+
+- Only location/date are useful.
+- Deputy rostered shifts and Deputy schedule rows are always higher priority.
+- Planning markers should look different from confirmed shifts and should use Love Racing gold plus the location colour.
+- If a Deputy shift already exists for the same user/date/location, hide the public planning marker for that date/location.

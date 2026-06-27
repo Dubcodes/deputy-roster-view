@@ -22,15 +22,17 @@ Defaults should stay modest for multi-user use: 35 days back and 56 days forward
 
 ## Location IDs Are Learned From Deputy
 
-The personal shift endpoint often returns only area/location IDs, so the app stores Deputy's schedule filter location list and reuses it during import. Dynamic Deputy names win over old hard-coded fallbacks because the fallback IDs can be incomplete or stale.
+The personal shift endpoint can return row-level `location` and `locationName` fields, so those values are treated as the source of truth for a user's own shifts. The app also stores Deputy's schedule filter/location lists and reuses them during import. Dynamic Deputy names win over old hard-coded fallbacks because the fallback IDs can be incomplete or stale.
 
 If Deputy sends a bare `Web / Shift` row, display code may apply a narrow known-event fallback from user-provided legacy roster data. These fallbacks should be date/time scoped and only fill details Deputy omitted; they must not override richer Deputy data.
 
 ## Schedule Coverage Uses Batched Searches
 
-Deputy's schedule UI can fail to expose All Locations in a headless capture, especially for non-admin users. After login, the app now uses the learned location list to query upcoming racing schedules in weekly batches. This is still read-only and staggered per user, but it gives the shared crew database better coverage than clicking track filters one by one.
+Deputy's schedule UI can fail to expose All Locations in a headless capture, especially for non-admin users. After login, the app now queries upcoming schedule data in weekly windows using Deputy's all-location search mode, with selected known racing locations as a fallback. This is still read-only and staggered per user, but it gives the shared crew database better coverage than clicking track filters one by one.
 
-Deputy rejects the tempting `areaIds` schedule-search shape with invalid-format errors, so the app does not use targeted area-ID searches. Area overrides are allowed only for confirmed Deputy IDs, such as Joshua's H-Cambridge Side 1 area, and should be treated as display/import fallbacks rather than the primary data source. Overrides also relabel existing saved rows at display time, so old `Web / Shift` rows can improve without waiting for Deputy to resend every field.
+The direct search tries Deputy's all-location schedule mode first because it covers the same shared crew rows with fewer requests. If that fails, it falls back to selected known racing location IDs. Static IDs are only a safety net for display/import gaps and should be corrected whenever live Deputy row metadata disagrees with them.
+
+Deputy rejects the tempting `areaIds` schedule-search shape with invalid-format errors, so the app does not use targeted area-ID searches. Area overrides are allowed only for confirmed Deputy IDs, such as the H-Cambridge position and vehicle areas seen in user captures, and should be treated as display/import fallbacks rather than the primary data source. Overrides also relabel existing saved rows at display time, so old `Web / Shift` rows can improve without waiting for Deputy to resend every field.
 
 ## Stagger User Syncs
 
@@ -84,4 +86,6 @@ Office and Clow Place are treated as equivalent base labels for lookup.
 
 ## Public Racing Calendars
 
-Love Racing's public RaceInfo/calendar pages expose meeting date, club/meeting, and racecourse information in the page content, but not dependable Trackside start/finish/crew data. That can be useful later as a faint grey planning overlay for known tracks, but it must stay visually and logically separate from Deputy rostered shifts. It should never overlap or override Deputy data.
+Love Racing's public RaceInfo/calendar pages expose meeting date, club/meeting, and racecourse information in the page content, but not dependable Trackside start/finish/crew data. The app stores matching future rows in `love_racing_meetings` only for locations already known from collected roster data.
+
+Love Racing entries are planning hints, not shifts. They render with a Love Racing gold/location-colour gradient and are suppressed when confirmed Deputy data already exists for that user/date/location. This keeps the calendar useful without confusing public race meetings with rostered work.

@@ -187,6 +187,126 @@
     </article>
   </section>
 
+  <section class="settings-grid settings-grid-two roster-insights-grid">
+    <article class="settings-panel roster-insights-panel">
+      <div class="section-heading">
+        <h2>Roster Stats</h2>
+      </div>
+      <div class="stats-card-grid">
+        <div class="stat-card">
+          <span>Last 30 days</span>
+          <strong>{{ roster_insights.past_30_hours|hours }}</strong>
+          <small>{{ roster_insights.past_30_count }} shifts</small>
+        </div>
+        <div class="stat-card">
+          <span>Last 90 days</span>
+          <strong>{{ roster_insights.past_90_hours|hours }}</strong>
+          <small>{{ roster_insights.past_90_count }} shifts</small>
+        </div>
+        <div class="stat-card">
+          <span>Upcoming</span>
+          <strong>{{ roster_insights.upcoming_count }}</strong>
+          <small>rostered shifts</small>
+        </div>
+        <div class="stat-card">
+          <span>Known tracks</span>
+          <strong>{{ roster_insights.track_count }}</strong>
+          <small>{{ roster_insights.changed_count }} changed</small>
+        </div>
+      </div>
+      <div class="stats-chart-grid">
+        <div class="stats-chart">
+          <h3>Most Worked Locations</h3>
+          {% for item in roster_insights.top_tracks %}
+            <div class="stat-bar-row">
+              <span>{{ item.label }}</span>
+              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
+              <strong>{{ item.value }}</strong>
+            </div>
+          {% else %}
+            <p class="muted">No roster history yet.</p>
+          {% endfor %}
+        </div>
+        <div class="stats-chart">
+          <h3>Positions</h3>
+          {% for item in roster_insights.top_roles %}
+            <div class="stat-bar-row">
+              <span>{{ item.label }}</span>
+              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
+              <strong>{{ item.value }}</strong>
+            </div>
+          {% else %}
+            <p class="muted">No position data yet.</p>
+          {% endfor %}
+        </div>
+        <div class="stats-chart">
+          <h3>Hours By Location</h3>
+          {% for item in roster_insights.track_hours %}
+            <div class="stat-bar-row">
+              <span>{{ item.label }}</span>
+              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
+              <strong>{{ item.value|hours }}</strong>
+            </div>
+          {% else %}
+            <p class="muted">No hours yet.</p>
+          {% endfor %}
+        </div>
+        <div class="stats-chart">
+          <h3>Days Worked</h3>
+          {% for item in roster_insights.weekday_counts %}
+            <div class="stat-bar-row">
+              <span>{{ item.label }}</span>
+              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
+              <strong>{{ item.value }}</strong>
+            </div>
+          {% else %}
+            <p class="muted">No weekday pattern yet.</p>
+          {% endfor %}
+        </div>
+      </div>
+    </article>
+
+    <article class="settings-panel love-racing-panel">
+      <div class="section-heading">
+        <h2>Planning Race Days</h2>
+      </div>
+      <div class="stats-card-grid stats-card-grid-three">
+        <div class="stat-card">
+          <span>Upcoming</span>
+          <strong>{{ love_racing_snapshot.upcoming_rows }}</strong>
+          <small>Love Racing dates</small>
+        </div>
+        <div class="stat-card">
+          <span>Locations</span>
+          <strong>{{ love_racing_snapshot.location_count }}</strong>
+          <small>known matches</small>
+        </div>
+        <div class="stat-card">
+          <span>Last scan</span>
+          <strong>{{ love_racing_snapshot.last_synced_at|datetime if love_racing_snapshot.last_synced_at else "Never" }}</strong>
+          <small>Deputy still wins</small>
+        </div>
+      </div>
+      <form action="/settings/love-racing-refresh" method="post" class="settings-form compact-settings-form">
+        <button class="button button-secondary" type="submit">Refresh Planning Calendar</button>
+      </form>
+      <p class="muted">These are public Love Racing race days at locations this crew already knows about. They are planning hints only; confirmed Deputy roster data takes priority on the calendar.</p>
+      {% if love_racing_snapshot.upcoming %}
+        <div class="planning-list">
+          {% for meeting in love_racing_snapshot.upcoming %}
+            <a class="planning-row" href="{{ meeting.source_url }}" target="_blank" rel="noopener" style="{{ meeting.colour_style }}">
+              <span>{{ meeting.date_label }}</span>
+              <strong>{{ meeting.location_label }}</strong>
+              <small>{{ meeting.club_name or "Love Racing" }}</small>
+            </a>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="empty-state">No Love Racing planning dates saved yet.</div>
+      {% endif %}
+    </article>
+  </section>
+
   <details class="table-panel diagnostics-panel">
     <summary>Report An Error</summary>
     <div class="diagnostics-content">
