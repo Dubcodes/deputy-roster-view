@@ -129,6 +129,7 @@ def _candidate_rows(text: str) -> list[str]:
         start = match.start()
         end = matches[index + 1].start() if index + 1 < len(matches) else min(len(text), match.end() + 260)
         row_text = re.sub(r"\s+", " ", text[start:end]).strip()
+        row_text = _trim_section_tail(row_text)
         if row_text:
             rows.append(row_text)
     return rows
@@ -207,7 +208,17 @@ def _match_known_location(row_text: str, aliases: list[tuple[str, str, str]]) ->
 
 
 def _club_name_from_row(row_text: str, racecourse: str) -> str:
-    text = DATE_RE.sub("", row_text, count=1).strip(" -")
+    text = _trim_section_tail(DATE_RE.sub("", row_text, count=1).strip(" -"))
     text = re.sub(re.escape(racecourse), "", text, flags=re.IGNORECASE).strip(" -")
     text = re.sub(r"\b(P|TRIAL|Trial|Trials)\b$", "", text).strip()
     return re.sub(r"\s+", " ", text)[:120]
+
+
+def _trim_section_tail(row_text: str) -> str:
+    parts = re.split(
+        r"\b(?:Fields|Nominations|Results|Race Meeting Calendar|Trials)\s+Date\b",
+        row_text,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )
+    return parts[0].strip()

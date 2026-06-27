@@ -291,6 +291,28 @@
         <button class="button button-secondary" type="submit">Refresh Planning Calendar</button>
       </form>
       <p class="muted">These are public Love Racing race days at locations this crew already knows about. They are planning hints only; confirmed Deputy roster data takes priority on the calendar.</p>
+      <div class="planning-scan-status{% if love_racing_status.status == 'error' %} is-error{% endif %}">
+        <span>Last scan</span>
+        <strong>
+          {% if love_racing_status.checked_at %}
+            {{ love_racing_status.checked_at|datetime }} · {{ love_racing_status.status or "unknown" }}
+          {% else %}
+            Not run yet
+          {% endif %}
+        </strong>
+        {% if love_racing_status.message %}
+          <p>{{ love_racing_status.message }}</p>
+        {% endif %}
+        {% if love_racing_status.error %}
+          <p>{{ love_racing_status.error }}</p>
+        {% endif %}
+        <small>
+          {{ love_racing_status.fetched_rows }} public rows ·
+          {{ love_racing_status.matched_rows }} matched ·
+          {{ love_racing_status.saved_rows }} saved ·
+          {{ love_racing_status.known_locations }} known locations
+        </small>
+      </div>
       {% if love_racing_snapshot.upcoming %}
         <div class="planning-list">
           {% for meeting in love_racing_snapshot.upcoming %}

@@ -38,6 +38,7 @@ from .database import (
     fetch_shifts_for_travel_learning,
     get_calendar_url,
     get_calendar_url_source,
+    get_app_setting,
     get_deputy_user_secret,
     get_deputy_schedule_snapshot,
     get_app_user,
@@ -102,7 +103,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.28.1"
+APP_BUILD = "2026.06.28.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -3517,6 +3518,16 @@ def settings_view(request: Request, notice: str | None = None) -> object:
         decorate_love_racing_meeting(item)
         for item in love_racing_snapshot.get("upcoming", [])
     ]
+    love_racing_status = {
+        "status": get_app_setting("love_racing_last_status", ""),
+        "checked_at": get_app_setting("love_racing_last_checked_at", ""),
+        "message": get_app_setting("love_racing_last_message", ""),
+        "error": get_app_setting("love_racing_last_error", ""),
+        "fetched_rows": get_app_setting("love_racing_last_fetched_rows", "0"),
+        "matched_rows": get_app_setting("love_racing_last_matched_rows", "0"),
+        "saved_rows": get_app_setting("love_racing_last_saved_rows", "0"),
+        "known_locations": get_app_setting("love_racing_last_known_locations", "0"),
+    }
     user_sync_state = get_user_sync_state(owner_user_id) if owner_user_id is not None else None
     account_user = get_app_user(owner_user_id) if owner_user_id is not None else None
     account_secret = get_deputy_user_secret(owner_user_id) if owner_user_id is not None else None
@@ -3556,6 +3567,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "roster_snapshot": roster_snapshot,
             "roster_insights": roster_insights,
             "love_racing_snapshot": love_racing_snapshot,
+            "love_racing_status": love_racing_status,
             "open_schedule_shifts": visible_open_schedule_shifts(),
             "love_racing_url": LOVE_RACING_URL,
             "theme_groups": THEME_GROUPS,
@@ -3586,24 +3598,49 @@ async def save_theme_settings(request: Request) -> RedirectResponse:
 @app.post("/settings/love-racing-refresh")
 def refresh_love_racing_calendar(request: Request) -> RedirectResponse:
     settings = get_settings()
+    checked_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
     today = datetime.now(settings.timezone).date()
+    known_locations = list_known_racecourse_names()
     try:
-        result = fetch_love_racing_meetings(list_known_racecourse_names(), today=today)
-        saved = save_love_racing_meetings(result.meetings, datetime.now(settings.timezone).isoformat(timespec="seconds"))
+        result = fetch_love_racing_meetings(known_locations, today=today)
+        saved = save_love_racing_meetings(result.meetings, checked_at)
+        if saved:
+            status = "ok"
+            message = f"Love Racing planning calendar updated. {saved} known future race days saved."
+        else:
+            status = "empty"
+            message = (
+                "Love Racing scan ran, but no future race days matched known worked locations. "
+                f"It saw {result.fetched_rows} public date rows."
+            )
         update_app_settings(
             {
-                "love_racing_last_sync_at": datetime.now(settings.timezone).isoformat(timespec="seconds"),
-                "love_racing_last_message": f"{saved} known future race days saved from {result.fetched_rows} public rows.",
+                "love_racing_last_status": status,
+                "love_racing_last_sync_at": checked_at if saved else get_app_setting("love_racing_last_sync_at", ""),
+                "love_racing_last_checked_at": checked_at,
+                "love_racing_last_message": message,
+                "love_racing_last_error": "",
+                "love_racing_last_fetched_rows": str(result.fetched_rows),
+                "love_racing_last_matched_rows": str(result.matched_rows),
+                "love_racing_last_saved_rows": str(saved),
+                "love_racing_last_known_locations": str(len(known_locations)),
             }
         )
-        message = f"Love Racing planning calendar updated. {saved} known future race days saved."
     except Exception as exc:
+        error_detail = f"{type(exc).__name__}: {str(exc) or '(no message)'}"
         update_app_settings(
             {
-                "love_racing_last_message": f"Love Racing scan failed: {type(exc).__name__}",
+                "love_racing_last_status": "error",
+                "love_racing_last_checked_at": checked_at,
+                "love_racing_last_message": "Love Racing scan failed.",
+                "love_racing_last_error": error_detail[:500],
+                "love_racing_last_fetched_rows": "0",
+                "love_racing_last_matched_rows": "0",
+                "love_racing_last_saved_rows": "0",
+                "love_racing_last_known_locations": str(len(known_locations)),
             }
         )
-        message = "Love Racing scan failed. Try again later or check diagnostics."
+        message = f"Love Racing scan failed: {error_detail[:180]}"
     return RedirectResponse(url=notice_url("/settings", message), status_code=303)
 
 
