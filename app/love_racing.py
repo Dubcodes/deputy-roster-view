@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from html import unescape
 
 import requests
@@ -13,6 +14,23 @@ from .database import calendar_location_key
 
 LOVE_RACING_URL = "https://loveracing.nz/RaceInfo.aspx#bm-meeting-calendar"
 LOVE_RACING_FETCH_URL = "https://loveracing.nz/RaceInfo.aspx"
+LOVE_RACING_CALENDAR_ENDPOINT = "https://loveracing.nz/ServerScript/RaceInfo.aspx/GetCalendarEvents"
+LOVE_RACING_FETCH_URLS = (
+    LOVE_RACING_CALENDAR_ENDPOINT,
+    "https://www.loveracing.nz/ServerScript/RaceInfo.aspx/GetCalendarEvents",
+)
+LOVE_RACING_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-NZ,en;q=0.9",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Referer": "https://loveracing.nz/",
+}
 MONTHS = {
     "jan": 1,
     "january": 1,
@@ -54,27 +72,144 @@ class LoveRacingResult:
     fetched_rows: int
     matched_rows: int
     message: str
+    source_url: str = LOVE_RACING_FETCH_URL
+    status_code: int = 0
+    content_length: int = 0
+    attempts: tuple[str, ...] = ()
+
+
+class LoveRacingFetchError(RuntimeError):
+    def __init__(self, attempts: list[str]) -> None:
+        self.attempts = tuple(attempts)
+        super().__init__("Love Racing request was blocked or failed. " + " | ".join(attempts))
 
 
 def fetch_love_racing_meetings(known_locations: list[str], today: date | None = None) -> LoveRacingResult:
     today = today or date.today()
-    response = requests.get(
-        LOVE_RACING_FETCH_URL,
-        timeout=20,
-        headers={
-            "User-Agent": "DeputyRosterView/0.5 (+private planning calendar)",
-            "Accept": "text/html,application/xhtml+xml",
-        },
-    )
-    response.raise_for_status()
-    text = response.text
-    meetings = parse_love_racing_meetings(text, known_locations=known_locations, today=today)
+    response, attempts, events = _fetch_love_racing_events(today)
+    meetings = parse_love_racing_events(events, known_locations=known_locations, today=today)
     return LoveRacingResult(
         meetings=meetings,
-        fetched_rows=len(_candidate_rows(_page_text(text))),
+        fetched_rows=len(events),
         matched_rows=len(meetings),
         message=f"Love Racing scan found {len(meetings)} known future race days.",
+        source_url=response.url,
+        status_code=response.status_code,
+        content_length=len(response.content or b""),
+        attempts=tuple(attempts),
     )
+
+
+def _fetch_love_racing_events(today: date) -> tuple[requests.Response, list[str], list[dict[str, object]]]:
+    attempts: list[str] = []
+    start_day = today - timedelta(days=1)
+    end_day = today + timedelta(days=220)
+    payload = {
+        "start": start_day.strftime("%d-%b-%Y"),
+        "end": end_day.strftime("%d-%b-%Y"),
+    }
+    with requests.Session() as session:
+        session.headers.update(LOVE_RACING_HEADERS)
+        session.headers.update(
+            {
+                "Content-Type": "application/json; charset=utf-8",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+        )
+        for url in LOVE_RACING_FETCH_URLS:
+            try:
+                response = session.post(url, json=payload, timeout=25, allow_redirects=True)
+            except requests.RequestException as exc:
+                attempts.append(f"{url}: {type(exc).__name__}: {exc}")
+                continue
+            attempts.append(f"{url}: HTTP {response.status_code} ({len(response.content or b'')} bytes)")
+            if response.status_code == 200 and response.text.strip():
+                try:
+                    wrapper = response.json()
+                    events = json.loads(wrapper.get("d") or "[]")
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    attempts[-1] = f"{url}: JSON parse failed: {exc}"
+                    continue
+                if isinstance(events, list):
+                    return response, attempts, [event for event in events if isinstance(event, dict)]
+                attempts[-1] = f"{url}: JSON payload was not a list"
+                continue
+            if response.status_code not in {403, 404, 429, 500, 502, 503, 504}:
+                try:
+                    response.raise_for_status()
+                except requests.HTTPError as exc:
+                    attempts[-1] = f"{url}: {type(exc).__name__}: {exc}"
+    raise LoveRacingFetchError(attempts)
+
+
+def parse_love_racing_events(
+    events: list[dict[str, object]],
+    known_locations: list[str],
+    today: date | None = None,
+) -> list[dict[str, object]]:
+    today = today or date.today()
+    aliases = _location_aliases(known_locations)
+    meetings: list[dict[str, object]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for event in events:
+        meeting_type = str(event.get("WebMeetingType") or "").strip().upper()
+        if meeting_type and meeting_type != "R":
+            continue
+        meeting_date = _meeting_date_from_event(event)
+        if meeting_date is None or meeting_date < today:
+            continue
+        row_text = _event_text(event)
+        match = _match_known_location(row_text, aliases)
+        if match is None:
+            continue
+        racecourse, racecourse_key = match
+        club_name = str(event.get("Club") or event.get("MarketingName") or "").strip()
+        dedupe_key = (meeting_date.isoformat(), racecourse_key, calendar_location_key(club_name))
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        source_hash = hashlib.sha256("|".join(dedupe_key + (row_text,)).encode("utf-8")).hexdigest()
+        meetings.append(
+            {
+                "date": meeting_date.isoformat(),
+                "racecourse": racecourse,
+                "racecourse_key": racecourse_key,
+                "club_name": club_name,
+                "source_url": LOVE_RACING_URL,
+                "source_hash": source_hash,
+                "raw_text": row_text,
+            }
+        )
+    return meetings
+
+
+def _event_text(event: dict[str, object]) -> str:
+    return " ".join(
+        str(event.get(key) or "").strip()
+        for key in ("Racecourse", "TrackAAPName", "Club", "MarketingName", "WebMeetingType")
+        if str(event.get(key) or "").strip()
+    )
+
+
+def _meeting_date_from_event(event: dict[str, object]) -> date | None:
+    raw = str(event.get("RaceDate") or "")
+    match = re.search(r"/Date\((\d+)", raw)
+    if match:
+        try:
+            return (datetime.utcfromtimestamp(int(match.group(1)) / 1000) + timedelta(hours=12)).date()
+        except (OSError, OverflowError, ValueError):
+            return None
+    day = str(event.get("Day") or "").strip()
+    month = str(event.get("Month") or event.get("MonthName") or "").strip().lower()
+    year = str(event.get("Year") or "").strip()
+    if day and month and year:
+        month_number = MONTHS.get(month)
+        if month_number:
+            try:
+                return date(int(year), month_number, int(day))
+            except ValueError:
+                return None
+    return None
 
 
 def parse_love_racing_meetings(html: str, known_locations: list[str], today: date | None = None) -> list[dict[str, object]]:

@@ -32,6 +32,7 @@ from .database import (
     ensure_user_sync_state,
     fetch_open_deputy_schedule_between,
     fetch_open_deputy_schedule_shifts,
+    fetch_tbc_deputy_schedule_between,
     fetch_love_racing_meetings_between,
     fetch_deputy_schedule_for_date,
     fetch_deputy_schedule_areas_for_locations,
@@ -103,7 +104,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.28.2"
+APP_BUILD = "2026.06.29.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -2281,14 +2282,28 @@ def bar_items(counter: Counter, limit: int = 8) -> list[dict[str, object]]:
     return items
 
 
+def date_range_label(start_date: date, end_date: date) -> str:
+    if start_date.year == end_date.year:
+        return f"{start_date.strftime('%d %b')} to {end_date.strftime('%d %b %Y')}"
+    return f"{start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')}"
+
+
 def build_roster_insights(owner_user_id: int | None, today: date) -> dict[str, object]:
-    start_date = (today - timedelta(days=90)).isoformat()
-    end_date = (today + timedelta(days=180)).isoformat()
+    start_day = today - timedelta(days=90)
+    end_day = today + timedelta(days=180)
+    start_date = start_day.isoformat()
+    end_date = end_day.isoformat()
     shifts = [
         decorate_shift(row)
         for row in fetch_shifts_between(start_date, end_date, owner_user_id=owner_user_id)
         if not int(row["deleted_from_source"] or 0)
     ]
+    shared_shifts = [
+        decorate_shift(row)
+        for row in fetch_shifts_between(start_date, end_date, owner_user_id=None)
+        if not int(row["deleted_from_source"] or 0)
+    ]
+    tbc_end_day = today + timedelta(days=90)
     past_30_start = today - timedelta(days=30)
     past_90_start = today - timedelta(days=90)
     past_30 = [
@@ -2301,6 +2316,10 @@ def build_roster_insights(owner_user_id: int | None, today: date) -> dict[str, o
     ]
     upcoming = [
         shift for shift in shifts
+        if str(shift.get("date") or "") >= today.isoformat()
+    ]
+    shared_upcoming = [
+        shift for shift in shared_shifts
         if str(shift.get("date") or "") >= today.isoformat()
     ]
     track_counts: Counter[str] = Counter()
@@ -2318,7 +2337,50 @@ def build_roster_insights(owner_user_id: int | None, today: date) -> dict[str, o
             weekday_counts[date.fromisoformat(shift_date).strftime("%a")] += 1
         except ValueError:
             pass
+    shared_track_counts: Counter[str] = Counter()
+    shared_role_counts: Counter[str] = Counter()
+    shared_track_hours: Counter[str] = Counter()
+    shared_owner_ids: set[int] = set()
+    for shift in shared_shifts:
+        track = str(shift.get("track_label") or "Unknown").strip() or "Unknown"
+        role = str(shift.get("role_chain_label") or shift.get("role_full_label") or shift.get("role_label") or "Shift").strip()
+        shared_track_counts[track] += 1
+        shared_role_counts[role] += 1
+        shared_track_hours[track] += float(shift_hours_value(shift) or 0)
+        try:
+            owner_id = int(shift.get("owner_user_id") or 0)
+        except (TypeError, ValueError):
+            owner_id = 0
+        if owner_id:
+            shared_owner_ids.add(owner_id)
+
+    tbc_rows = []
+    tbc_position_counts: Counter[str] = Counter()
+    tbc_location_counts: Counter[str] = Counter()
+    for row in fetch_tbc_deputy_schedule_between(today.isoformat(), tbc_end_day.isoformat(), limit=80):
+        item = decorate_schedule_row(row)
+        area = str(item.get("area_display") or "").strip()
+        if not area or schedule_area_is_hidden(area) or schedule_area_is_vehicle(area):
+            continue
+        if schedule_label_key(area) in {"fm", "floormanager"}:
+            continue
+        location = str(item.get("location_name") or item.get("area_location_id") or "Unknown").strip() or "Unknown"
+        try:
+            item_date = date.fromisoformat(str(item.get("date") or ""))
+            item["date_label"] = item_date.strftime("%a %d %b")
+        except ValueError:
+            item["date_label"] = str(item.get("date") or "")
+        item["location_label"] = display_track_label(location)
+        tbc_rows.append(item)
+        tbc_position_counts[area] += 1
+        tbc_location_counts[item["location_label"]] += 1
+
     return {
+        "range_label": date_range_label(start_day, end_day),
+        "past_30_label": date_range_label(past_30_start, today),
+        "past_90_label": date_range_label(past_90_start, today),
+        "upcoming_label": date_range_label(today, end_day),
+        "tbc_label": date_range_label(today, tbc_end_day),
         "shift_count": len(shifts),
         "past_30_count": len(past_30),
         "past_30_hours": sum(float(shift_hours_value(shift) or 0) for shift in past_30),
@@ -2331,6 +2393,17 @@ def build_roster_insights(owner_user_id: int | None, today: date) -> dict[str, o
         "top_roles": bar_items(role_counts),
         "track_hours": bar_items(Counter({label: round(value, 2) for label, value in track_hours.items()})),
         "weekday_counts": bar_items(weekday_counts, limit=7),
+        "shared_shift_count": len(shared_shifts),
+        "shared_upcoming_count": len(shared_upcoming),
+        "shared_people_count": len(shared_owner_ids),
+        "shared_hours": sum(float(shift_hours_value(shift) or 0) for shift in shared_shifts),
+        "shared_top_tracks": bar_items(shared_track_counts, limit=10),
+        "shared_top_roles": bar_items(shared_role_counts, limit=10),
+        "shared_track_hours": bar_items(Counter({label: round(value, 2) for label, value in shared_track_hours.items()}), limit=10),
+        "tbc_count": len(tbc_rows),
+        "tbc_rows": tbc_rows[:16],
+        "tbc_positions": bar_items(tbc_position_counts, limit=8),
+        "tbc_locations": bar_items(tbc_location_counts, limit=8),
     }
 
 
@@ -3527,6 +3600,10 @@ def settings_view(request: Request, notice: str | None = None) -> object:
         "matched_rows": get_app_setting("love_racing_last_matched_rows", "0"),
         "saved_rows": get_app_setting("love_racing_last_saved_rows", "0"),
         "known_locations": get_app_setting("love_racing_last_known_locations", "0"),
+        "source_url": get_app_setting("love_racing_last_source_url", ""),
+        "status_code": get_app_setting("love_racing_last_status_code", ""),
+        "content_length": get_app_setting("love_racing_last_content_length", ""),
+        "attempts": get_app_setting("love_racing_last_attempts", ""),
     }
     user_sync_state = get_user_sync_state(owner_user_id) if owner_user_id is not None else None
     account_user = get_app_user(owner_user_id) if owner_user_id is not None else None
@@ -3624,6 +3701,10 @@ def refresh_love_racing_calendar(request: Request) -> RedirectResponse:
                 "love_racing_last_matched_rows": str(result.matched_rows),
                 "love_racing_last_saved_rows": str(saved),
                 "love_racing_last_known_locations": str(len(known_locations)),
+                "love_racing_last_source_url": result.source_url,
+                "love_racing_last_status_code": str(result.status_code),
+                "love_racing_last_content_length": str(result.content_length),
+                "love_racing_last_attempts": " | ".join(result.attempts),
             }
         )
     except Exception as exc:
@@ -3638,6 +3719,10 @@ def refresh_love_racing_calendar(request: Request) -> RedirectResponse:
                 "love_racing_last_matched_rows": "0",
                 "love_racing_last_saved_rows": "0",
                 "love_racing_last_known_locations": str(len(known_locations)),
+                "love_racing_last_source_url": "",
+                "love_racing_last_status_code": "",
+                "love_racing_last_content_length": "",
+                "love_racing_last_attempts": " | ".join(getattr(exc, "attempts", ()) or ()),
             }
         )
         message = f"Love Racing scan failed: {error_detail[:180]}"

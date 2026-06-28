@@ -191,22 +191,23 @@
     <article class="settings-panel roster-insights-panel">
       <div class="section-heading">
         <h2>Roster Stats</h2>
+        <span>{{ roster_insights.range_label }}</span>
       </div>
       <div class="stats-card-grid">
         <div class="stat-card">
           <span>Last 30 days</span>
           <strong>{{ roster_insights.past_30_hours|hours }}</strong>
-          <small>{{ roster_insights.past_30_count }} shifts</small>
+          <small>{{ roster_insights.past_30_count }} shifts · {{ roster_insights.past_30_label }}</small>
         </div>
         <div class="stat-card">
           <span>Last 90 days</span>
           <strong>{{ roster_insights.past_90_hours|hours }}</strong>
-          <small>{{ roster_insights.past_90_count }} shifts</small>
+          <small>{{ roster_insights.past_90_count }} shifts · {{ roster_insights.past_90_label }}</small>
         </div>
         <div class="stat-card">
           <span>Upcoming</span>
           <strong>{{ roster_insights.upcoming_count }}</strong>
-          <small>rostered shifts</small>
+          <small>your shifts · {{ roster_insights.upcoming_label }}</small>
         </div>
         <div class="stat-card">
           <span>Known tracks</span>
@@ -264,6 +265,116 @@
           {% endfor %}
         </div>
       </div>
+      <div class="section-heading section-heading-tight">
+        <h3>Shared Crew Schedule</h3>
+        <span>{{ roster_insights.range_label }}</span>
+      </div>
+      <div class="stats-card-grid">
+        <div class="stat-card">
+          <span>Shared shifts</span>
+          <strong>{{ roster_insights.shared_shift_count }}</strong>
+          <small>all captured users</small>
+        </div>
+        <div class="stat-card">
+          <span>Shared upcoming</span>
+          <strong>{{ roster_insights.shared_upcoming_count }}</strong>
+          <small>{{ roster_insights.upcoming_label }}</small>
+        </div>
+        <div class="stat-card">
+          <span>Crew members</span>
+          <strong>{{ roster_insights.shared_people_count }}</strong>
+          <small>accounts with roster data</small>
+        </div>
+        <div class="stat-card">
+          <span>Shared hours</span>
+          <strong>{{ roster_insights.shared_hours|hours }}</strong>
+          <small>captured roster total</small>
+        </div>
+        <div class="stat-card">
+          <span>TBC slots</span>
+          <strong>{{ roster_insights.tbc_count }}</strong>
+          <small>{{ roster_insights.tbc_label }}</small>
+        </div>
+      </div>
+      <div class="stats-chart-grid">
+        <div class="stats-chart">
+          <h3>Shared Locations</h3>
+          {% for item in roster_insights.shared_top_tracks %}
+            <div class="stat-bar-row">
+              <span>{{ item.label }}</span>
+              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
+              <strong>{{ item.value }}</strong>
+            </div>
+          {% else %}
+            <p class="muted">No shared location data yet.</p>
+          {% endfor %}
+        </div>
+        <div class="stats-chart">
+          <h3>Shared Positions</h3>
+          {% for item in roster_insights.shared_top_roles %}
+            <div class="stat-bar-row">
+              <span>{{ item.label }}</span>
+              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
+              <strong>{{ item.value }}</strong>
+            </div>
+          {% else %}
+            <p class="muted">No shared position data yet.</p>
+          {% endfor %}
+        </div>
+        <div class="stats-chart stats-chart-wide">
+          <h3>Shared Hours By Location</h3>
+          {% for item in roster_insights.shared_track_hours %}
+            <div class="stat-bar-row">
+              <span>{{ item.label }}</span>
+              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
+              <strong>{{ item.value|hours }}</strong>
+            </div>
+          {% else %}
+            <p class="muted">No shared hours yet.</p>
+          {% endfor %}
+        </div>
+        <div class="stats-chart">
+          <h3>TBC / Contractor Slots</h3>
+          <p class="muted">Captured blank/TBC crew positions only. Floor Manager TBC slots are ignored.</p>
+          {% for item in roster_insights.tbc_positions %}
+            <div class="stat-bar-row">
+              <span>{{ item.label }}</span>
+              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
+              <strong>{{ item.value }}</strong>
+            </div>
+          {% else %}
+            <p class="muted">No captured TBC crew positions in this range.</p>
+          {% endfor %}
+        </div>
+        <div class="stats-chart">
+          <h3>TBC Locations</h3>
+          {% for item in roster_insights.tbc_locations %}
+            <div class="stat-bar-row">
+              <span>{{ item.label }}</span>
+              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
+              <strong>{{ item.value }}</strong>
+            </div>
+          {% else %}
+            <p class="muted">No captured TBC locations in this range.</p>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="tbc-slot-list">
+        <div class="section-heading section-heading-tight">
+          <h3>TBC Slots</h3>
+          <span>{{ roster_insights.tbc_label }}</span>
+        </div>
+        {% for slot in roster_insights.tbc_rows %}
+          <div class="tbc-slot-row">
+            <span>{{ slot.date_label }}</span>
+            <strong>{{ slot.location_label }}</strong>
+            <span>{{ slot.area_display }}</span>
+            <small>{{ slot.time_range or "Time TBC" }}</small>
+          </div>
+        {% else %}
+          <p class="muted">No captured TBC crew positions in this range.</p>
+        {% endfor %}
+      </div>
     </article>
 
     <article class="settings-panel love-racing-panel">
@@ -311,7 +422,24 @@
           {{ love_racing_status.matched_rows }} matched ·
           {{ love_racing_status.saved_rows }} saved ·
           {{ love_racing_status.known_locations }} known locations
+          {% if love_racing_status.status_code %}
+            · HTTP {{ love_racing_status.status_code }}
+          {% endif %}
+          {% if love_racing_status.content_length %}
+            · {{ love_racing_status.content_length }} bytes
+          {% endif %}
         </small>
+        {% if love_racing_status.source_url or love_racing_status.attempts %}
+          <details class="inline-diagnostics">
+            <summary>Fetch details</summary>
+            {% if love_racing_status.source_url %}
+              <p>{{ love_racing_status.source_url }}</p>
+            {% endif %}
+            {% if love_racing_status.attempts %}
+              <p>{{ love_racing_status.attempts }}</p>
+            {% endif %}
+          </details>
+        {% endif %}
       </div>
       {% if love_racing_snapshot.upcoming %}
         <div class="planning-list">
