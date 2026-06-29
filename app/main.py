@@ -32,7 +32,7 @@ from .database import (
     ensure_user_sync_state,
     fetch_open_deputy_schedule_between,
     fetch_open_deputy_schedule_shifts,
-    fetch_tbc_deputy_schedule_between,
+    fetch_deputy_schedule_between,
     fetch_love_racing_meetings_between,
     fetch_deputy_schedule_for_date,
     fetch_deputy_schedule_areas_for_locations,
@@ -104,7 +104,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.29.1"
+APP_BUILD = "2026.06.29.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -2282,6 +2282,103 @@ def bar_items(counter: Counter, limit: int = 8) -> list[dict[str, object]]:
     return items
 
 
+def distribution_chart(counter: Counter, limit: int = 6) -> dict[str, object]:
+    positive = Counter({str(label): float(value) for label, value in counter.items() if float(value) > 0})
+    total = sum(positive.values())
+    top = positive.most_common(limit)
+    remainder = total - sum(value for _label, value in top)
+    if remainder > 0:
+        top.append(("Other", remainder))
+    items = []
+    cursor = 0.0
+    gradient_parts = []
+    for index, (label, value) in enumerate(top):
+        percent = (float(value) / total) * 100 if total else 0
+        end = cursor + percent
+        colour_index = (index % 10) + 1
+        colour = f"var(--location-colour-{colour_index})"
+        gradient_parts.append(f"{colour} {cursor:.2f}% {end:.2f}%")
+        items.append(
+            {
+                "label": label,
+                "value": value,
+                "percent": round(percent, 1),
+                "colour_style": f"--chart-colour: {colour}; --chart-width: {percent:.2f}%;",
+            }
+        )
+        cursor = end
+    return {
+        "items": items,
+        "gradient": f"conic-gradient({', '.join(gradient_parts)})" if gradient_parts else "var(--surface-raised)",
+        "total": total,
+    }
+
+
+def weekday_chart_items(counter: Counter) -> list[dict[str, object]]:
+    labels = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    maximum = max((float(counter.get(label, 0)) for label in labels), default=0)
+    return [
+        {
+            "label": label,
+            "value": counter.get(label, 0),
+            "percent": round((float(counter.get(label, 0)) / maximum) * 100) if maximum else 0,
+        }
+        for label in labels
+    ]
+
+
+def inferred_tbc_schedule(start_day: date, end_day: date) -> list[dict[str, object]]:
+    grouped_rows: dict[tuple[str, int], list[object]] = {}
+    location_names: dict[tuple[str, int], str] = {}
+    for row in fetch_deputy_schedule_between(start_day.isoformat(), end_day.isoformat()):
+        item = dict(row)
+        try:
+            location_id = int(item.get("schedule_location_id") or item.get("area_location_id") or 0)
+        except (TypeError, ValueError):
+            location_id = 0
+        date_text = str(item.get("date") or "")
+        if not date_text or not location_id:
+            continue
+        key = (date_text, location_id)
+        grouped_rows.setdefault(key, []).append(row)
+        location_names[key] = str(item.get("location_name") or location_id)
+
+    location_ids = {location_id for _date_text, location_id in grouped_rows}
+    areas_by_location: dict[int, list[object]] = {}
+    for area in fetch_deputy_schedule_areas_for_locations(location_ids):
+        areas_by_location.setdefault(int(area["location_id"]), []).append(area)
+
+    tbc_rows = []
+    seen = set()
+    for (date_text, location_id), rows in grouped_rows.items():
+        for person in schedule_people(rows, expected_areas=areas_by_location.get(location_id, [])):
+            employee_name = str(person.get("employee_name") or "").strip().lower()
+            if not person.get("placeholder") and employee_name != "tbc":
+                continue
+            position = str(person.get("position_label") or "").strip()
+            if not position or schedule_label_key(position) in {"fm", "floormanager"}:
+                continue
+            dedupe_key = (date_text, location_id, schedule_label_key(position))
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            try:
+                date_label = date.fromisoformat(date_text).strftime("%a %d %b")
+            except ValueError:
+                date_label = date_text
+            tbc_rows.append(
+                {
+                    "date": date_text,
+                    "date_label": date_label,
+                    "location_label": parse_shift_title(f"[{location_names.get((date_text, location_id), 'Unknown')}] Shift")["track_label"],
+                    "position_label": position,
+
+                }
+            )
+    return sorted(
+        tbc_rows,
+        key=lambda item: (str(item["date"]), str(item["location_label"]), str(item["position_label"])),
+    )
 def date_range_label(start_date: date, end_date: date) -> str:
     if start_date.year == end_date.year:
         return f"{start_date.strftime('%d %b')} to {end_date.strftime('%d %b %Y')}"
@@ -2326,7 +2423,7 @@ def build_roster_insights(owner_user_id: int | None, today: date) -> dict[str, o
     role_counts: Counter[str] = Counter()
     track_hours: Counter[str] = Counter()
     weekday_counts: Counter[str] = Counter()
-    for shift in shifts:
+    for shift in past_90:
         track = str(shift.get("track_label") or "Unknown").strip() or "Unknown"
         role = str(shift.get("role_chain_label") or shift.get("role_full_label") or shift.get("role_label") or "Shift").strip()
         shift_date = str(shift.get("date") or "")
@@ -2354,25 +2451,11 @@ def build_roster_insights(owner_user_id: int | None, today: date) -> dict[str, o
         if owner_id:
             shared_owner_ids.add(owner_id)
 
-    tbc_rows = []
+    tbc_rows = inferred_tbc_schedule(today, tbc_end_day)
     tbc_position_counts: Counter[str] = Counter()
     tbc_location_counts: Counter[str] = Counter()
-    for row in fetch_tbc_deputy_schedule_between(today.isoformat(), tbc_end_day.isoformat(), limit=80):
-        item = decorate_schedule_row(row)
-        area = str(item.get("area_display") or "").strip()
-        if not area or schedule_area_is_hidden(area) or schedule_area_is_vehicle(area):
-            continue
-        if schedule_label_key(area) in {"fm", "floormanager"}:
-            continue
-        location = str(item.get("location_name") or item.get("area_location_id") or "Unknown").strip() or "Unknown"
-        try:
-            item_date = date.fromisoformat(str(item.get("date") or ""))
-            item["date_label"] = item_date.strftime("%a %d %b")
-        except ValueError:
-            item["date_label"] = str(item.get("date") or "")
-        item["location_label"] = display_track_label(location)
-        tbc_rows.append(item)
-        tbc_position_counts[area] += 1
+    for item in tbc_rows:
+        tbc_position_counts[str(item["position_label"])] += 1
         tbc_location_counts[item["location_label"]] += 1
 
     return {
@@ -2393,6 +2476,11 @@ def build_roster_insights(owner_user_id: int | None, today: date) -> dict[str, o
         "top_roles": bar_items(role_counts),
         "track_hours": bar_items(Counter({label: round(value, 2) for label, value in track_hours.items()})),
         "weekday_counts": bar_items(weekday_counts, limit=7),
+        "position_mix": distribution_chart(role_counts, limit=6),
+        "location_hours_mix": distribution_chart(track_hours, limit=6),
+        "weekday_chart": weekday_chart_items(weekday_counts),
+        "shared_position_mix": distribution_chart(shared_role_counts, limit=7),
+        "shared_location_hours_mix": distribution_chart(shared_track_hours, limit=7),
         "shared_shift_count": len(shared_shifts),
         "shared_upcoming_count": len(shared_upcoming),
         "shared_people_count": len(shared_owner_ids),
@@ -3011,11 +3099,36 @@ def logout_view(request: Request) -> RedirectResponse:
     return response
 
 
+def love_racing_view_context(today: date) -> tuple[dict[str, object], dict[str, str]]:
+    snapshot = get_love_racing_snapshot(today.isoformat())
+    snapshot["upcoming"] = [
+        decorate_love_racing_meeting(item)
+        for item in snapshot.get("upcoming", [])
+    ]
+    status = {
+        "status": get_app_setting("love_racing_last_status", ""),
+        "checked_at": get_app_setting("love_racing_last_checked_at", ""),
+        "message": get_app_setting("love_racing_last_message", ""),
+        "error": get_app_setting("love_racing_last_error", ""),
+        "fetched_rows": get_app_setting("love_racing_last_fetched_rows", "0"),
+        "matched_rows": get_app_setting("love_racing_last_matched_rows", "0"),
+        "saved_rows": get_app_setting("love_racing_last_saved_rows", "0"),
+        "known_locations": get_app_setting("love_racing_last_known_locations", "0"),
+        "source_url": get_app_setting("love_racing_last_source_url", ""),
+        "status_code": get_app_setting("love_racing_last_status_code", ""),
+        "content_length": get_app_setting("love_racing_last_content_length", ""),
+        "attempts": get_app_setting("love_racing_last_attempts", ""),
+    }
+    return snapshot, status
+
+
 @app.get("/admin")
 def admin_view(request: Request, notice: str | None = None) -> object:
     user = require_admin_user(request)
     settings = get_settings()
     travel_defaults = travel_default_rows()
+    love_racing_snapshot, love_racing_status = love_racing_view_context(
+        datetime.now(settings.timezone).date())
     return templates.TemplateResponse(
         "admin.html",
         {
@@ -3030,6 +3143,9 @@ def admin_view(request: Request, notice: str | None = None) -> object:
             "overrides": list_admin_overrides(),
             "error_reports": format_error_reports(),
             "travel_defaults": travel_defaults,
+            "love_racing_snapshot": love_racing_snapshot,
+            "love_racing_status": love_racing_status,
+            "love_racing_url": LOVE_RACING_URL,
         },
     )
 
@@ -3586,25 +3702,6 @@ def settings_view(request: Request, notice: str | None = None) -> object:
         "changed": int(schedule_snapshot.get("changed_rows") or 0),
     }
     roster_insights = build_roster_insights(owner_user_id, now.date())
-    love_racing_snapshot = get_love_racing_snapshot(now.date().isoformat())
-    love_racing_snapshot["upcoming"] = [
-        decorate_love_racing_meeting(item)
-        for item in love_racing_snapshot.get("upcoming", [])
-    ]
-    love_racing_status = {
-        "status": get_app_setting("love_racing_last_status", ""),
-        "checked_at": get_app_setting("love_racing_last_checked_at", ""),
-        "message": get_app_setting("love_racing_last_message", ""),
-        "error": get_app_setting("love_racing_last_error", ""),
-        "fetched_rows": get_app_setting("love_racing_last_fetched_rows", "0"),
-        "matched_rows": get_app_setting("love_racing_last_matched_rows", "0"),
-        "saved_rows": get_app_setting("love_racing_last_saved_rows", "0"),
-        "known_locations": get_app_setting("love_racing_last_known_locations", "0"),
-        "source_url": get_app_setting("love_racing_last_source_url", ""),
-        "status_code": get_app_setting("love_racing_last_status_code", ""),
-        "content_length": get_app_setting("love_racing_last_content_length", ""),
-        "attempts": get_app_setting("love_racing_last_attempts", ""),
-    }
     user_sync_state = get_user_sync_state(owner_user_id) if owner_user_id is not None else None
     account_user = get_app_user(owner_user_id) if owner_user_id is not None else None
     account_secret = get_deputy_user_secret(owner_user_id) if owner_user_id is not None else None
@@ -3643,10 +3740,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "deputy_schedule_snapshot": schedule_snapshot,
             "roster_snapshot": roster_snapshot,
             "roster_insights": roster_insights,
-            "love_racing_snapshot": love_racing_snapshot,
-            "love_racing_status": love_racing_status,
             "open_schedule_shifts": visible_open_schedule_shifts(),
-            "love_racing_url": LOVE_RACING_URL,
             "theme_groups": THEME_GROUPS,
             "current_theme": current_theme,
             "current_theme_label": THEME_LABELS.get(current_theme, "Jade dark"),
@@ -3672,8 +3766,9 @@ async def save_theme_settings(request: Request) -> RedirectResponse:
     return response
 
 
-@app.post("/settings/love-racing-refresh")
-def refresh_love_racing_calendar(request: Request) -> RedirectResponse:
+@app.post("/admin/love-racing-refresh")
+def admin_refresh_love_racing_calendar(request: Request) -> RedirectResponse:
+    require_admin_user(request)
     settings = get_settings()
     checked_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
     today = datetime.now(settings.timezone).date()
@@ -3726,7 +3821,7 @@ def refresh_love_racing_calendar(request: Request) -> RedirectResponse:
             }
         )
         message = f"Love Racing scan failed: {error_detail[:180]}"
-    return RedirectResponse(url=notice_url("/settings", message), status_code=303)
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
 @app.post("/settings/pin")

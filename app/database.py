@@ -1904,7 +1904,7 @@ def fetch_open_deputy_schedule_between(start_date: str, end_date: str) -> list[s
     return rows
 
 
-def fetch_tbc_deputy_schedule_between(start_date: str, end_date: str, limit: int = 60) -> list[sqlite3.Row]:
+def fetch_deputy_schedule_between(start_date: str, end_date: str) -> list[sqlite3.Row]:
     with get_connection() as conn:
         rows = conn.execute(
             """
@@ -1917,23 +1917,14 @@ def fetch_tbc_deputy_schedule_between(start_date: str, end_date: str, limit: int
             LEFT JOIN deputy_schedule_locations l
               ON l.location_id = COALESCE(s.area_location_id, a.location_id)
             WHERE s.date BETWEEN ? AND ?
-              AND (
-                LOWER(TRIM(COALESCE(s.employee_name, ''))) = 'tbc'
-                OR LOWER(TRIM(COALESCE(s.employee_name, ''))) LIKE 'tbc %'
-                OR (
-                  TRIM(COALESCE(s.employee_name, '')) = ''
-                  AND COALESCE(s.is_open, 0) = 0
-                )
-              )
-              AND LOWER(TRIM(COALESCE(s.area_name, ''))) NOT IN ('fm', 'floor manager')
             ORDER BY
                 s.date ASC,
+                COALESCE(s.area_location_id, a.location_id),
                 s.start_at ASC,
                 COALESCE(s.area_roster_sort_order, 999999),
                 s.area_name ASC
-            LIMIT ?
             """,
-            (start_date, end_date, limit),
+            (start_date, end_date),
         ).fetchall()
     return rows
 

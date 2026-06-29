@@ -187,118 +187,131 @@
     </article>
   </section>
 
-  <section class="settings-grid settings-grid-two roster-insights-grid">
+  <section class="settings-grid roster-insights-grid">
     <article class="settings-panel roster-insights-panel">
       <div class="section-heading">
-        <h2>Roster Stats</h2>
-        <span>{{ roster_insights.range_label }}</span>
+        <h2>Your Roster</h2>
+        <span>{{ roster_insights.past_90_label }}</span>
       </div>
       <div class="stats-card-grid">
         <div class="stat-card">
           <span>Last 30 days</span>
           <strong>{{ roster_insights.past_30_hours|hours }}</strong>
-          <small>{{ roster_insights.past_30_count }} shifts · {{ roster_insights.past_30_label }}</small>
+          <small>{{ roster_insights.past_30_count }} shifts</small>
         </div>
         <div class="stat-card">
           <span>Last 90 days</span>
           <strong>{{ roster_insights.past_90_hours|hours }}</strong>
-          <small>{{ roster_insights.past_90_count }} shifts · {{ roster_insights.past_90_label }}</small>
+          <small>{{ roster_insights.past_90_count }} shifts</small>
         </div>
         <div class="stat-card">
           <span>Upcoming</span>
           <strong>{{ roster_insights.upcoming_count }}</strong>
-          <small>your shifts · {{ roster_insights.upcoming_label }}</small>
+          <small>{{ roster_insights.upcoming_label }}</small>
         </div>
         <div class="stat-card">
-          <span>Known tracks</span>
+          <span>Locations</span>
           <strong>{{ roster_insights.track_count }}</strong>
           <small>{{ roster_insights.changed_count }} changed</small>
         </div>
       </div>
-      <div class="stats-chart-grid">
-        <div class="stats-chart">
-          <h3>Most Worked Locations</h3>
-          {% for item in roster_insights.top_tracks %}
-            <div class="stat-bar-row">
-              <span>{{ item.label }}</span>
-              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
-              <strong>{{ item.value }}</strong>
-            </div>
-          {% else %}
-            <p class="muted">No roster history yet.</p>
-          {% endfor %}
-        </div>
-        <div class="stats-chart">
-          <h3>Positions</h3>
-          {% for item in roster_insights.top_roles %}
-            <div class="stat-bar-row">
-              <span>{{ item.label }}</span>
-              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
-              <strong>{{ item.value }}</strong>
+
+      <div class="stats-visual-grid">
+        <section class="stats-chart weekday-chart-panel">
+          <h3>Workweek</h3>
+          <div class="weekday-chart" role="img" aria-label="Shifts by weekday for {{ roster_insights.past_90_label }}">
+            {% for item in roster_insights.weekday_chart %}
+              <div class="weekday-column">
+                <strong>{{ item.value }}</strong>
+                <div class="weekday-track"><i style="height: {{ item.percent }}%;"></i></div>
+                <span>{{ item.label }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        </section>
+
+        <section class="stats-chart donut-panel">
+          <h3>Position Mix</h3>
+          {% if roster_insights.position_mix['items'] %}
+            <div class="donut-layout">
+              <div class="donut-chart" style="--donut-gradient: {{ roster_insights.position_mix.gradient }};">
+                <div><strong>{{ roster_insights.past_90_count }}</strong><span>shifts</span></div>
+              </div>
+              <div class="chart-legend">
+                {% for item in roster_insights.position_mix['items'] %}
+                  <div><i style="{{ item.colour_style }}"></i><span>{{ item.label }}</span><strong>{{ item.value|int }}</strong></div>
+                {% endfor %}
+              </div>
             </div>
           {% else %}
             <p class="muted">No position data yet.</p>
-          {% endfor %}
-        </div>
-        <div class="stats-chart">
+          {% endif %}
+        </section>
+
+        <section class="stats-chart stats-chart-wide">
           <h3>Hours By Location</h3>
-          {% for item in roster_insights.track_hours %}
-            <div class="stat-bar-row">
-              <span>{{ item.label }}</span>
-              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
-              <strong>{{ item.value|hours }}</strong>
+          {% if roster_insights.location_hours_mix['items'] %}
+            <div class="segment-chart">
+              {% for item in roster_insights.location_hours_mix['items'] %}
+                <i style="{{ item.colour_style }}" title="{{ item.label }}: {{ item.value|hours }}"></i>
+              {% endfor %}
+            </div>
+            <div class="segment-legend">
+              {% for item in roster_insights.location_hours_mix['items'] %}
+                <div><i style="{{ item.colour_style }}"></i><span>{{ item.label }}</span><strong>{{ item.value|hours }}</strong></div>
+              {% endfor %}
             </div>
           {% else %}
             <p class="muted">No hours yet.</p>
-          {% endfor %}
-        </div>
-        <div class="stats-chart">
-          <h3>Days Worked</h3>
-          {% for item in roster_insights.weekday_counts %}
-            <div class="stat-bar-row">
-              <span>{{ item.label }}</span>
-              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
-              <strong>{{ item.value }}</strong>
-            </div>
-          {% else %}
-            <p class="muted">No weekday pattern yet.</p>
-          {% endfor %}
-        </div>
+          {% endif %}
+        </section>
       </div>
-      <div class="section-heading section-heading-tight">
-        <h3>Shared Crew Schedule</h3>
+    </article>
+  </section>
+
+  <details class="table-panel shared-stats-panel">
+    <summary>
+      Shared Crew Stats
+      <span>{{ roster_insights.shared_people_count }} people · {{ roster_insights.shared_upcoming_count }} upcoming</span>
+    </summary>
+    <div class="diagnostics-content">
+      <div class="section-heading">
+        <h2>Shared Crew</h2>
         <span>{{ roster_insights.range_label }}</span>
       </div>
       <div class="stats-card-grid">
         <div class="stat-card">
-          <span>Shared shifts</span>
+          <span>Captured shifts</span>
           <strong>{{ roster_insights.shared_shift_count }}</strong>
-          <small>all captured users</small>
+          <small>{{ roster_insights.range_label }}</small>
         </div>
         <div class="stat-card">
-          <span>Shared upcoming</span>
+          <span>Upcoming</span>
           <strong>{{ roster_insights.shared_upcoming_count }}</strong>
           <small>{{ roster_insights.upcoming_label }}</small>
         </div>
         <div class="stat-card">
-          <span>Crew members</span>
+          <span>Crew</span>
           <strong>{{ roster_insights.shared_people_count }}</strong>
           <small>accounts with roster data</small>
         </div>
         <div class="stat-card">
-          <span>Shared hours</span>
+          <span>Hours</span>
           <strong>{{ roster_insights.shared_hours|hours }}</strong>
-          <small>captured roster total</small>
+          <small>{{ roster_insights.range_label }}</small>
         </div>
-        <div class="stat-card">
-          <span>TBC slots</span>
-          <strong>{{ roster_insights.tbc_count }}</strong>
-          <small>{{ roster_insights.tbc_label }}</small>
-        </div>
+        {% if roster_insights.tbc_count %}
+          <div class="stat-card">
+            <span>TBC positions</span>
+            <strong>{{ roster_insights.tbc_count }}</strong>
+            <small>{{ roster_insights.tbc_label }}</small>
+          </div>
+        {% endif %}
       </div>
-      <div class="stats-chart-grid">
-        <div class="stats-chart">
-          <h3>Shared Locations</h3>
+
+      <div class="stats-visual-grid">
+        <section class="stats-chart">
+          <h3>Busiest Locations</h3>
           {% for item in roster_insights.shared_top_tracks %}
             <div class="stat-bar-row">
               <span>{{ item.label }}</span>
@@ -308,154 +321,62 @@
           {% else %}
             <p class="muted">No shared location data yet.</p>
           {% endfor %}
-        </div>
-        <div class="stats-chart">
-          <h3>Shared Positions</h3>
-          {% for item in roster_insights.shared_top_roles %}
-            <div class="stat-bar-row">
-              <span>{{ item.label }}</span>
-              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
-              <strong>{{ item.value }}</strong>
+        </section>
+
+        <section class="stats-chart donut-panel">
+          <h3>Position Mix</h3>
+          {% if roster_insights.shared_position_mix['items'] %}
+            <div class="donut-layout">
+              <div class="donut-chart" style="--donut-gradient: {{ roster_insights.shared_position_mix.gradient }};">
+                <div><strong>{{ roster_insights.shared_shift_count }}</strong><span>shifts</span></div>
+              </div>
+              <div class="chart-legend">
+                {% for item in roster_insights.shared_position_mix['items'] %}
+                  <div><i style="{{ item.colour_style }}"></i><span>{{ item.label }}</span><strong>{{ item.value|int }}</strong></div>
+                {% endfor %}
+              </div>
             </div>
           {% else %}
             <p class="muted">No shared position data yet.</p>
-          {% endfor %}
-        </div>
-        <div class="stats-chart stats-chart-wide">
-          <h3>Shared Hours By Location</h3>
-          {% for item in roster_insights.shared_track_hours %}
-            <div class="stat-bar-row">
-              <span>{{ item.label }}</span>
-              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
-              <strong>{{ item.value|hours }}</strong>
+          {% endif %}
+        </section>
+
+        <section class="stats-chart stats-chart-wide">
+          <h3>Hours By Location</h3>
+          {% if roster_insights.shared_location_hours_mix['items'] %}
+            <div class="segment-chart">
+              {% for item in roster_insights.shared_location_hours_mix['items'] %}
+                <i style="{{ item.colour_style }}" title="{{ item.label }}: {{ item.value|hours }}"></i>
+              {% endfor %}
+            </div>
+            <div class="segment-legend">
+              {% for item in roster_insights.shared_location_hours_mix['items'] %}
+                <div><i style="{{ item.colour_style }}"></i><span>{{ item.label }}</span><strong>{{ item.value|hours }}</strong></div>
+              {% endfor %}
             </div>
           {% else %}
             <p class="muted">No shared hours yet.</p>
-          {% endfor %}
-        </div>
-        <div class="stats-chart">
-          <h3>TBC / Contractor Slots</h3>
-          <p class="muted">Captured blank/TBC crew positions only. Floor Manager TBC slots are ignored.</p>
-          {% for item in roster_insights.tbc_positions %}
-            <div class="stat-bar-row">
-              <span>{{ item.label }}</span>
-              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
-              <strong>{{ item.value }}</strong>
-            </div>
-          {% else %}
-            <p class="muted">No captured TBC crew positions in this range.</p>
-          {% endfor %}
-        </div>
-        <div class="stats-chart">
-          <h3>TBC Locations</h3>
-          {% for item in roster_insights.tbc_locations %}
-            <div class="stat-bar-row">
-              <span>{{ item.label }}</span>
-              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
-              <strong>{{ item.value }}</strong>
-            </div>
-          {% else %}
-            <p class="muted">No captured TBC locations in this range.</p>
-          {% endfor %}
-        </div>
+          {% endif %}
+        </section>
       </div>
-      <div class="tbc-slot-list">
+
+      {% if roster_insights.tbc_rows %}
         <div class="section-heading section-heading-tight">
-          <h3>TBC Slots</h3>
+          <h3>TBC Positions</h3>
           <span>{{ roster_insights.tbc_label }}</span>
         </div>
-        {% for slot in roster_insights.tbc_rows %}
-          <div class="tbc-slot-row">
-            <span>{{ slot.date_label }}</span>
-            <strong>{{ slot.location_label }}</strong>
-            <span>{{ slot.area_display }}</span>
-            <small>{{ slot.time_range or "Time TBC" }}</small>
-          </div>
-        {% else %}
-          <p class="muted">No captured TBC crew positions in this range.</p>
-        {% endfor %}
-      </div>
-    </article>
-
-    <article class="settings-panel love-racing-panel">
-      <div class="section-heading">
-        <h2>Planning Race Days</h2>
-      </div>
-      <div class="stats-card-grid stats-card-grid-three">
-        <div class="stat-card">
-          <span>Upcoming</span>
-          <strong>{{ love_racing_snapshot.upcoming_rows }}</strong>
-          <small>Love Racing dates</small>
-        </div>
-        <div class="stat-card">
-          <span>Locations</span>
-          <strong>{{ love_racing_snapshot.location_count }}</strong>
-          <small>known matches</small>
-        </div>
-        <div class="stat-card">
-          <span>Last scan</span>
-          <strong>{{ love_racing_snapshot.last_synced_at|datetime if love_racing_snapshot.last_synced_at else "Never" }}</strong>
-          <small>Deputy still wins</small>
-        </div>
-      </div>
-      <form action="/settings/love-racing-refresh" method="post" class="settings-form compact-settings-form">
-        <button class="button button-secondary" type="submit">Refresh Planning Calendar</button>
-      </form>
-      <p class="muted">These are public Love Racing race days at locations this crew already knows about. They are planning hints only; confirmed Deputy roster data takes priority on the calendar.</p>
-      <div class="planning-scan-status{% if love_racing_status.status == 'error' %} is-error{% endif %}">
-        <span>Last scan</span>
-        <strong>
-          {% if love_racing_status.checked_at %}
-            {{ love_racing_status.checked_at|datetime }} · {{ love_racing_status.status or "unknown" }}
-          {% else %}
-            Not run yet
-          {% endif %}
-        </strong>
-        {% if love_racing_status.message %}
-          <p>{{ love_racing_status.message }}</p>
-        {% endif %}
-        {% if love_racing_status.error %}
-          <p>{{ love_racing_status.error }}</p>
-        {% endif %}
-        <small>
-          {{ love_racing_status.fetched_rows }} public rows ·
-          {{ love_racing_status.matched_rows }} matched ·
-          {{ love_racing_status.saved_rows }} saved ·
-          {{ love_racing_status.known_locations }} known locations
-          {% if love_racing_status.status_code %}
-            · HTTP {{ love_racing_status.status_code }}
-          {% endif %}
-          {% if love_racing_status.content_length %}
-            · {{ love_racing_status.content_length }} bytes
-          {% endif %}
-        </small>
-        {% if love_racing_status.source_url or love_racing_status.attempts %}
-          <details class="inline-diagnostics">
-            <summary>Fetch details</summary>
-            {% if love_racing_status.source_url %}
-              <p>{{ love_racing_status.source_url }}</p>
-            {% endif %}
-            {% if love_racing_status.attempts %}
-              <p>{{ love_racing_status.attempts }}</p>
-            {% endif %}
-          </details>
-        {% endif %}
-      </div>
-      {% if love_racing_snapshot.upcoming %}
-        <div class="planning-list">
-          {% for meeting in love_racing_snapshot.upcoming %}
-            <a class="planning-row" href="{{ meeting.source_url }}" target="_blank" rel="noopener" style="{{ meeting.colour_style }}">
-              <span>{{ meeting.date_label }}</span>
-              <strong>{{ meeting.location_label }}</strong>
-              <small>{{ meeting.club_name or "Love Racing" }}</small>
-            </a>
+        <div class="tbc-slot-list">
+          {% for slot in roster_insights.tbc_rows %}
+            <div class="tbc-slot-row">
+              <span>{{ slot.date_label }}</span>
+              <strong>{{ slot.location_label }}</strong>
+              <span>{{ slot.position_label }}</span>
+            </div>
           {% endfor %}
         </div>
-      {% else %}
-        <div class="empty-state">No Love Racing planning dates saved yet.</div>
       {% endif %}
-    </article>
-  </section>
+    </div>
+  </details>
 
   <details class="table-panel diagnostics-panel">
     <summary>Report An Error</summary>

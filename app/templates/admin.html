@@ -48,9 +48,74 @@
     <p class="muted">Deactivated accounts and untrusted devices are automatically purged after 30 days. Active users are not purged. This runs the same cleanup now.</p>
   </section>
 
+  <section class="table-panel love-racing-panel">
+    <div class="section-heading">
+      <h2>Planning Race Days</h2>
+      <form action="/admin/love-racing-refresh" method="post">
+        <button class="button button-secondary" type="submit">Refresh Planning Calendar</button>
+      </form>
+    </div>
+    <div class="stats-card-grid stats-card-grid-three">
+      <div class="stat-card">
+        <span>Upcoming</span>
+        <strong>{{ love_racing_snapshot.upcoming_rows }}</strong>
+        <small>Love Racing dates</small>
+      </div>
+      <div class="stat-card">
+        <span>Locations</span>
+        <strong>{{ love_racing_snapshot.location_count }}</strong>
+        <small>known matches</small>
+      </div>
+      <div class="stat-card">
+        <span>Last scan</span>
+        <strong>{{ love_racing_snapshot.last_synced_at|datetime if love_racing_snapshot.last_synced_at else "Never" }}</strong>
+        <small>{{ love_racing_status.status or "not run" }}</small>
+      </div>
+    </div>
+
+    <div class="planning-scan-status{% if love_racing_status.status == 'error' %} is-error{% endif %}">
+      <span>Last scan</span>
+      <strong>
+        {% if love_racing_status.checked_at %}
+          {{ love_racing_status.checked_at|datetime }} · {{ love_racing_status.status or "unknown" }}
+        {% else %}
+          Not run yet
+        {% endif %}
+      </strong>
+      {% if love_racing_status.message %}<p>{{ love_racing_status.message }}</p>{% endif %}
+      {% if love_racing_status.error %}<p>{{ love_racing_status.error }}</p>{% endif %}
+      <small>
+        {{ love_racing_status.fetched_rows }} public rows ·
+        {{ love_racing_status.matched_rows }} matched ·
+        {{ love_racing_status.saved_rows }} saved ·
+        {{ love_racing_status.known_locations }} known locations
+      </small>
+      {% if love_racing_status.source_url or love_racing_status.attempts %}
+        <details class="inline-diagnostics">
+          <summary>Fetch details</summary>
+          {% if love_racing_status.source_url %}<p>{{ love_racing_status.source_url }}</p>{% endif %}
+          {% if love_racing_status.attempts %}<p>{{ love_racing_status.attempts }}</p>{% endif %}
+        </details>
+      {% endif %}
+    </div>
+
+    {% if love_racing_snapshot.upcoming %}
+      <div class="planning-list">
+        {% for meeting in love_racing_snapshot.upcoming %}
+          <a class="planning-row" href="{{ meeting.source_url }}" target="_blank" rel="noopener" style="{{ meeting.colour_style }}">
+            <span>{{ meeting.date_label }}</span>
+            <strong>{{ meeting.location_label }}</strong>
+            <small>{{ meeting.club_name or "Love Racing" }}</small>
+          </a>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
   <section class="table-panel">
     <div class="section-heading">
       <h2>Default Travel Times</h2>
+
+
     </div>
     <p class="muted">Used only when a roster note is missing either the base start time or the on-track time. Learned entries come from previous roster notes; manual entries win.</p>
     <form class="marks-form admin-override-form" action="/admin/travel-defaults" method="post">

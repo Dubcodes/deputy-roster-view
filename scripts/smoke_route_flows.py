@@ -130,9 +130,17 @@ def main() -> None:
     if inferred_calc.get("start_label") != "08:30":
         raise AssertionError(f"Expected inferred Clow Place start at 08:30, got {inferred_calc!r}")
 
+    settings_page = client.get("/settings")
+    if settings_page.status_code != 200 or "Your Roster" not in settings_page.text:
+        raise AssertionError("Expected settings page to render roster insights.")
+    if "Refresh Planning Calendar" in settings_page.text:
+        raise AssertionError("Planning refresh must remain admin-only.")
+
     admin_page = client.get("/admin")
     if admin_page.status_code != 200 or "Default Travel Times" not in admin_page.text or "/admin/travel-defaults/" not in admin_page.text:
         raise AssertionError("Expected admin page to render editable travel defaults.")
+    if "/admin/love-racing-refresh" not in admin_page.text or "Refresh Planning Calendar" not in admin_page.text:
+        raise AssertionError("Expected admin page to render the planning refresh control.")
 
     people = schedule_people(
         [
