@@ -1267,6 +1267,10 @@ def save_love_racing_meetings(meetings: list[dict[str, object]], synced_at: str 
     synced_at = synced_at or datetime.now(get_settings().timezone).isoformat(timespec="seconds")
     saved = 0
     with get_connection() as conn:
+        conn.execute(
+            "UPDATE love_racing_meetings SET is_active = 0, last_synced_at = ? WHERE is_active = 1",
+            (synced_at,),
+        )
         for meeting in meetings:
             meeting_date = str(meeting.get("date") or meeting.get("meeting_date") or "").strip()
             racecourse = str(meeting.get("racecourse") or "").strip()
@@ -1314,6 +1318,7 @@ def save_love_racing_meetings(meetings: list[dict[str, object]], synced_at: str 
                 ),
             )
             saved += 1
+        conn.execute("DELETE FROM love_racing_meetings WHERE is_active = 0")
     return saved
 
 

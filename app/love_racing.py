@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from datetime import date, datetime, timedelta
 from html import unescape
 
 import requests
+from pypdf import PdfReader
 
 from .database import calendar_location_key
 
@@ -19,6 +21,16 @@ LOVE_RACING_FETCH_URLS = (
     LOVE_RACING_CALENDAR_ENDPOINT,
     "https://www.loveracing.nz/ServerScript/RaceInfo.aspx/GetCalendarEvents",
 )
+NZTR_CALENDAR_PDF_URL = (
+    "https://nztr.co.nz/sites/nztrindustry/files/2026-05/"
+    "2026.27%20Final%20Racing%20Calendar%20-%20TAB%20NZ.pdf"
+)
+PDF_COLUMN_ANCHORS = (31.0, 249.3, 467.5, 685.8, 904.0, 1122.2, 1340.5)
+PDF_EVENT_RE = re.compile(r"\(x\d+\)", re.IGNORECASE)
+PDF_NON_THOROUGHBRED_RE = re.compile(r"\b(?:HRC|TC)\b|Harness|Metro", re.IGNORECASE)
+PDF_THOROUGHBRED_RE = re.compile(r"\b(?:RC|JC|TR|TRI|HC|RI)\b|Racing", re.IGNORECASE)
+PDF_FIRST_WEEK_RE = re.compile(r"Monday,\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", re.IGNORECASE)
+PDF_WEEK_RE = re.compile(r"(\d{1,2})-([A-Za-z]{3,9})", re.IGNORECASE)
 LOVE_RACING_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -86,13 +98,23 @@ class LoveRacingFetchError(RuntimeError):
 
 def fetch_love_racing_meetings(known_locations: list[str], today: date | None = None) -> LoveRacingResult:
     today = today or date.today()
-    response, attempts, events = _fetch_love_racing_events(today)
+    used_pdf_fallback = False
+    try:
+        response, attempts, events = _fetch_love_racing_events(today)
+    except LoveRacingFetchError as endpoint_error:
+        try:
+            response, fallback_attempts, events = _fetch_nztr_calendar_events()
+        except LoveRacingFetchError as fallback_error:
+            raise LoveRacingFetchError(list(endpoint_error.attempts) + list(fallback_error.attempts)) from fallback_error
+        attempts = list(endpoint_error.attempts) + fallback_attempts
+        used_pdf_fallback = True
     meetings = parse_love_racing_events(events, known_locations=known_locations, today=today)
+    source_label = "official NZTR calendar" if used_pdf_fallback else "Love Racing calendar"
     return LoveRacingResult(
         meetings=meetings,
         fetched_rows=len(events),
         matched_rows=len(meetings),
-        message=f"Love Racing scan found {len(meetings)} known future race days.",
+        message=f"The {source_label} found {len(meetings)} known future race days.",
         source_url=response.url,
         status_code=response.status_code,
         content_length=len(response.content or b""),
@@ -103,7 +125,7 @@ def fetch_love_racing_meetings(known_locations: list[str], today: date | None = 
 def _fetch_love_racing_events(today: date) -> tuple[requests.Response, list[str], list[dict[str, object]]]:
     attempts: list[str] = []
     start_day = today - timedelta(days=1)
-    end_day = today + timedelta(days=220)
+    end_day = today + timedelta(days=430)
     payload = {
         "start": start_day.strftime("%d-%b-%Y"),
         "end": end_day.strftime("%d-%b-%Y"),
@@ -140,6 +162,99 @@ def _fetch_love_racing_events(today: date) -> tuple[requests.Response, list[str]
                 except requests.HTTPError as exc:
                     attempts[-1] = f"{url}: {type(exc).__name__}: {exc}"
     raise LoveRacingFetchError(attempts)
+
+
+def _fetch_nztr_calendar_events() -> tuple[requests.Response, list[str], list[dict[str, object]]]:
+    attempts: list[str] = []
+    headers = dict(LOVE_RACING_HEADERS)
+    headers["Accept"] = "application/pdf,*/*;q=0.8"
+    try:
+        response = requests.get(NZTR_CALENDAR_PDF_URL, headers=headers, timeout=45, allow_redirects=True)
+    except requests.RequestException as exc:
+        raise LoveRacingFetchError([f"Official NZTR calendar: {type(exc).__name__}: {exc}"]) from exc
+    attempts.append(f"Official NZTR calendar: HTTP {response.status_code} ({len(response.content or b'')} bytes)")
+    if response.status_code != 200:
+        raise LoveRacingFetchError(attempts)
+    try:
+        events = parse_nztr_calendar_pdf(response.content)
+    except Exception as exc:
+        attempts.append(f"Official NZTR calendar parse failed: {type(exc).__name__}: {exc}")
+        raise LoveRacingFetchError(attempts) from exc
+    if not events:
+        attempts.append("Official NZTR calendar contained no thoroughbred meetings")
+        raise LoveRacingFetchError(attempts)
+    return response, attempts, events
+
+
+def parse_nztr_calendar_pdf(content: bytes) -> list[dict[str, object]]:
+    pages: list[list[tuple[float, float, str, float]]] = []
+    reader = PdfReader(io.BytesIO(content))
+    for page in reader.pages:
+        fragments: list[tuple[float, float, str, float]] = []
+
+        def collect_text(text: str, _cm: object, tm: list[float], _font: object, size: float) -> None:
+            cleaned = " ".join(str(text or "").split())
+            if cleaned:
+                fragments.append((float(tm[4]), float(tm[5]), cleaned, float(size)))
+
+        page.extract_text(visitor_text=collect_text)
+        pages.append(fragments)
+    return parse_nztr_calendar_fragments(pages)
+
+
+def parse_nztr_calendar_fragments(
+    pages: list[list[tuple[float, float, str, float]]],
+) -> list[dict[str, object]]:
+    current_year: int | None = None
+    previous_month: int | None = None
+    events: list[dict[str, object]] = []
+    for fragments in pages:
+        weeks: list[tuple[float, date]] = []
+        for x, y, text, _size in fragments:
+            full_match = PDF_FIRST_WEEK_RE.fullmatch(text)
+            if full_match:
+                month_number = MONTHS.get(full_match.group(2).lower())
+                if month_number:
+                    current_year = int(full_match.group(3))
+                    previous_month = month_number
+                    weeks.append((y, date(current_year, month_number, int(full_match.group(1)))))
+                continue
+            short_match = PDF_WEEK_RE.fullmatch(text)
+            if not short_match or x <= 1 or current_year is None:
+                continue
+            month_number = MONTHS.get(short_match.group(2).lower())
+            if not month_number:
+                continue
+            if previous_month is not None and month_number < previous_month - 6:
+                current_year += 1
+            previous_month = month_number
+            weeks.append((y, date(current_year, month_number, int(short_match.group(1)))))
+        weeks.sort(key=lambda item: item[0])
+
+        for x, y, text, _size in fragments:
+            if not PDF_EVENT_RE.search(text) or not _is_thoroughbred_pdf_event(text):
+                continue
+            prior_weeks = [week for week in weeks if week[0] < y]
+            if not prior_weeks:
+                continue
+            _week_y, monday = max(prior_weeks, key=lambda item: item[0])
+            day_index = min(range(7), key=lambda index: abs(x - PDF_COLUMN_ANCHORS[index]))
+            meeting_date = monday + timedelta(days=day_index)
+            club_name = re.sub(r"\(x\d+\).*", "", text, flags=re.IGNORECASE).split("@", 1)[0].strip(" ,")
+            events.append(
+                {
+                    "DateISO": meeting_date.isoformat(),
+                    "Racecourse": text,
+                    "Club": club_name,
+                    "MarketingName": text,
+                    "WebMeetingType": "R",
+                }
+            )
+    return events
+
+
+def _is_thoroughbred_pdf_event(text: str) -> bool:
+    return not PDF_NON_THOROUGHBRED_RE.search(text) and bool(PDF_THOROUGHBRED_RE.search(text))
 
 
 def parse_love_racing_events(
@@ -192,6 +307,12 @@ def _event_text(event: dict[str, object]) -> str:
 
 
 def _meeting_date_from_event(event: dict[str, object]) -> date | None:
+    date_iso = str(event.get("DateISO") or "").strip()
+    if date_iso:
+        try:
+            return date.fromisoformat(date_iso[:10])
+        except ValueError:
+            pass
     raw = str(event.get("RaceDate") or "")
     match = re.search(r"/Date\((\d+)", raw)
     if match:
@@ -285,6 +406,11 @@ def _meeting_date_from_row(row_text: str, year: int) -> date | None:
 
 def _location_aliases(known_locations: list[str]) -> list[tuple[str, str, str]]:
     aliases: dict[str, tuple[str, str, str]] = {}
+    known_display_keys = {
+        calendar_location_key(_display_location(location))
+        for location in known_locations
+        if calendar_location_key(_display_location(location))
+    }
 
     def add(alias: str, display: str) -> None:
         key = calendar_location_key(alias)
@@ -306,11 +432,9 @@ def _location_aliases(known_locations: list[str]) -> list[tuple[str, str, str]]:
             add("Te Rapa", display)
 
     for alias, display in {
-        "Auckland Thoroughbred Racing": "Ellerslie",
         "Ellerslie": "Ellerslie",
         "Matamata RC": "Matamata",
         "Matamata": "Matamata",
-        "Waikato TR": "Te Rapa",
         "Te Rapa": "Te Rapa",
         "Te Aroha JC": "Te Aroha",
         "Te Aroha": "Te Aroha",
@@ -321,10 +445,15 @@ def _location_aliases(known_locations: list[str]) -> list[tuple[str, str, str]]:
         "Ruakaka": "Ruakaka",
         "Cambridge": "Cambridge Synthetic",
         "Cambridge Synthetic": "Cambridge Synthetic",
+        "CAMB SYNTH": "Cambridge Synthetic",
         "Taupo": "Taupo",
         "Avondale": "Avondale",
+        "Arawa Park": "Rotorua",
+        "Whangarei RC": "Ruakaka",
     }.items():
-        add(alias, display)
+        display_key = calendar_location_key(display)
+        if any(display_key in known_key or known_key in display_key for known_key in known_display_keys):
+            add(alias, display)
     return sorted((value for value in aliases.values()), key=lambda item: len(item[1]), reverse=True)
 
 

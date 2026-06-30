@@ -40,7 +40,9 @@ All users currently belong to one shared crew pool, `Northern Crew`. When a user
 
 ### Love Racing Planning Calendar
 
-`app/love_racing.py` reads Love Racing's public race information page and extracts future meeting dates for racecourses already known from the app's collected roster/location data. Saved rows live in `love_racing_meetings` and are rendered as planning hints on `/month`.
+`app/love_racing.py` first reads Love Racing's public calendar endpoint. If that endpoint is blocked, it falls back to NZTR's official final racing-calendar PDF and extracts the positioned thoroughbred meeting rows. Only racecourses already known from collected roster/location data are retained. Saved rows live in `love_racing_meetings` and are rendered as planning hints on `/month`.
+
+`app/planning_calendar.py` is the shared refresh service used by the Admin action and the Monday 04:30 scheduler job. The PDF is parsed from memory. A successful refresh atomically replaces the previous planning snapshot and removes meetings no longer published.
 
 These rows are intentionally not shifts. They have no crew, start time, or hours, and the month view suppresses a planning hint when the signed-in user's Deputy roster already has a shift for that same date/location. Deputy data always takes priority.
 

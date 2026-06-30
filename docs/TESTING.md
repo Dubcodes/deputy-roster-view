@@ -31,6 +31,7 @@ Run this after changing account, settings, admin, or form-handling code. It crea
 
 ```powershell
 python scripts\smoke_route_flows.py
+python scripts\smoke_love_racing.py
 ```
 
 ## Manual App Checks

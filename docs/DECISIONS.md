@@ -89,3 +89,5 @@ Office and Clow Place are treated as equivalent base labels for lookup.
 Love Racing's public RaceInfo/calendar pages expose meeting date, club/meeting, and racecourse information in the page content, but not dependable Trackside start/finish/crew data. The app stores matching future rows in `love_racing_meetings` only for locations already known from collected roster data.
 
 Love Racing entries are planning hints, not shifts. They render with a Love Racing gold/location-colour gradient and are suppressed when confirmed Deputy data already exists for that user/date/location. This keeps the calendar useful without confusing public race meetings with rostered work.
+
+The live Love Racing calendar endpoint may return HTTP 403 to server-side requests. Refresh therefore falls back to NZTR's official final calendar PDF, using its positioned weekly columns and thoroughbred club codes. Static aliases may identify a known location, but must not introduce locations the collected roster data has never seen. Refresh runs weekly and replaces the prior snapshot so schedule corrections remove stale markers without retaining downloaded files.

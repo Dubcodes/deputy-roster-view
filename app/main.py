@@ -59,7 +59,6 @@ from .database import (
     get_upcoming_shifts,
     get_user_sync_state,
     init_db,
-    list_known_racecourse_names,
     list_admin_overrides,
     list_app_users,
     list_error_reports,
@@ -72,7 +71,6 @@ from .database import (
     reset_user_roster_data,
     purge_app_user,
     purge_old_inactive_records,
-    save_love_racing_meetings,
     update_deputy_user_ical_url,
     update_deputy_user_credentials,
     update_app_settings,
@@ -88,7 +86,8 @@ from .database import (
 )
 from .deputy_api import test_deputy_roster_api
 from .deputy_web import capture_and_save_deputy_web, format_capture_payload
-from .love_racing import LOVE_RACING_URL, fetch_love_racing_meetings
+from .love_racing import LOVE_RACING_URL
+from .planning_calendar import refresh_planning_calendar
 from .scheduler import get_pre_shift_status, shutdown_scheduler, start_scheduler, sync_roster_sources
 from .security import (
     SESSION_COOKIE_NAME,
@@ -104,7 +103,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.29.2"
+APP_BUILD = "2026.06.30.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -3769,59 +3768,8 @@ async def save_theme_settings(request: Request) -> RedirectResponse:
 @app.post("/admin/love-racing-refresh")
 def admin_refresh_love_racing_calendar(request: Request) -> RedirectResponse:
     require_admin_user(request)
-    settings = get_settings()
-    checked_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
-    today = datetime.now(settings.timezone).date()
-    known_locations = list_known_racecourse_names()
-    try:
-        result = fetch_love_racing_meetings(known_locations, today=today)
-        saved = save_love_racing_meetings(result.meetings, checked_at)
-        if saved:
-            status = "ok"
-            message = f"Love Racing planning calendar updated. {saved} known future race days saved."
-        else:
-            status = "empty"
-            message = (
-                "Love Racing scan ran, but no future race days matched known worked locations. "
-                f"It saw {result.fetched_rows} public date rows."
-            )
-        update_app_settings(
-            {
-                "love_racing_last_status": status,
-                "love_racing_last_sync_at": checked_at if saved else get_app_setting("love_racing_last_sync_at", ""),
-                "love_racing_last_checked_at": checked_at,
-                "love_racing_last_message": message,
-                "love_racing_last_error": "",
-                "love_racing_last_fetched_rows": str(result.fetched_rows),
-                "love_racing_last_matched_rows": str(result.matched_rows),
-                "love_racing_last_saved_rows": str(saved),
-                "love_racing_last_known_locations": str(len(known_locations)),
-                "love_racing_last_source_url": result.source_url,
-                "love_racing_last_status_code": str(result.status_code),
-                "love_racing_last_content_length": str(result.content_length),
-                "love_racing_last_attempts": " | ".join(result.attempts),
-            }
-        )
-    except Exception as exc:
-        error_detail = f"{type(exc).__name__}: {str(exc) or '(no message)'}"
-        update_app_settings(
-            {
-                "love_racing_last_status": "error",
-                "love_racing_last_checked_at": checked_at,
-                "love_racing_last_message": "Love Racing scan failed.",
-                "love_racing_last_error": error_detail[:500],
-                "love_racing_last_fetched_rows": "0",
-                "love_racing_last_matched_rows": "0",
-                "love_racing_last_saved_rows": "0",
-                "love_racing_last_known_locations": str(len(known_locations)),
-                "love_racing_last_source_url": "",
-                "love_racing_last_status_code": "",
-                "love_racing_last_content_length": "",
-                "love_racing_last_attempts": " | ".join(getattr(exc, "attempts", ()) or ()),
-            }
-        )
-        message = f"Love Racing scan failed: {error_detail[:180]}"
-    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+    result = refresh_planning_calendar()
+    return RedirectResponse(url=notice_url("/admin", str(result["message"])), status_code=303)
 
 
 @app.post("/settings/pin")

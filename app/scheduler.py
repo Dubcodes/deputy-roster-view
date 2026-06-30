@@ -22,6 +22,7 @@ from .database import (
     write_sync_log,
 )
 from .deputy_web import sync_deputy_web_schedule
+from .planning_calendar import refresh_planning_calendar
 from .sync_ics import sync_deputy_calendar
 from .user_credentials import settings_for_user
 
@@ -63,6 +64,14 @@ def start_scheduler(settings: Settings | None = None) -> BackgroundScheduler:
         run_due_user_syncs,
         trigger=IntervalTrigger(minutes=5, timezone=settings.timezone),
         id="staggered_user_sync_runner",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        refresh_planning_calendar,
+        trigger=CronTrigger(day_of_week="mon", hour=4, minute=30, timezone=settings.timezone),
+        id="weekly_planning_calendar",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
