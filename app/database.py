@@ -299,6 +299,13 @@ def init_db(settings: Settings | None = None) -> None:
                 is_active INTEGER DEFAULT 1
             );
 
+            CREATE TABLE IF NOT EXISTS planning_location_preferences (
+                location_key TEXT PRIMARY KEY,
+                display_name TEXT,
+                is_enabled INTEGER DEFAULT 1,
+                updated_at TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_shifts_date ON shifts(date);
             CREATE INDEX IF NOT EXISTS idx_shifts_start_at ON shifts(start_at);
             CREATE INDEX IF NOT EXISTS idx_shifts_changed ON shifts(changed_since_viewed);
@@ -315,6 +322,7 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_user_sync_state_next ON user_sync_state(next_sync_after, sync_in_progress);
             CREATE INDEX IF NOT EXISTS idx_travel_time_defaults_track ON travel_time_defaults(track_key, base_label);
             CREATE INDEX IF NOT EXISTS idx_love_racing_meetings_date ON love_racing_meetings(meeting_date, racecourse_key);
+            CREATE INDEX IF NOT EXISTS idx_planning_location_preferences_enabled ON planning_location_preferences(is_enabled);
             """
         )
         _ensure_default_crew_pool(conn)
@@ -1330,6 +1338,12 @@ def fetch_love_racing_meetings_between(start_date: str, end_date: str) -> list[s
             FROM love_racing_meetings
             WHERE is_active = 1
               AND meeting_date BETWEEN ? AND ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM planning_location_preferences preference
+                  WHERE preference.location_key = love_racing_meetings.racecourse_key
+                    AND preference.is_enabled = 0
+              )
             ORDER BY meeting_date ASC, racecourse ASC, id ASC
             """,
             (start_date, end_date),
@@ -1347,9 +1361,15 @@ def get_love_racing_snapshot(today: str | None = None) -> dict[str, object]:
                 COUNT(DISTINCT racecourse_key) AS location_count,
                 MIN(meeting_date) AS first_date,
                 MAX(meeting_date) AS last_date,
-                MAX(last_synced_at) AS last_synced_at
+                (SELECT MAX(last_synced_at) FROM love_racing_meetings) AS last_synced_at
             FROM love_racing_meetings
             WHERE is_active = 1
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM planning_location_preferences preference
+                  WHERE preference.location_key = love_racing_meetings.racecourse_key
+                    AND preference.is_enabled = 0
+              )
             """,
             (today,),
         ).fetchone()
@@ -1359,6 +1379,12 @@ def get_love_racing_snapshot(today: str | None = None) -> dict[str, object]:
             FROM love_racing_meetings
             WHERE is_active = 1
               AND meeting_date >= ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM planning_location_preferences preference
+                  WHERE preference.location_key = love_racing_meetings.racecourse_key
+                    AND preference.is_enabled = 0
+              )
             ORDER BY meeting_date ASC, racecourse ASC
             LIMIT 8
             """,
@@ -1373,6 +1399,63 @@ def get_love_racing_snapshot(today: str | None = None) -> dict[str, object]:
         "last_synced_at": row["last_synced_at"] or "" if row else "",
         "upcoming": [dict(item) for item in upcoming],
     }
+
+
+def list_planning_locations() -> list[dict[str, object]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                meetings.racecourse_key AS location_key,
+                MAX(meetings.racecourse) AS display_name,
+                COUNT(*) AS meeting_count,
+                MIN(meetings.meeting_date) AS first_date,
+                MAX(meetings.meeting_date) AS last_date,
+                COALESCE(preference.is_enabled, 1) AS is_enabled
+            FROM love_racing_meetings meetings
+            LEFT JOIN planning_location_preferences preference
+              ON preference.location_key = meetings.racecourse_key
+            WHERE meetings.is_active = 1
+            GROUP BY meetings.racecourse_key, preference.is_enabled
+            ORDER BY LOWER(MAX(meetings.racecourse)), meetings.racecourse_key
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def set_planning_location_enabled(location_key: str, enabled: bool) -> bool:
+    key = calendar_location_key(location_key)
+    if not key:
+        return False
+    updated_at = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT racecourse
+            FROM love_racing_meetings
+            WHERE racecourse_key = ?
+              AND is_active = 1
+            ORDER BY last_seen_at DESC, id DESC
+            LIMIT 1
+            """,
+            (key,),
+        ).fetchone()
+        if row is None:
+            return False
+        conn.execute(
+            """
+            INSERT INTO planning_location_preferences (
+                location_key, display_name, is_enabled, updated_at
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(location_key) DO UPDATE SET
+                display_name = excluded.display_name,
+                is_enabled = excluded.is_enabled,
+                updated_at = excluded.updated_at
+            """,
+            (key, str(row["racecourse"] or key), 1 if enabled else 0, updated_at),
+        )
+    return True
 
 
 def get_travel_time_default(track_keys: list[str], base_label: str = "Clow Place") -> sqlite3.Row | None:

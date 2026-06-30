@@ -85,6 +85,8 @@ Opening a changed badge or the Change History section must not automatically cle
 
 Deputy schedule rows can leave stale local rows behind when an assignment is replaced with a new Deputy shift id. For display, overlapping rows for the same date/location/position should prefer the latest captured assignment and suppress the older one. If the older row carried an assignment-change flag, carry that change summary onto the displayed replacement row.
 
+The same stale-row problem can leave one person with two overlapping production roles. If those roles came from different captures, show only the newer captured role. If both roles came from the same capture, preserve both because Deputy is explicitly reporting both assignments.
+
 If Deputy has known schedule areas for the user's race-day location but no current employee row for one of the normal production positions, show a muted `TBC` placeholder row. This makes likely contractor/unknown slots visible without pretending the person is known. Keep this inferred from Deputy's area list for now; do not add a heavy manual region/default-position UI yet.
 
 ## Overnight Travel
@@ -104,3 +106,4 @@ Love Racing data is public planning information only. Use it to show future race
 - Deputy rostered shifts and Deputy schedule rows are always higher priority.
 - Planning markers should look different from confirmed shifts and should use Love Racing gold plus the location colour.
 - If a Deputy shift already exists for the same user/date/location, hide the public planning marker for that date/location.
+- Admins may ignore public planning locations that do not concern this crew. This affects only Love Racing planning hints; Deputy shifts and shared crew data remain unchanged.

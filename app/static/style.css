@@ -3394,6 +3394,84 @@ textarea {
   color: var(--danger);
 }
 
+.planning-location-panel {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.planning-location-panel summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 900;
+}
+
+.planning-location-panel summary small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.planning-location-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.planning-location-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--love-racing-gold);
+  border-radius: 6px;
+  background: var(--surface-raised);
+}
+
+.planning-location-row.is-ignored {
+  border-left-color: var(--muted);
+  opacity: 0.72;
+}
+
+.planning-location-row span,
+.planning-location-row strong,
+.planning-location-row small {
+  display: block;
+  min-width: 0;
+}
+
+.planning-location-row small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.planning-location-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.planning-location-toggle input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .planning-row {
   display: grid;
   grid-template-columns: minmax(84px, 0.7fr) minmax(0, 1fr) minmax(0, 1.1fr);
@@ -3847,6 +3925,14 @@ th {
   .planning-row {
     grid-template-columns: 1fr;
     gap: 3px;
+  }
+
+  .planning-location-list {
+    grid-template-columns: 1fr;
+  }
+
+  .planning-location-panel summary {
+    align-items: flex-start;
   }
 
   .race-day-block-wide {

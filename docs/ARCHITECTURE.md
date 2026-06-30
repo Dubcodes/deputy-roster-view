@@ -46,6 +46,8 @@ All users currently belong to one shared crew pool, `Northern Crew`. When a user
 
 These rows are intentionally not shifts. They have no crew, start time, or hours, and the month view suppresses a planning hint when the signed-in user's Deputy roster already has a shift for that same date/location. Deputy data always takes priority.
 
+Admins can include or ignore individual saved planning locations. The preference lives in `planning_location_preferences` and filters only Love Racing planning hints and counts; it never removes or changes Deputy roster data. Ignored public rows remain in the current planning snapshot so they can be restored immediately.
+
 ### Multi-User Sync Queue
 
 `user_sync_state` stores the next planned sync time, last result, and running flag for each active user with saved Deputy credentials.
@@ -91,5 +93,7 @@ Crew visible change badges should only appear for assignment changes:
 - person changed
 - position/area changed
 - open shift status changed
+
+Day-view schedule reconciliation also suppresses an older overlapping production role for the same employee when a newer capture supplies a different role. Same-capture dual roles remain visible rather than being guessed away.
 
 Timing-only crew schedule changes should not badge every crew row.

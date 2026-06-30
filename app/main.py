@@ -62,6 +62,7 @@ from .database import (
     list_admin_overrides,
     list_app_users,
     list_error_reports,
+    list_planning_locations,
     list_travel_time_defaults,
     list_trusted_devices_for_user,
     mark_user_sync_finished,
@@ -76,6 +77,7 @@ from .database import (
     update_app_settings,
     update_shift_marks,
     set_app_user_active,
+    set_planning_location_enabled,
     upsert_travel_time_default,
     delete_travel_time_default,
     update_travel_time_default,
@@ -103,7 +105,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.30.1"
+APP_BUILD = "2026.06.30.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -2022,6 +2024,27 @@ def dedupe_schedule_items(items: list[dict[str, object]]) -> list[dict[str, obje
     return deduped
 
 
+def suppress_stale_overlapping_employee_roles(items: list[dict[str, object]]) -> list[dict[str, object]]:
+    visible: list[dict[str, object]] = []
+    for item in items:
+        if item.get("is_vehicle_area") or not item.get("employee_id"):
+            visible.append(item)
+            continue
+        item_position = schedule_item_position_key(item)
+        stale = any(
+            not other.get("is_vehicle_area")
+            and other.get("employee_id") == item.get("employee_id")
+            and other.get("schedule_location_id") == item.get("schedule_location_id")
+            and schedule_item_position_key(other) != item_position
+            and schedule_items_overlap(item, other)
+            and str(other.get("captured_at") or "") > str(item.get("captured_at") or "")
+            for other in items
+        )
+        if not stale:
+            visible.append(item)
+    return visible
+
+
 def expected_schedule_placeholders(
     expected_areas: list[object] | None,
     items: list[dict[str, object]],
@@ -2078,7 +2101,7 @@ def schedule_people(rows: list[object], expected_areas: list[object] | None = No
         if not schedule_area_is_hidden(str(item.get("area_display") or "Role")):
             items.append(item)
 
-    items = dedupe_schedule_items(items)
+    items = suppress_stale_overlapping_employee_roles(dedupe_schedule_items(items))
     placeholders = expected_schedule_placeholders(expected_areas, items)
 
     for item in items:
@@ -3128,6 +3151,7 @@ def admin_view(request: Request, notice: str | None = None) -> object:
     travel_defaults = travel_default_rows()
     love_racing_snapshot, love_racing_status = love_racing_view_context(
         datetime.now(settings.timezone).date())
+    planning_locations = list_planning_locations()
     return templates.TemplateResponse(
         "admin.html",
         {
@@ -3145,6 +3169,10 @@ def admin_view(request: Request, notice: str | None = None) -> object:
             "love_racing_snapshot": love_racing_snapshot,
             "love_racing_status": love_racing_status,
             "love_racing_url": LOVE_RACING_URL,
+            "planning_locations": planning_locations,
+            "planning_location_enabled_count": sum(
+                1 for location in planning_locations if int(location.get("is_enabled") or 0)
+            ),
         },
     )
 
@@ -3770,6 +3798,19 @@ def admin_refresh_love_racing_calendar(request: Request) -> RedirectResponse:
     require_admin_user(request)
     result = refresh_planning_calendar()
     return RedirectResponse(url=notice_url("/admin", str(result["message"])), status_code=303)
+
+
+@app.post("/admin/planning-locations")
+async def admin_update_planning_location(request: Request) -> RedirectResponse:
+    require_admin_user(request)
+    form = await request.form()
+    location_key = str(form.get("location_key") or "").strip()
+    enabled = str(form.get("enabled") or "").strip() == "1"
+    if not set_planning_location_enabled(location_key, enabled):
+        message = "Planning location could not be found. Refresh the planning calendar and try again."
+    else:
+        message = "Planning location included." if enabled else "Planning location ignored."
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
 @app.post("/settings/pin")

@@ -100,6 +100,31 @@
       {% endif %}
     </div>
 
+    {% if planning_locations %}
+      <details class="planning-location-panel">
+        <summary>
+          <span>Planning Locations</span>
+          <small>{{ planning_location_enabled_count }} of {{ planning_locations|length }} included</small>
+        </summary>
+        <p class="muted">Ignored locations stay out of planning hints only. Deputy roster data is never affected.</p>
+        <div class="planning-location-list">
+          {% for location in planning_locations %}
+            <form class="planning-location-row{% if not location.is_enabled %} is-ignored{% endif %}" action="/admin/planning-locations" method="post">
+              <input type="hidden" name="location_key" value="{{ location.location_key }}">
+              <span>
+                <strong>{{ location.display_name }}</strong>
+                <small>{{ location.meeting_count }} date{% if location.meeting_count != 1 %}s{% endif %} · {{ location.first_date }} to {{ location.last_date }}</small>
+              </span>
+              <label class="planning-location-toggle">
+                <input type="checkbox" name="enabled" value="1"{% if location.is_enabled %} checked{% endif %} onchange="this.form.submit()">
+                <span>{{ "Included" if location.is_enabled else "Ignored" }}</span>
+              </label>
+            </form>
+          {% endfor %}
+        </div>
+      </details>
+    {% endif %}
+
     {% if love_racing_snapshot.upcoming %}
       <div class="planning-list">
         {% for meeting in love_racing_snapshot.upcoming %}

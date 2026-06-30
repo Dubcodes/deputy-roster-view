@@ -31,7 +31,15 @@ def main() -> None:
 
     from fastapi.testclient import TestClient
 
-    from app.database import create_app_user, get_app_user_by_email, init_db, upsert_travel_time_default
+    from app.database import (
+        create_app_user,
+        fetch_love_racing_meetings_between,
+        get_app_user_by_email,
+        init_db,
+        list_planning_locations,
+        save_love_racing_meetings,
+        upsert_travel_time_default,
+    )
     from app.main import app, build_race_day_calculation, build_race_day_summary, parse_roster_summary, schedule_people
     from app.security import encrypt_text, hash_pin
 
@@ -142,6 +150,29 @@ def main() -> None:
     if "/admin/love-racing-refresh" not in admin_page.text or "Refresh Planning Calendar" not in admin_page.text:
         raise AssertionError("Expected admin page to render the planning refresh control.")
 
+    save_love_racing_meetings(
+        [
+            {"date": "2026-07-04", "racecourse": "Te Rapa", "club_name": "Waikato"},
+            {"date": "2026-07-05", "racecourse": "Te Aroha", "club_name": "Waikato"},
+        ],
+        "2026-06-30T09:00:00+12:00",
+    )
+    planning_admin = client.get("/admin")
+    if "Planning Locations" not in planning_admin.text or "Te Rapa" not in planning_admin.text:
+        raise AssertionError("Expected admin page to list saved planning locations.")
+    ignore_location = client.post(
+        "/admin/planning-locations",
+        data={"location_key": "te-rapa", "enabled": "0"},
+        follow_redirects=False,
+    )
+    assert_redirect(ignore_location, "Planning+location+ignored")
+    visible_planning = fetch_love_racing_meetings_between("2026-07-01", "2026-07-31")
+    if [row["racecourse"] for row in visible_planning] != ["Te Aroha"]:
+        raise AssertionError(f"Expected ignored Te Rapa planning rows to be hidden, got {visible_planning!r}")
+    locations = {row["location_key"]: row for row in list_planning_locations()}
+    if int(locations["terapa"]["is_enabled"] or 0) != 0:
+        raise AssertionError(f"Expected Te Rapa preference to remain visible as ignored, got {locations!r}")
+
     people = schedule_people(
         [
             {
@@ -211,6 +242,70 @@ def main() -> None:
     side_one_rows = [person for person in people if person["position_label"] == "Side 1"]
     if len(side_one_rows) != 1 or side_one_rows[0]["employee_name"] != "TBC":
         raise AssertionError(f"Expected missing Side 1 placeholder, got {side_one_rows!r}")
+
+    stale_role_people = schedule_people(
+        [
+            {
+                "source_shift_id": 200,
+                "captured_at": "2026-06-30T05:00:00+12:00",
+                "area_id": 1335,
+                "area_name": "CCU2",
+                "area_location_id": 129,
+                "area_roster_sort_order": 12,
+                "employee_id": 15,
+                "employee_name": "Grant Woolston",
+                "start_at": "2026-07-01T09:30:00+12:00",
+                "end_at": "2026-07-01T19:00:00+12:00",
+                "is_published": 1,
+            },
+            {
+                "source_shift_id": 201,
+                "captured_at": "2026-06-30T14:08:00+12:00",
+                "area_id": 1467,
+                "area_name": "SVT",
+                "area_location_id": 129,
+                "area_roster_sort_order": 28,
+                "employee_id": 15,
+                "employee_name": "Grant Woolston",
+                "start_at": "2026-07-01T09:30:00+12:00",
+                "end_at": "2026-07-01T19:00:00+12:00",
+                "is_published": 1,
+            },
+        ]
+    )
+    if len(stale_role_people) != 1 or stale_role_people[0]["position_label"] != "Sound VT":
+        raise AssertionError(f"Expected newer Sound VT assignment to suppress stale CCU2, got {stale_role_people!r}")
+
+    same_capture_people = schedule_people(
+        [
+            {
+                "source_shift_id": 202,
+                "captured_at": "2026-06-30T14:08:00+12:00",
+                "area_id": 1335,
+                "area_name": "CCU2",
+                "area_location_id": 129,
+                "employee_id": 15,
+                "employee_name": "Grant Woolston",
+                "start_at": "2026-07-01T09:30:00+12:00",
+                "end_at": "2026-07-01T19:00:00+12:00",
+                "is_published": 1,
+            },
+            {
+                "source_shift_id": 203,
+                "captured_at": "2026-06-30T14:08:00+12:00",
+                "area_id": 1467,
+                "area_name": "SVT",
+                "area_location_id": 129,
+                "employee_id": 15,
+                "employee_name": "Grant Woolston",
+                "start_at": "2026-07-01T09:30:00+12:00",
+                "end_at": "2026-07-01T19:00:00+12:00",
+                "is_published": 1,
+            },
+        ]
+    )
+    if len(same_capture_people) != 1 or "CCU2" not in same_capture_people[0]["position_label"] or "Sound VT" not in same_capture_people[0]["position_label"]:
+        raise AssertionError(f"Expected same-capture dual roles to remain visible, got {same_capture_people!r}")
 
     print("route smoke flows ok")
 
