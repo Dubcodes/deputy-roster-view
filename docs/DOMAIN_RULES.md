@@ -35,6 +35,8 @@ For normal race days with enough roster-note timing data:
 
 If a roster note is missing either the base/start time or the on-track time, the app may use a saved default travel time for that track. Manual admin defaults are preferred over learned defaults. Learned defaults come from previous roster notes where both base and on-track times were present.
 
+Learned travel samples are counted once per track/date, not once per rostered person. Shared crew copies of the same note must not give one race day extra weight. Generic context such as `Northern Ops Contractors`, `Web`, `Travel`, or `Vehicles` is not a travel destination.
+
 Default travel times are only a fallback. If the roster note gives both base and on-track times, use the note.
 
 Manual override rules:

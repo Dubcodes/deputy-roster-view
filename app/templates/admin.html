@@ -60,12 +60,12 @@
       <div class="stat-card">
         <span>Upcoming</span>
         <strong>{{ love_racing_snapshot.upcoming_rows }}</strong>
-        <small>Love Racing dates</small>
+        <small>visible planning dates</small>
       </div>
       <div class="stat-card">
         <span>Locations</span>
         <strong>{{ love_racing_snapshot.location_count }}</strong>
-        <small>known matches</small>
+        <small>active locations</small>
       </div>
       <div class="stat-card">
         <span>Last scan</span>
@@ -274,9 +274,13 @@
               <div class="copy-panel">
                 <div class="section-heading">
                   <h3>Copy Diagnostic Data</h3>
-                  <button class="button button-compact" type="button" data-copy-target="capture-copy-{{ loop.index }}">Copy All</button>
+                  <span class="settings-action-row">
+                    <button class="button button-compact button-secondary" type="button" data-diagnostic-load="/admin/users/{{ user.id }}/diagnostics.txt" data-diagnostic-target="capture-copy-{{ loop.index }}">Load</button>
+                    <button class="button button-compact" type="button" data-copy-target="capture-copy-{{ loop.index }}" disabled>Copy All</button>
+                  </span>
                 </div>
-                <textarea id="capture-copy-{{ loop.index }}" class="copy-box" rows="10" readonly>{{ user.latest_capture.copy_text }}</textarea>
+                <p class="muted">{{ user.latest_capture.response_count }} responses · {{ user.latest_capture.shift_count }} personal shifts · {{ user.latest_capture.schedule_count }} schedule rows</p>
+                <textarea id="capture-copy-{{ loop.index }}" class="copy-box" rows="10" readonly placeholder="Load diagnostics only when you need to inspect or copy them."></textarea>
                 <p class="copy-status" data-copy-status-for="capture-copy-{{ loop.index }}" aria-live="polite"></p>
               </div>
             {% endif %}
@@ -468,16 +472,46 @@
 {% block scripts %}
   <script>
     (() => {
-      document.querySelectorAll("[data-copy-target]").forEach((button) => {
-        const status = document.querySelector(`[data-copy-status-for="${button.dataset.copyTarget}"]`);
-        const setStatus = (message) => {
-          if (!status) return;
-          status.textContent = message;
-          window.setTimeout(() => {
-            if (status.textContent === message) status.textContent = "";
-          }, 3000);
-        };
+      const setStatus = (targetId, message) => {
+        const status = document.querySelector(`[data-copy-status-for="${targetId}"]`);
+        if (!status) return;
+        status.textContent = message;
+        window.setTimeout(() => {
+          if (status.textContent === message) status.textContent = "";
+        }, 3000);
+      };
 
+      const loadDiagnostic = async (button) => {
+        const targetId = button.dataset.diagnosticTarget;
+        const target = document.getElementById(targetId);
+        if (!target) return false;
+        button.disabled = true;
+        setStatus(targetId, "Loading diagnostics...");
+        try {
+          const response = await fetch(button.dataset.diagnosticLoad, {
+            credentials: "same-origin",
+            headers: { Accept: "text/plain" },
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          target.value = await response.text();
+          button.textContent = "Reload";
+          const copyButton = document.querySelector(`[data-copy-target="${targetId}"]`);
+          if (copyButton) copyButton.disabled = false;
+          setStatus(targetId, "Diagnostics loaded.");
+          return true;
+        } catch (error) {
+          setStatus(targetId, "Could not load diagnostics.");
+          return false;
+        } finally {
+          button.disabled = false;
+        }
+      };
+
+      document.querySelectorAll("[data-diagnostic-load]").forEach((button) => {
+        button.addEventListener("click", () => loadDiagnostic(button));
+      });
+
+      document.querySelectorAll("[data-copy-target]").forEach((button) => {
         button.addEventListener("click", async () => {
           const target = document.getElementById(button.dataset.copyTarget);
           if (!target) return;
@@ -486,10 +520,10 @@
           target.setSelectionRange(0, target.value.length);
           try {
             await navigator.clipboard.writeText(target.value);
-            setStatus("Copied.");
+            setStatus(button.dataset.copyTarget, "Copied.");
           } catch (error) {
             const copied = document.execCommand && document.execCommand("copy");
-            setStatus(copied ? "Copied." : "Selected. Use copy from your browser.");
+            setStatus(button.dataset.copyTarget, copied ? "Copied." : "Selected. Use copy from your browser.");
           }
         });
       });

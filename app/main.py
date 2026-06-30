@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.gzip import GZipMiddleware
@@ -19,6 +19,7 @@ from .auth import clear_trusted_device, current_user, require_admin_user, truste
 from .config import get_settings
 from .database import (
     canonical_travel_base_label,
+    canonical_travel_track,
     clear_all_changed_flags,
     clear_changed_flags_for_user,
     clear_changed_for_date,
@@ -106,7 +107,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.30.3"
+APP_BUILD = "2026.06.30.4"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -598,7 +599,8 @@ def stable_location_colour_index(*values: object) -> int:
 
 
 def travel_default_key(value: object) -> str:
-    return location_colour_key(value)
+    key, _label = canonical_travel_track(value, value)
+    return key
 
 
 def travel_default_keys_for_shift(shift: dict[str, object]) -> list[str]:
@@ -2269,6 +2271,7 @@ def decorate_love_racing_meeting(row: object) -> dict[str, object]:
     meeting["date"] = str(meeting.get("meeting_date") or meeting.get("date") or "")
     meeting["location_label"] = racecourse
     meeting["source_label"] = "Love Racing"
+    meeting["club_name"] = re.sub(r"\s*,\s*", ", ", str(meeting.get("club_name") or "").strip())
     meeting["colour_style"] = (
         f"--shift-location-colour: var(--location-colour-{colour_index}); "
         f"--location-colour: var(--location-colour-{colour_index});"
@@ -2763,13 +2766,33 @@ def infer_display_name_from_email(email: str) -> str:
     return display_name or "Roster User"
 
 
+def capture_summary(value: str) -> dict[str, object] | None:
+    try:
+        payload = json.loads(value)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return {
+        "captured_at": str(payload.get("captured_at") or ""),
+        "status": str(payload.get("status") or "unknown"),
+        "response_count": len(payload.get("responses") or []) if isinstance(payload.get("responses"), list) else 0,
+        "shift_count": len(payload.get("extracted_shifts") or []) if isinstance(payload.get("extracted_shifts"), list) else 0,
+        "schedule_count": (
+            len(payload.get("extracted_schedule_shifts") or [])
+            if isinstance(payload.get("extracted_schedule_shifts"), list)
+            else 0
+        ),
+    }
+
+
 def admin_user_rows() -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for user in list_app_users():
         item = dict(user)
         item["devices"] = [dict(device) for device in list_trusted_devices_for_user(int(user["id"]))]
         latest_capture = get_latest_deputy_web_capture_for_user(int(user["id"]))
-        item["latest_capture"] = format_capture_payload(str(latest_capture["payload"] or "")) if latest_capture else None
+        item["latest_capture"] = capture_summary(str(latest_capture["payload"] or "")) if latest_capture else None
         item["latest_capture_message"] = str(latest_capture["message"] or "") if latest_capture else ""
         rows.append(item)
     return rows
@@ -2792,16 +2815,34 @@ def admin_contact_rows() -> list[dict[str, object]]:
 
 def refresh_learned_travel_defaults() -> int:
     groups: dict[tuple[str, str, str], list[dict[str, object]]] = {}
+    excluded_track_keys = {
+        "contractors",
+        "national",
+        "northernops",
+        "northernopscontractors",
+        "office",
+        "outofregion",
+        "travel",
+        "vehicle",
+        "vehicles",
+        "web",
+    }
+
+    def usable_track_label(value: object) -> bool:
+        key = travel_default_key(value)
+        return bool(key and key not in excluded_track_keys and "contractor" not in key)
 
     def shift_track_label(shift: dict[str, object]) -> str:
         parsed = parse_shift_title(str(shift.get("title") or ""))
         normalised = source_payload_normalised(str(shift.get("source_payload") or ""))
-        return str(
+        raw_label = str(
             parsed.get("track_label")
             or normalised.get("location_name")
             or normalised.get("source_code")
             or ""
         ).strip()
+        _key, label = canonical_travel_track(raw_label, raw_label)
+        return label
 
     def add_sample(
         track_label: str,
@@ -2810,19 +2851,23 @@ def refresh_learned_travel_defaults() -> int:
         shift_date: str,
         sample_kind: str,
     ) -> None:
-        if not track_label or track_label.lower() in GENERIC_TRACK_LABELS:
+        if not track_label or track_label.lower() in GENERIC_TRACK_LABELS or not usable_track_label(track_label):
             return
-        track_key = travel_default_key(track_label)
+        track_key, clean_track_label = canonical_travel_track(track_label, track_label)
         if not track_key or travel_minutes <= 0 or travel_minutes > 8 * 60:
             return
         clean_base = canonical_travel_base_label(base_label)
-        groups.setdefault((track_key, track_label, clean_base), []).append(
+        groups.setdefault((track_key, clean_track_label, clean_base), []).append(
             {
                 "travel_minutes": travel_minutes,
                 "date": shift_date,
                 "sample_kind": sample_kind,
             }
         )
+
+    for existing in list_travel_time_defaults():
+        if str(existing["source"] or "") == "learned" and not usable_track_label(existing["track_label"]):
+            delete_travel_time_default(int(existing["id"]))
 
     shifts = [dict(row) for row in fetch_shifts_for_travel_learning()]
     for shift in shifts:
@@ -2884,6 +2929,7 @@ def refresh_learned_travel_defaults() -> int:
                 for candidate in candidates
                 if (label := shift_track_label(candidate))
                 and label.lower() not in GENERIC_TRACK_LABELS
+                and usable_track_label(label)
             ),
             "",
         )
@@ -2897,10 +2943,32 @@ def refresh_learned_travel_defaults() -> int:
 
     saved = 0
     for (track_key, track_label, base_label), samples in groups.items():
-        counts = Counter(int(sample["travel_minutes"]) for sample in samples)
-        travel_minutes, _ = counts.most_common(1)[0]
-        dates = sorted(str(sample["date"] or "") for sample in samples if str(sample["date"] or ""))
-        sample_kinds = {str(sample.get("sample_kind") or "") for sample in samples}
+        samples_by_event: dict[tuple[str, str], list[int]] = {}
+        for sample in samples:
+            event_key = (
+                str(sample.get("date") or ""),
+                str(sample.get("sample_kind") or ""),
+            )
+            samples_by_event.setdefault(event_key, []).append(int(sample["travel_minutes"]))
+        event_samples = [
+            {
+                "date": event_key[0],
+                "sample_kind": event_key[1],
+                "travel_minutes": Counter(minutes).most_common(1)[0][0],
+            }
+            for event_key, minutes in samples_by_event.items()
+        ]
+        counts = Counter(int(sample["travel_minutes"]) for sample in event_samples)
+        highest_count = max(counts.values())
+        candidate_minutes = {minutes for minutes, count in counts.items() if count == highest_count}
+        newest_first = sorted(event_samples, key=lambda sample: str(sample.get("date") or ""), reverse=True)
+        travel_minutes = next(
+            int(sample["travel_minutes"])
+            for sample in newest_first
+            if int(sample["travel_minutes"]) in candidate_minutes
+        )
+        dates = sorted(str(sample["date"] or "") for sample in event_samples if str(sample["date"] or ""))
+        sample_kinds = {str(sample.get("sample_kind") or "") for sample in event_samples}
         if sample_kinds == {"overnight_travel"}:
             note = "Learned from a preceding Travel then Overnighter shift."
         elif "overnight_travel" in sample_kinds:
@@ -2913,7 +2981,7 @@ def refresh_learned_travel_defaults() -> int:
             base_label=base_label,
             travel_minutes=travel_minutes,
             source="learned",
-            sample_count=len(samples),
+            sample_count=len(event_samples),
             first_seen_at=dates[0] if dates else "",
             last_seen_at=dates[-1] if dates else "",
             note=note,
@@ -2948,7 +3016,7 @@ def admin_location_rows(
             "meeting_count": int(planning.get("meeting_count") or 0),
             "first_date": planning.get("first_date") or "",
             "last_date": planning.get("last_date") or "",
-            "club_names": planning.get("club_names") or "",
+            "club_names": re.sub(r"\s*,\s*", ", ", str(planning.get("club_names") or "").strip()),
             "travel_defaults": [],
         }
 
@@ -3953,6 +4021,21 @@ async def admin_update_planning_location(request: Request) -> RedirectResponse:
     else:
         message = "Planning location included." if enabled else "Planning location ignored."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.get("/admin/users/{user_id}/diagnostics.txt")
+def admin_user_diagnostics(request: Request, user_id: int) -> PlainTextResponse:
+    require_admin_user(request)
+    latest_capture = get_latest_deputy_web_capture_for_user(user_id)
+    if latest_capture is None:
+        raise HTTPException(status_code=404, detail="No Deputy diagnostics saved for this user")
+    payload = format_capture_payload(str(latest_capture["payload"] or ""))
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Deputy diagnostics could not be read")
+    return PlainTextResponse(
+        str(payload.get("copy_text") or "No diagnostic text was generated."),
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @app.post("/settings/pin")

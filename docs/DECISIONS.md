@@ -59,6 +59,8 @@ Raw iCal and Deputy web capture data are useful for debugging, but too noisy for
 
 User-submitted error reports should save a redacted diagnostic snapshot so the admin can compare what the app saw with what Deputy showed at the time.
 
+Full per-user capture text is fetched only after an admin asks to load it. This keeps the Admin page responsive as users and captured schedule rows grow.
+
 ## Open Shifts
 
 Open/available shifts are detected from saved Deputy schedule rows. A visible marker should open the day details instead of starting a sync, because an accidental tap on the month view should not trigger a long Deputy capture.
@@ -85,6 +87,8 @@ Some Deputy notes omit base or on-track timing. The app stores default travel ti
 Office and Clow Place are the same physical base and are canonicalized to one `Office / Clow Place` row. Named hotels remain separate bases so an out-of-region track can have several hotel-to-track journeys without guessing which hotel applies.
 
 An explicit `Travel then Overnighter` shift on the day before a race may teach the office-to-track journey for that next-day location. It does not teach hotel-to-track travel; that requires a named hotel and a real known duration.
+
+The same roster note can be captured under several users. Travel learning counts that as one track/date sample so crew size does not bias the chosen default. Generic contractor/vehicle context is excluded. `G Cambridge` is treated as an alias of `Cambridge Greyhound`, while Cambridge Harness stays separate.
 
 Planning visibility and travel defaults share one Admin Locations list for clarity. The Active switch still affects only public planning hints, and deleting a travel row does not delete a public calendar location.
 

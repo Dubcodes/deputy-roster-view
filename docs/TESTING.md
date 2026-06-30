@@ -51,7 +51,7 @@ After Portainer redeploy:
 - Confirm each user shows next planned sync and last sync status.
 - If using the temporary tunnel stack, confirm its `cloudflared` container logs show a `trycloudflare.com` URL.
 
-The route smoke also verifies that Office/Clow Place travel defaults collapse to one base, named hotels stay separate, and a preceding overnight travel shift can teach the next day's office-to-track duration.
+The route smoke also verifies that Office/Clow Place travel defaults collapse to one base, named hotels stay separate, `G Cambridge` aliases merge, generic contractor context is excluded, duplicate user copies count as one race-day sample, a preceding overnight travel shift can teach the next day's office-to-track duration, and admin diagnostics load on demand.
 
 ## Known Test Gaps
 

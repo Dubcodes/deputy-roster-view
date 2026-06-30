@@ -423,16 +423,34 @@ def canonical_travel_base_label(value: object) -> str:
     return label
 
 
+def canonical_travel_track(track_key: object, track_label: object = "") -> tuple[str, str]:
+    label = re.sub(r"\s+", " ", str(track_label or track_key or "").strip())
+    key = calendar_location_key(track_key or label)
+    if key in {"gcambridge", "cambridgegreyhound"}:
+        return "cambridgegreyhound", "Cambridge Greyhound"
+    return key, label
+
+
 def _merge_equivalent_travel_bases(conn: sqlite3.Connection) -> None:
     rows = [dict(row) for row in conn.execute("SELECT * FROM travel_time_defaults").fetchall()]
     grouped: dict[tuple[str, str], list[dict[str, object]]] = {}
     for row in rows:
+        track_key, _track_label = canonical_travel_track(row.get("track_key"), row.get("track_label"))
         base_label = canonical_travel_base_label(row.get("base_label"))
-        grouped.setdefault((str(row.get("track_key") or ""), base_label.lower()), []).append(row)
+        grouped.setdefault((track_key, base_label.lower()), []).append(row)
 
-    for (_, _), matches in grouped.items():
+    for (canonical_track_key, _), matches in grouped.items():
+        _track_key, canonical_track_label = canonical_travel_track(
+            canonical_track_key,
+            matches[0].get("track_label"),
+        )
         canonical_base = canonical_travel_base_label(matches[0].get("base_label"))
-        if len(matches) == 1 and str(matches[0].get("base_label") or "") == canonical_base:
+        if (
+            len(matches) == 1
+            and str(matches[0].get("track_key") or "") == canonical_track_key
+            and str(matches[0].get("track_label") or "") == canonical_track_label
+            and str(matches[0].get("base_label") or "") == canonical_base
+        ):
             continue
         matches.sort(
             key=lambda row: (
@@ -458,10 +476,13 @@ def _merge_equivalent_travel_bases(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             UPDATE travel_time_defaults
-            SET base_label = ?, sample_count = ?, first_seen_at = ?, last_seen_at = ?
+            SET track_key = ?, track_label = ?, base_label = ?,
+                sample_count = ?, first_seen_at = ?, last_seen_at = ?
             WHERE id = ?
             """,
             (
+                canonical_track_key,
+                canonical_track_label,
                 canonical_base,
                 sum(int(row.get("sample_count") or 0) for row in matches),
                 first_seen,
@@ -1551,8 +1572,8 @@ def upsert_travel_time_default(
     now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
     clean_source = "manual" if source != "learned" else "learned"
     clean_base = canonical_travel_base_label(base_label)
-    clean_key = track_key.strip().lower()
-    if not clean_key or not track_label.strip() or travel_minutes <= 0:
+    clean_key, clean_label = canonical_travel_track(track_key, track_label)
+    if not clean_key or not clean_label or travel_minutes <= 0:
         return
     with get_connection() as conn:
         conn.execute(
@@ -1590,7 +1611,7 @@ def upsert_travel_time_default(
             """,
             (
                 clean_key,
-                track_label.strip(),
+                clean_label,
                 clean_base,
                 max(1, int(travel_minutes)),
                 clean_source,
@@ -1621,8 +1642,7 @@ def update_travel_time_default(
     travel_minutes: int,
     note: str = "",
 ) -> int:
-    clean_key = track_key.strip().lower()
-    clean_label = track_label.strip()
+    clean_key, clean_label = canonical_travel_track(track_key, track_label)
     clean_base = canonical_travel_base_label(base_label)
     if not clean_key or not clean_label or travel_minutes <= 0:
         return 0

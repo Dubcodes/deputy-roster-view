@@ -51,7 +51,9 @@ def main() -> None:
                 sample_count, first_seen_at, last_seen_at, updated_at, note
             ) VALUES
                 ('legacyvenue', 'Legacy Venue', 'Office', 60, 'learned', 2, '2026-05-01', '2026-05-02', '2026-05-02T05:00:00+12:00', ''),
-                ('legacyvenue', 'Legacy Venue', 'Clow Place', 75, 'manual', 0, '', '', '2026-05-03T05:00:00+12:00', 'manual wins');
+                ('legacyvenue', 'Legacy Venue', 'Clow Place', 75, 'manual', 0, '', '', '2026-05-03T05:00:00+12:00', 'manual wins'),
+                ('gcambridge', 'G Cambridge', 'Office', 30, 'learned', 2, '2026-05-01', '2026-05-02', '2026-05-02T05:00:00+12:00', ''),
+                ('cambridgegreyhound', 'Cambridge Greyhound', 'Clow Place', 30, 'learned', 2, '2026-06-01', '2026-06-02', '2026-06-02T05:00:00+12:00', '');
             """
         )
 
@@ -66,6 +68,7 @@ def main() -> None:
         list_planning_locations,
         list_travel_time_defaults,
         save_love_racing_meetings,
+        save_deputy_web_capture_diagnostic,
         upsert_travel_time_default,
     )
     from app.main import (
@@ -86,6 +89,11 @@ def main() -> None:
         raise AssertionError(f"Expected legacy Office/Clow Place rows to merge, got {migrated_legacy!r}")
     if migrated_legacy[0]["base_label"] != "Office / Clow Place" or migrated_legacy[0]["travel_minutes"] != 75:
         raise AssertionError(f"Expected latest manual legacy value to win migration, got {migrated_legacy!r}")
+    migrated_greyhound = [
+        dict(row) for row in list_travel_time_defaults() if row["track_key"] == "cambridgegreyhound"
+    ]
+    if len(migrated_greyhound) != 1 or migrated_greyhound[0]["track_label"] != "Cambridge Greyhound":
+        raise AssertionError(f"Expected G Cambridge alias rows to merge, got {migrated_greyhound!r}")
     client = TestClient(app)
 
     signup = client.post(
@@ -141,6 +149,21 @@ def main() -> None:
 
     if get_app_user_by_email("crew@example.com") is None:
         raise AssertionError("Expected admin-created crew user to remain queryable.")
+    admin_user = get_app_user_by_email("admin@example.com")
+    if admin_user is None:
+        raise AssertionError("Expected signed-up admin user to remain queryable.")
+    diagnostic_marker = "LAZY-DIAGNOSTIC-MARKER"
+    save_deputy_web_capture_diagnostic(
+        owner_user_id=int(admin_user["id"]),
+        captured_at="2099-06-30T16:23:27+12:00",
+        status="ok",
+        message="route smoke capture",
+        payload=(
+            '{"captured_at":"2099-06-30T16:23:27+12:00","status":"ok",'
+            '"events":["' + diagnostic_marker + '"],"responses":[],"extracted_shifts":[],'
+            '"extracted_schedule_shifts":[],"areas":[],"locations":[],"page_texts":[]}'
+        ),
+    )
 
     roster_lines = [
         "Trucks 0815",
@@ -179,6 +202,15 @@ def main() -> None:
         travel_minutes=30,
         source="manual",
         note="custom hotel remains separate",
+    )
+    upsert_travel_time_default(
+        track_key="northernopscontractors",
+        track_label="Northern Ops Contractors",
+        base_label="Office",
+        travel_minutes=30,
+        source="learned",
+        sample_count=2,
+        note="generic context must be removed",
     )
     travel_rows = [dict(row) for row in list_travel_time_defaults()]
     matamata_rows = [row for row in travel_rows if row["track_key"] == "matamata"]
@@ -247,10 +279,56 @@ def main() -> None:
                 '{"location_name":"Ruakaka"}',
             ),
         )
+        for source_suffix, owner_id in (("admin", int(admin_user["id"])),):
+            conn.execute(
+                """
+                INSERT INTO shifts (
+                    source_uid, owner_user_id, title, description, start_at, end_at,
+                    date, paid_hours, deleted_from_source, source_payload
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                """,
+                (
+                    f"route-smoke-travel-{source_suffix}",
+                    owner_id,
+                    "[T-Travel] Travel then Overnighter",
+                    "Travel to Ruakaka",
+                    "2026-07-17T13:00:00+12:00",
+                    "2026-07-17T17:00:00+12:00",
+                    "2026-07-17",
+                    4.0,
+                    "{}",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO shifts (
+                    source_uid, owner_user_id, title, description, start_at, end_at,
+                    date, paid_hours, deleted_from_source, source_payload
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                """,
+                (
+                    f"route-smoke-ruakaka-{source_suffix}",
+                    owner_id,
+                    "[T-Ruakaka] Director",
+                    "",
+                    "2026-07-18T09:30:00+12:00",
+                    "2026-07-18T22:00:00+12:00",
+                    "2026-07-18",
+                    12.5,
+                    '{"location_name":"Ruakaka"}',
+                ),
+            )
     refresh_learned_travel_defaults()
     ruakaka_rows = [dict(row) for row in list_travel_time_defaults() if row["track_key"] == "ruakaka"]
-    if not any(row["base_label"] == "Office / Clow Place" and int(row["travel_minutes"]) == 240 for row in ruakaka_rows):
+    if not any(
+        row["base_label"] == "Office / Clow Place"
+        and int(row["travel_minutes"]) == 240
+        and int(row["sample_count"]) == 1
+        for row in ruakaka_rows
+    ):
         raise AssertionError(f"Expected overnight travel shift to teach Ruakaka's office journey, got {ruakaka_rows!r}")
+    if any(row["track_key"] == "northernopscontractors" for row in list_travel_time_defaults()):
+        raise AssertionError("Generic contractor context must not remain as a learned travel destination.")
 
     admin_page = client.get("/admin")
     if admin_page.status_code != 200 or "<h2>Locations</h2>" not in admin_page.text or "/admin/travel-defaults/" not in admin_page.text:
@@ -259,6 +337,14 @@ def main() -> None:
         raise AssertionError("Expected unified locations to show canonical office and custom hotel bases.")
     if "/admin/love-racing-refresh" not in admin_page.text or "Refresh Planning Calendar" not in admin_page.text:
         raise AssertionError("Expected admin page to render the planning refresh control.")
+    if diagnostic_marker in admin_page.text or f'/admin/users/{int(admin_user["id"])}/diagnostics.txt' not in admin_page.text:
+        raise AssertionError("Expected Admin diagnostics to be loaded on demand rather than embedded in the page.")
+    diagnostic_response = client.get(f'/admin/users/{int(admin_user["id"])}/diagnostics.txt')
+    if diagnostic_response.status_code != 200 or diagnostic_marker not in diagnostic_response.text:
+        raise AssertionError(
+            "Expected the admin-only diagnostics endpoint to return the saved capture, got "
+            f"{diagnostic_response.status_code} {diagnostic_response.text[:300]!r}"
+        )
 
     save_love_racing_meetings(
         [

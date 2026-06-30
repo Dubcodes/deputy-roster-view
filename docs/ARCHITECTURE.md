@@ -76,6 +76,8 @@ Deputy login secrets are encrypted in `deputy_user_secrets`. The app secret come
 
 Error reports live in `error_reports`. They include the user's note, page/user-agent context, recent sync state, recent source payload diagnostics, and the latest redacted Deputy web capture snapshot.
 
+Admin user diagnostics are loaded from an authenticated text endpoint only when requested. The main Admin response keeps capture summaries lightweight instead of embedding every user's full raw capture.
+
 Per-user Deputy web diagnostics live in `deputy_web_captures`. Each capture stores a redacted payload, status, and message for the account that ran the sync, so an admin can inspect failed login/page-shape cases even after another user syncs.
 
 Admins should prefer deactivating a user over hard deletion when someone leaves. Deactivation revokes trusted devices and stops future syncs while leaving audit history intact. Roster reset is user-scoped and clears local pulled shifts, marks, and change history so the next sync can rebuild the user's roster copy.
@@ -83,6 +85,8 @@ Admins should prefer deactivating a user over hard deletion when someone leaves.
 Deactivated accounts and revoked trusted devices are purged after 30 days. Users can deactivate themselves from Settings; admins can deactivate/reactivate users and can manually run the cleanup or purge an already deactivated user. Active users are not purged by this cleanup.
 
 Track travel defaults live in `travel_time_defaults`. Admin-entered defaults are `manual`; learned defaults are inferred from previous saved roster notes that had both base and on-track times. An explicit preceding `Travel then Overnighter` shift can also teach the office-to-track journey for the next day's race location. `Office` and `Clow Place` are stored as one canonical base, while named hotels remain separate bases. Race-day maths uses these only when a note is missing either base or on-track timing.
+
+Learning collapses duplicate user copies into one sample per track/date. Generic schedule context is excluded, and the legacy `G Cambridge` label is canonicalized to `Cambridge Greyhound` without merging it into the logically separate Harness location.
 
 The Admin Locations section joins planning-location visibility and travel defaults for display, but their effects remain separate: Active only controls Love Racing planning hints, while travel rows supply timing fallbacks. Deputy data is unaffected by either control.
 
