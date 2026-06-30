@@ -13,8 +13,29 @@
     </div>
   </section>
 
-  {% if not shifts and not open_shifts %}
+  {% if not shifts and not open_shifts and not planning_meetings %}
     <div class="empty-state">No shifts listed for this day.</div>
+  {% endif %}
+
+  {% if planning_meetings %}
+    <section class="table-panel day-planning-panel">
+      <div class="section-heading">
+        <h2>Planning Race Day</h2>
+      </div>
+      <p class="muted">Calendar information only. This is not a Deputy roster and does not include crew, positions, or start times.</p>
+      <div class="day-planning-list">
+        {% for meeting in planning_meetings %}
+          <article id="planning-{{ meeting.id }}" class="day-planning-row" style="{{ meeting.colour_style }}">
+            <strong>{{ meeting.location_label }}</strong>
+            <dl>
+              <div><dt>Date</dt><dd>{{ meeting.date_label }}</dd></div>
+              {% if meeting.club_name %}<div><dt>Club</dt><dd>{{ meeting.club_name }}</dd></div>{% endif %}
+              <div><dt>Source</dt><dd>Love Racing racing calendar</dd></div>
+            </dl>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
   {% endif %}
 
   {% if open_shifts %}

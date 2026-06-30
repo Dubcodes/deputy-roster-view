@@ -82,7 +82,9 @@ Admins should prefer deactivating a user over hard deletion when someone leaves.
 
 Deactivated accounts and revoked trusted devices are purged after 30 days. Users can deactivate themselves from Settings; admins can deactivate/reactivate users and can manually run the cleanup or purge an already deactivated user. Active users are not purged by this cleanup.
 
-Track travel defaults live in `travel_time_defaults`. Admin-entered defaults are `manual`; learned defaults are inferred from previous saved roster notes that had both base and on-track times. Race-day maths uses these only when a note is missing either base or on-track timing.
+Track travel defaults live in `travel_time_defaults`. Admin-entered defaults are `manual`; learned defaults are inferred from previous saved roster notes that had both base and on-track times. An explicit preceding `Travel then Overnighter` shift can also teach the office-to-track journey for the next day's race location. `Office` and `Clow Place` are stored as one canonical base, while named hotels remain separate bases. Race-day maths uses these only when a note is missing either base or on-track timing.
+
+The Admin Locations section joins planning-location visibility and travel defaults for display, but their effects remain separate: Active only controls Love Racing planning hints, while travel rows supply timing fallbacks. Deputy data is unaffected by either control.
 
 ## Change Detection
 

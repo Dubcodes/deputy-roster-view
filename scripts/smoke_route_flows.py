@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -27,23 +28,64 @@ def assert_redirect(response, expected_fragment: str) -> None:
 
 
 def main() -> None:
-    configure_test_environment()
+    temp_dir = configure_test_environment()
+    with sqlite3.connect(temp_dir / "route_smoke.sqlite3") as legacy_conn:
+        legacy_conn.executescript(
+            """
+            CREATE TABLE travel_time_defaults (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                track_key TEXT,
+                track_label TEXT,
+                base_label TEXT DEFAULT 'Clow Place',
+                travel_minutes INTEGER,
+                source TEXT DEFAULT 'manual',
+                sample_count INTEGER DEFAULT 0,
+                first_seen_at TEXT,
+                last_seen_at TEXT,
+                updated_at TEXT,
+                note TEXT,
+                UNIQUE(track_key, base_label)
+            );
+            INSERT INTO travel_time_defaults (
+                track_key, track_label, base_label, travel_minutes, source,
+                sample_count, first_seen_at, last_seen_at, updated_at, note
+            ) VALUES
+                ('legacyvenue', 'Legacy Venue', 'Office', 60, 'learned', 2, '2026-05-01', '2026-05-02', '2026-05-02T05:00:00+12:00', ''),
+                ('legacyvenue', 'Legacy Venue', 'Clow Place', 75, 'manual', 0, '', '', '2026-05-03T05:00:00+12:00', 'manual wins');
+            """
+        )
 
     from fastapi.testclient import TestClient
 
     from app.database import (
         create_app_user,
         fetch_love_racing_meetings_between,
+        get_connection,
         get_app_user_by_email,
         init_db,
         list_planning_locations,
+        list_travel_time_defaults,
         save_love_racing_meetings,
         upsert_travel_time_default,
     )
-    from app.main import app, build_race_day_calculation, build_race_day_summary, parse_roster_summary, schedule_people
+    from app.main import (
+        app,
+        build_race_day_calculation,
+        build_race_day_summary,
+        parse_roster_summary,
+        refresh_learned_travel_defaults,
+        schedule_people,
+    )
     from app.security import encrypt_text, hash_pin
 
     init_db()
+    migrated_legacy = [
+        dict(row) for row in list_travel_time_defaults() if row["track_key"] == "legacyvenue"
+    ]
+    if len(migrated_legacy) != 1:
+        raise AssertionError(f"Expected legacy Office/Clow Place rows to merge, got {migrated_legacy!r}")
+    if migrated_legacy[0]["base_label"] != "Office / Clow Place" or migrated_legacy[0]["travel_minutes"] != 75:
+        raise AssertionError(f"Expected latest manual legacy value to win migration, got {migrated_legacy!r}")
     client = TestClient(app)
 
     signup = client.post(
@@ -122,6 +164,28 @@ def main() -> None:
         source="manual",
         note="route smoke default",
     )
+    upsert_travel_time_default(
+        track_key="matamata",
+        track_label="Matamata",
+        base_label="Office",
+        travel_minutes=60,
+        source="manual",
+        note="same physical base",
+    )
+    upsert_travel_time_default(
+        track_key="ruakaka",
+        track_label="Ruakaka",
+        base_label="Beachfront Hotel",
+        travel_minutes=30,
+        source="manual",
+        note="custom hotel remains separate",
+    )
+    travel_rows = [dict(row) for row in list_travel_time_defaults()]
+    matamata_rows = [row for row in travel_rows if row["track_key"] == "matamata"]
+    if len(matamata_rows) != 1 or matamata_rows[0]["base_label"] != "Office / Clow Place":
+        raise AssertionError(f"Expected Office and Clow Place to share one default, got {matamata_rows!r}")
+    if not any(row["track_key"] == "ruakaka" and row["base_label"] == "Beachfront Hotel" for row in travel_rows):
+        raise AssertionError(f"Expected named hotel travel to remain separate, got {travel_rows!r}")
     inferred_summary = parse_roster_summary(["On track 0930", "8 races 1138 | 1550"])
     inferred_calc = build_race_day_calculation(
         {
@@ -144,22 +208,78 @@ def main() -> None:
     if "Refresh Planning Calendar" in settings_page.text:
         raise AssertionError("Planning refresh must remain admin-only.")
 
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO shifts (
+                source_uid, owner_user_id, title, description, start_at, end_at,
+                date, paid_hours, deleted_from_source, source_payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            """,
+            (
+                "route-smoke-travel",
+                int(other["id"]),
+                "[T-Travel] Travel then Overnighter",
+                "Travel to Ruakaka",
+                "2026-07-17T13:00:00+12:00",
+                "2026-07-17T17:00:00+12:00",
+                "2026-07-17",
+                4.0,
+                "{}",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO shifts (
+                source_uid, owner_user_id, title, description, start_at, end_at,
+                date, paid_hours, deleted_from_source, source_payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            """,
+            (
+                "route-smoke-ruakaka",
+                int(other["id"]),
+                "[T-Ruakaka] Side 1",
+                "",
+                "2026-07-18T09:30:00+12:00",
+                "2026-07-18T22:00:00+12:00",
+                "2026-07-18",
+                12.5,
+                '{"location_name":"Ruakaka"}',
+            ),
+        )
+    refresh_learned_travel_defaults()
+    ruakaka_rows = [dict(row) for row in list_travel_time_defaults() if row["track_key"] == "ruakaka"]
+    if not any(row["base_label"] == "Office / Clow Place" and int(row["travel_minutes"]) == 240 for row in ruakaka_rows):
+        raise AssertionError(f"Expected overnight travel shift to teach Ruakaka's office journey, got {ruakaka_rows!r}")
+
     admin_page = client.get("/admin")
-    if admin_page.status_code != 200 or "Default Travel Times" not in admin_page.text or "/admin/travel-defaults/" not in admin_page.text:
-        raise AssertionError("Expected admin page to render editable travel defaults.")
+    if admin_page.status_code != 200 or "<h2>Locations</h2>" not in admin_page.text or "/admin/travel-defaults/" not in admin_page.text:
+        raise AssertionError("Expected admin page to render unified editable locations.")
+    if "Office / Clow Place" not in admin_page.text or "Beachfront Hotel" not in admin_page.text:
+        raise AssertionError("Expected unified locations to show canonical office and custom hotel bases.")
     if "/admin/love-racing-refresh" not in admin_page.text or "Refresh Planning Calendar" not in admin_page.text:
         raise AssertionError("Expected admin page to render the planning refresh control.")
 
     save_love_racing_meetings(
         [
-            {"date": "2026-07-04", "racecourse": "Te Rapa", "club_name": "Waikato"},
-            {"date": "2026-07-05", "racecourse": "Te Aroha", "club_name": "Waikato"},
+            {
+                "date": "2026-07-04",
+                "racecourse": "Te Rapa",
+                "club_name": "Waikato",
+                "source_url": "https://loveracing.example/calendar",
+            },
+            {
+                "date": "2026-07-05",
+                "racecourse": "Te Aroha",
+                "club_name": "Waikato",
+                "source_url": "https://loveracing.example/calendar",
+            },
         ],
         "2026-06-30T09:00:00+12:00",
     )
     planning_admin = client.get("/admin")
-    if "Planning Locations" not in planning_admin.text or "Te Rapa" not in planning_admin.text:
-        raise AssertionError("Expected admin page to list saved planning locations.")
+    if "Locations" not in planning_admin.text or "Te Rapa" not in planning_admin.text:
+        raise AssertionError("Expected admin page to list saved planning locations with travel defaults.")
     ignore_location = client.post(
         "/admin/planning-locations",
         data={"location_key": "te-rapa", "enabled": "0"},
@@ -172,6 +292,16 @@ def main() -> None:
     locations = {row["location_key"]: row for row in list_planning_locations()}
     if int(locations["terapa"]["is_enabled"] or 0) != 0:
         raise AssertionError(f"Expected Te Rapa preference to remain visible as ignored, got {locations!r}")
+    planning_month = client.get("/month?year=2026&month=7")
+    if '/day/2026-07-05#planning-' not in planning_month.text:
+        raise AssertionError("Expected Love Racing marker to open the internal day details.")
+    if "https://loveracing.example/calendar" in planning_month.text:
+        raise AssertionError("Love Racing markers must not render outbound calendar links.")
+    planning_day = client.get("/day/2026-07-05")
+    if "Love Racing racing calendar" not in planning_day.text or "Te Aroha" not in planning_day.text:
+        raise AssertionError("Expected day view to show saved Love Racing meeting facts.")
+    if "https://loveracing.example/calendar" in planning_day.text:
+        raise AssertionError("Love Racing day details must not render outbound calendar links.")
 
     people = schedule_people(
         [

@@ -100,119 +100,110 @@
       {% endif %}
     </div>
 
-    {% if planning_locations %}
-      <details class="planning-location-panel">
-        <summary>
-          <span>Planning Locations</span>
-          <small>{{ planning_location_enabled_count }} of {{ planning_locations|length }} included</small>
-        </summary>
-        <p class="muted">Ignored locations stay out of planning hints only. Deputy roster data is never affected.</p>
-        <div class="planning-location-list">
-          {% for location in planning_locations %}
-            <form class="planning-location-row{% if not location.is_enabled %} is-ignored{% endif %}" action="/admin/planning-locations" method="post">
-              <input type="hidden" name="location_key" value="{{ location.location_key }}">
-              <span>
-                <strong>{{ location.display_name }}</strong>
-                <small>{{ location.meeting_count }} date{% if location.meeting_count != 1 %}s{% endif %} · {{ location.first_date }} to {{ location.last_date }}</small>
-              </span>
-              <label class="planning-location-toggle">
-                <input type="checkbox" name="enabled" value="1"{% if location.is_enabled %} checked{% endif %} onchange="this.form.submit()">
-                <span>{{ "Included" if location.is_enabled else "Ignored" }}</span>
-              </label>
-            </form>
-          {% endfor %}
-        </div>
-      </details>
-    {% endif %}
-
-    {% if love_racing_snapshot.upcoming %}
-      <div class="planning-list">
-        {% for meeting in love_racing_snapshot.upcoming %}
-          <a class="planning-row" href="{{ meeting.source_url }}" target="_blank" rel="noopener" style="{{ meeting.colour_style }}">
-            <span>{{ meeting.date_label }}</span>
-            <strong>{{ meeting.location_label }}</strong>
-            <small>{{ meeting.club_name or "Love Racing" }}</small>
-          </a>
-        {% endfor %}
-      </div>
-    {% endif %}
+    <p class="muted planning-location-pointer">Choose which locations appear on the calendar and manage their travel times in Locations below.</p>
   </section>
-  <section class="table-panel">
+  <section class="table-panel location-management-panel">
     <div class="section-heading">
-      <h2>Default Travel Times</h2>
-
-
+      <h2>Locations</h2>
+      <small>{{ planning_location_enabled_count }} of {{ planning_locations|length }} planning locations active</small>
     </div>
-    <p class="muted">Used only when a roster note is missing either the base start time or the on-track time. Learned entries come from previous roster notes; manual entries win.</p>
-    <form class="marks-form admin-override-form" action="/admin/travel-defaults" method="post">
-      <div class="form-grid-two">
-        <label class="form-row">
-          <span>Track</span>
-          <input type="text" name="track_label" placeholder="Te Aroha" required>
-        </label>
-        <label class="form-row">
-          <span>Base</span>
-          <select name="base_label">
-            <option value="Clow Place">Clow Place</option>
-            <option value="Office">Office</option>
-          </select>
-        </label>
+    <p class="muted">Active controls Love Racing planning hints only. Deputy roster shifts always remain visible. Travel times are fallbacks when a roster note is missing base or on-track timing.</p>
+
+    <details class="location-travel-entry">
+      <summary>Add a travel time</summary>
+      <div class="location-travel-entry-body">
+        <p class="muted">Office and Clow Place are the same base. Add a hotel by its real name once the stay is known; each hotel can have its own journey to the track.</p>
+        <form class="marks-form admin-override-form" action="/admin/travel-defaults" method="post">
+          <div class="form-grid-two">
+            <label class="form-row">
+              <span>Location</span>
+              <input type="text" name="track_label" placeholder="Ruakaka" required>
+            </label>
+            <label class="form-row">
+              <span>From</span>
+              <input type="text" name="base_label" value="Office / Clow Place" placeholder="Office / Clow Place or hotel name" required>
+            </label>
+          </div>
+          <div class="form-grid-two">
+            <label class="form-row">
+              <span>Travel minutes</span>
+              <input type="number" name="travel_minutes" min="1" max="480" placeholder="240" required>
+            </label>
+            <label class="form-row">
+              <span>Note</span>
+              <input type="text" name="note" placeholder="Optional stay or route detail">
+            </label>
+          </div>
+          <button class="button button-secondary" type="submit">Save Travel Time</button>
+        </form>
       </div>
-      <div class="form-grid-two">
-        <label class="form-row">
-          <span>Travel minutes</span>
-          <input type="number" name="travel_minutes" min="1" max="480" placeholder="60" required>
-        </label>
-        <label class="form-row">
-          <span>Note</span>
-          <input type="text" name="note" placeholder="Optional hotel/base note">
-        </label>
-      </div>
-      <button class="button button-secondary" type="submit">Save Travel Time</button>
-    </form>
-    {% if not travel_defaults %}
-      <div class="empty-state">No travel defaults learned or saved yet.</div>
+    </details>
+
+    {% if not location_rows %}
+      <div class="empty-state">No planning locations or travel defaults saved yet.</div>
     {% else %}
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Track</th>
-              <th>Base</th>
-              <th>Each way</th>
-              <th>Source</th>
-              <th>Seen</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for item in travel_defaults %}
-              <tr>
-                <td>{{ item.track_label }}</td>
-                <td>{{ item.base_label }}</td>
-                <td>{{ item.travel_label }}</td>
-                <td><span class="badge">{{ item.source }}</span></td>
-                <td>
-                  {% if item.source == "learned" %}
-                    {{ item.sample_count }} sample{% if item.sample_count != 1 %}s{% endif %}{% if item.last_seen_at %} · last {{ item.last_seen_at }}{% endif %}
-                  {% else %}
-                    manual
-                  {% endif %}
-                </td>
-                <td class="table-actions">
+      <div class="location-management-list">
+        <div class="location-management-head" aria-hidden="true">
+          <span>Location</span><span>Details</span><span>Travel</span><span>Source</span><span>Seen</span><span>Actions</span>
+        </div>
+        {% for location in location_rows %}
+          <article class="location-management-row{% if location.planning_enabled is sameas false %} is-inactive{% endif %}">
+            <div class="location-cell location-name-cell" data-label="Location">
+              <strong>{{ location.display_name }}</strong>
+            </div>
+            <div class="location-cell" data-label="Details">
+              {% if location.meeting_count %}
+                <span>{{ location.club_names or "NZTR calendar" }}</span>
+                <small>{{ location.meeting_count }} future date{% if location.meeting_count != 1 %}s{% endif %}</small>
+              {% else %}
+                <span>Travel only</span>
+              {% endif %}
+            </div>
+            <div class="location-cell location-travel-cell" data-label="Travel">
+              {% if location.travel_defaults %}
+                {% for item in location.travel_defaults %}
+                  <span><strong>{{ item.base_label }}</strong> → {{ item.travel_label }}</span>
+                  {% if item.note %}<small>{{ item.note }}</small>{% endif %}
+                {% endfor %}
+              {% else %}
+                <span class="muted">Not set</span>
+              {% endif %}
+            </div>
+            <div class="location-cell location-source-cell" data-label="Source">
+              {% for source in location.source_labels %}<span class="badge">{{ source }}</span>{% endfor %}
+            </div>
+            <div class="location-cell" data-label="Seen">
+              {% if location.meeting_count %}
+                <span>{{ location.first_date }} to {{ location.last_date }}</span>
+              {% endif %}
+              {% for item in location.travel_defaults %}
+                <small>
+                  {{ item.source }}{% if item.source == "learned" %} · {{ item.sample_count }} sample{% if item.sample_count != 1 %}s{% endif %}{% endif %}{% if item.last_seen_at %} · {{ item.last_seen_at }}{% endif %}
+                </small>
+              {% endfor %}
+            </div>
+            <div class="location-cell location-actions-cell" data-label="Actions">
+              {% if location.planning_enabled is not none %}
+                <form class="location-active-form" action="/admin/planning-locations" method="post">
+                  <input type="hidden" name="location_key" value="{{ location.location_key }}">
+                  <label class="planning-location-toggle">
+                    <input type="checkbox" name="enabled" value="1"{% if location.planning_enabled %} checked{% endif %} onchange="this.form.submit()">
+                    <span>{{ "Active" if location.planning_enabled else "Inactive" }}</span>
+                  </label>
+                </form>
+              {% endif %}
+              {% for item in location.travel_defaults %}
+                <div class="location-travel-actions">
                   <details class="inline-settings-details compact-row-details">
-                    <summary class="button button-compact button-secondary">Edit</summary>
+                    <summary class="button button-compact button-secondary">Edit {{ item.base_label }}</summary>
                     <form class="settings-form compact-settings-form" action="/admin/travel-defaults/{{ item.id }}/edit" method="post">
                       <label class="form-row">
-                        <span>Track</span>
+                        <span>Location</span>
                         <input type="text" name="track_label" value="{{ item.track_label }}" required>
                       </label>
                       <label class="form-row">
-                        <span>Base</span>
-                        <select name="base_label">
-                          <option value="Clow Place" {% if item.base_label == "Clow Place" %}selected{% endif %}>Clow Place</option>
-                          <option value="Office" {% if item.base_label == "Office" %}selected{% endif %}>Office</option>
-                        </select>
+                        <span>From</span>
+                        <input type="text" name="base_label" value="{{ item.base_label }}" required>
                       </label>
                       <label class="form-row">
                         <span>Travel minutes</span>
@@ -226,13 +217,13 @@
                     </form>
                   </details>
                   <form action="/admin/travel-defaults/{{ item.id }}/delete" method="post">
-                    <button class="button button-compact button-secondary" type="submit" onclick="return confirm('Delete this travel default?');">Delete</button>
+                    <button class="button button-compact button-secondary" type="submit" onclick="return confirm('Delete this travel time?');">Delete</button>
                   </form>
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+                </div>
+              {% endfor %}
+            </div>
+          </article>
+        {% endfor %}
       </div>
     {% endif %}
   </section>

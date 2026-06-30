@@ -1472,7 +1472,7 @@ a {
 
 .love-racing-card,
 .love-racing-dot,
-.planning-row {
+.day-planning-row {
   --love-location-colour: var(--shift-location-colour, var(--location-colour, var(--accent)));
   --love-bg-a: color-mix(in srgb, var(--love-racing-gold) 22%, var(--surface));
   --love-bg-b: color-mix(in srgb, var(--love-location-colour) 18%, var(--shift-bg));
@@ -3394,65 +3394,164 @@ textarea {
   color: var(--danger);
 }
 
-.planning-location-panel {
-  margin-top: 12px;
-  border-top: 1px solid var(--line);
-  padding-top: 10px;
+.day-planning-list {
+  display: grid;
+  gap: 8px;
 }
 
-.planning-location-panel summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  cursor: pointer;
+.day-planning-row {
+  padding: 10px 12px;
+  border: 1px solid var(--love-border);
+  border-left: 5px solid var(--love-racing-gold);
+  border-radius: 6px;
+  background: linear-gradient(135deg, var(--love-bg-a), var(--love-bg-b));
   color: var(--text);
-  font-weight: 900;
 }
 
-.planning-location-panel summary small {
+.day-planning-row > strong {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 1rem;
+}
+
+.day-planning-row dl {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.day-planning-row dl div {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.day-planning-row dt,
+.day-planning-row dd {
+  margin: 0;
+}
+
+.day-planning-row dt {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+
+.day-planning-row dd {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.planning-location-pointer {
+  margin-top: 10px;
+}
+
+.location-management-panel > .section-heading small {
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 800;
 }
 
-.planning-location-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  margin-top: 8px;
+.location-travel-entry {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-raised);
 }
 
-.planning-location-row {
+.location-travel-entry > summary {
+  padding: 11px 12px;
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 900;
+}
+
+.location-travel-entry-body {
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.location-management-list {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 8px;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.location-management-head,
+.location-management-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(140px, 1.2fr) minmax(170px, 1.45fr) minmax(95px, 0.7fr) minmax(150px, 1.2fr) minmax(170px, 1.25fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.location-management-head {
+  padding: 0 9px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.location-management-row {
+  padding: 10px 9px;
   border: 1px solid var(--line);
   border-left: 4px solid var(--love-racing-gold);
   border-radius: 6px;
   background: var(--surface-raised);
 }
 
-.planning-location-row.is-ignored {
+.location-management-row.is-inactive {
   border-left-color: var(--muted);
   opacity: 0.72;
 }
 
-.planning-location-row span,
-.planning-location-row strong,
-.planning-location-row small {
-  display: block;
+.location-cell {
+  display: grid;
+  gap: 3px;
   min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
 }
 
-.planning-location-row small {
-  margin-top: 2px;
+.location-cell small {
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 750;
+}
+
+.location-name-cell strong {
+  font-size: 0.94rem;
+}
+
+.location-source-cell {
+  justify-items: start;
+}
+
+.location-travel-cell > span + span,
+.location-travel-cell > small + span {
+  margin-top: 4px;
+}
+
+.location-actions-cell,
+.location-travel-actions {
+  align-items: start;
+}
+
+.location-travel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.location-travel-actions + .location-travel-actions {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--line);
+}
+
+.location-active-form {
+  margin-bottom: 5px;
 }
 
 .planning-location-toggle {
@@ -3470,35 +3569,6 @@ textarea {
   height: 18px;
   margin: 0;
   accent-color: var(--accent);
-}
-
-.planning-row {
-  display: grid;
-  grid-template-columns: minmax(84px, 0.7fr) minmax(0, 1fr) minmax(0, 1.1fr);
-  gap: 8px;
-  align-items: center;
-  padding: 9px;
-  border: 1px solid var(--love-border);
-  border-left: 5px solid var(--love-racing-gold);
-  border-radius: 8px;
-  background: linear-gradient(135deg, var(--love-bg-a), var(--love-bg-b));
-  color: var(--text);
-  text-decoration: none;
-}
-
-.planning-row span,
-.planning-row strong,
-.planning-row small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.planning-row span,
-.planning-row small {
-  color: var(--muted);
-  font-weight: 850;
 }
 
 .sync-panel {
@@ -3922,17 +3992,39 @@ th {
     grid-template-columns: minmax(74px, 0.8fr) minmax(56px, 1fr) auto;
   }
 
-  .planning-row {
-    grid-template-columns: 1fr;
-    gap: 3px;
+  .location-management-head {
+    display: none;
   }
 
-  .planning-location-list {
+  .location-management-row {
     grid-template-columns: 1fr;
+    gap: 8px;
   }
 
-  .planning-location-panel summary {
-    align-items: flex-start;
+  .location-cell {
+    grid-template-columns: minmax(76px, 0.35fr) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .location-cell::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 0.7rem;
+    font-weight: 900;
+    text-transform: uppercase;
+  }
+
+  .location-cell > * {
+    grid-column: 2;
+  }
+
+  .location-cell::before {
+    grid-column: 1;
+    grid-row: 1 / span 20;
+  }
+
+  .location-travel-actions {
+    gap: 6px;
   }
 
   .race-day-block-wide {

@@ -82,7 +82,11 @@ Free-text roster note remains available behind Raw roster note.
 
 Some Deputy notes omit base or on-track timing. The app stores default travel times per track/base so maths can still show a useful breakdown. Manual admin defaults win over learned defaults. Learned defaults are derived from previous roster notes only when both base and on-track times were present.
 
-Office and Clow Place are treated as equivalent base labels for lookup.
+Office and Clow Place are the same physical base and are canonicalized to one `Office / Clow Place` row. Named hotels remain separate bases so an out-of-region track can have several hotel-to-track journeys without guessing which hotel applies.
+
+An explicit `Travel then Overnighter` shift on the day before a race may teach the office-to-track journey for that next-day location. It does not teach hotel-to-track travel; that requires a named hotel and a real known duration.
+
+Planning visibility and travel defaults share one Admin Locations list for clarity. The Active switch still affects only public planning hints, and deleting a travel row does not delete a public calendar location.
 
 ## Public Racing Calendars
 
@@ -91,5 +95,7 @@ Love Racing's public RaceInfo/calendar pages expose meeting date, club/meeting, 
 Planning-location visibility is an Admin preference layered over the saved public snapshot. Ignoring a location hides its planning markers and summary counts without deleting the source rows or affecting Deputy. This keeps the action reversible and avoids another network scan when a location is included again.
 
 Love Racing entries are planning hints, not shifts. They render with a Love Racing gold/location-colour gradient and are suppressed when confirmed Deputy data already exists for that user/date/location. This keeps the calendar useful without confusing public race meetings with rostered work.
+
+Selecting a planning marker stays inside the app and opens that date's day view. The detail block shows only saved calendar facts and the Love Racing source; it has no external link and does not infer crew, positions, or timing.
 
 The live Love Racing calendar endpoint may return HTTP 403 to server-side requests. Refresh therefore falls back to NZTR's official final calendar PDF, using its positioned weekly columns and thoroughbred club codes. Static aliases may identify a known location, but must not introduce locations the collected roster data has never seen. Refresh runs weekly and replaces the prior snapshot so schedule corrections remove stale markers without retaining downloaded files.

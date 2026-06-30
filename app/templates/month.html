@@ -67,7 +67,7 @@
               </a>
             {% endfor %}
             {% for meeting in day.love_racing_meetings %}
-              <a class="list-shift love-racing-card" href="{{ meeting.source_url }}" target="_blank" rel="noopener" style="{{ meeting.colour_style }}">
+              <a class="list-shift love-racing-card" href="/day/{{ day.iso }}#planning-{{ meeting.id }}" style="{{ meeting.colour_style }}">
                 <span class="list-shift-main">
                   <strong>{{ meeting.location_label }}</strong>
                   <span>Planning race day</span>
@@ -140,7 +140,7 @@
                 </a>
               {% endif %}
               {% for meeting in day.love_racing_meetings %}
-                <a class="love-racing-dot" href="{{ meeting.source_url }}" target="_blank" rel="noopener" style="{{ meeting.colour_style }}" aria-label="Love Racing planning day at {{ meeting.location_label }}">
+                <a class="love-racing-dot" href="/day/{{ day.iso }}#planning-{{ meeting.id }}" style="{{ meeting.colour_style }}" aria-label="Love Racing planning day at {{ meeting.location_label }}">
                   <strong>{{ meeting.location_label }}</strong>
                   <span>Love Racing</span>
                 </a>

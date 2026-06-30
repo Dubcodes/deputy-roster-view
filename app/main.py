@@ -18,6 +18,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from .auth import clear_trusted_device, current_user, require_admin_user, trusted_device_middleware
 from .config import get_settings
 from .database import (
+    canonical_travel_base_label,
     clear_all_changed_flags,
     clear_changed_flags_for_user,
     clear_changed_for_date,
@@ -105,7 +106,7 @@ from .user_credentials import settings_for_user
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.06.30.2"
+APP_BUILD = "2026.06.30.3"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -615,12 +616,11 @@ def travel_default_keys_for_shift(shift: dict[str, object]) -> list[str]:
     return keys
 
 
-def travel_default_for_shift(shift: dict[str, object], base_label: str = "Clow Place") -> dict[str, object] | None:
+def travel_default_for_shift(
+    shift: dict[str, object], base_label: str = "Office / Clow Place"
+) -> dict[str, object] | None:
     keys = travel_default_keys_for_shift(shift)
     row = get_travel_time_default(keys, base_label=base_label)
-    if row is None and base_label.lower() in {"office", "clow place"}:
-        fallback_base = "Office" if base_label.lower() == "clow place" else "Clow Place"
-        row = get_travel_time_default(keys, base_label=fallback_base)
     return dict(row) if row else None
 
 
@@ -896,6 +896,15 @@ def safe_int(value: object) -> int | None:
         return None
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def safe_float(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return None
 
@@ -2783,21 +2792,44 @@ def admin_contact_rows() -> list[dict[str, object]]:
 
 def refresh_learned_travel_defaults() -> int:
     groups: dict[tuple[str, str, str], list[dict[str, object]]] = {}
-    for row in fetch_shifts_for_travel_learning():
-        shift = dict(row)
+
+    def shift_track_label(shift: dict[str, object]) -> str:
         parsed = parse_shift_title(str(shift.get("title") or ""))
         normalised = source_payload_normalised(str(shift.get("source_payload") or ""))
-        track_label = str(
+        return str(
             parsed.get("track_label")
             or normalised.get("location_name")
             or normalised.get("source_code")
             or ""
         ).strip()
+
+    def add_sample(
+        track_label: str,
+        base_label: str,
+        travel_minutes: int,
+        shift_date: str,
+        sample_kind: str,
+    ) -> None:
         if not track_label or track_label.lower() in GENERIC_TRACK_LABELS:
-            continue
+            return
+        track_key = travel_default_key(track_label)
+        if not track_key or travel_minutes <= 0 or travel_minutes > 8 * 60:
+            return
+        clean_base = canonical_travel_base_label(base_label)
+        groups.setdefault((track_key, track_label, clean_base), []).append(
+            {
+                "travel_minutes": travel_minutes,
+                "date": shift_date,
+                "sample_kind": sample_kind,
+            }
+        )
+
+    shifts = [dict(row) for row in fetch_shifts_for_travel_learning()]
+    for shift in shifts:
+        track_label = shift_track_label(shift)
         summary = parse_roster_summary(description_lines(str(shift.get("description") or "")))
         timings = timing_lookup(summary)
-        base_label = "Office" if timings.get("office") else "Clow Place"
+        base_label = "Office / Clow Place"
         base_clock = timings.get("office") or timings.get("clow place")
         on_track_clock = timings.get("on track")
         if not base_clock or not on_track_clock:
@@ -2807,16 +2839,60 @@ def refresh_learned_travel_defaults() -> int:
         if start_at is None or on_track_at is None:
             continue
         travel_minutes = int(round((on_track_at - start_at).total_seconds() / 60))
-        if travel_minutes <= 0 or travel_minutes > 8 * 60:
+        add_sample(
+            track_label,
+            base_label,
+            travel_minutes,
+            str(shift.get("date") or ""),
+            "roster_note",
+        )
+
+    next_day_by_owner: dict[tuple[int, str], list[dict[str, object]]] = {}
+    for shift in shifts:
+        owner_user_id = safe_int(shift.get("owner_user_id"))
+        shift_date = str(shift.get("date") or "")
+        if owner_user_id is None or not shift_date:
             continue
-        track_key = travel_default_key(track_label)
-        if not track_key:
+        next_day_by_owner.setdefault((owner_user_id, shift_date), []).append(shift)
+
+    for shift in shifts:
+        haystack = " ".join(
+            str(shift.get(key) or "") for key in ("title", "description")
+        ).lower()
+        if "travel then overnighter" not in haystack and "overnighter" not in haystack:
             continue
-        groups.setdefault((track_key, track_label, base_label), []).append(
-            {
-                "travel_minutes": travel_minutes,
-                "date": str(shift.get("date") or ""),
-            }
+        owner_user_id = safe_int(shift.get("owner_user_id"))
+        travel_date = parse_iso_datetime(str(shift.get("date") or ""))
+        if owner_user_id is None or travel_date is None:
+            continue
+        paid_hours = safe_float(shift.get("paid_hours"))
+        if paid_hours is not None and paid_hours > 0:
+            travel_minutes = int(round(paid_hours * 60))
+        else:
+            start_at = parse_iso_datetime(str(shift.get("start_at") or ""))
+            end_at = parse_iso_datetime(str(shift.get("end_at") or ""))
+            travel_minutes = (
+                int(round((end_at - start_at).total_seconds() / 60))
+                if start_at is not None and end_at is not None
+                else 0
+            )
+        next_date = (travel_date.date() + timedelta(days=1)).isoformat()
+        candidates = next_day_by_owner.get((owner_user_id, next_date), [])
+        next_track = next(
+            (
+                label
+                for candidate in candidates
+                if (label := shift_track_label(candidate))
+                and label.lower() not in GENERIC_TRACK_LABELS
+            ),
+            "",
+        )
+        add_sample(
+            next_track,
+            "Office / Clow Place",
+            travel_minutes,
+            str(shift.get("date") or ""),
+            "overnight_travel",
         )
 
     saved = 0
@@ -2824,6 +2900,13 @@ def refresh_learned_travel_defaults() -> int:
         counts = Counter(int(sample["travel_minutes"]) for sample in samples)
         travel_minutes, _ = counts.most_common(1)[0]
         dates = sorted(str(sample["date"] or "") for sample in samples if str(sample["date"] or ""))
+        sample_kinds = {str(sample.get("sample_kind") or "") for sample in samples}
+        if sample_kinds == {"overnight_travel"}:
+            note = "Learned from a preceding Travel then Overnighter shift."
+        elif "overnight_travel" in sample_kinds:
+            note = "Learned from roster notes and preceding overnight travel shifts."
+        else:
+            note = "Learned from previous roster notes."
         upsert_travel_time_default(
             track_key=track_key,
             track_label=track_label,
@@ -2833,7 +2916,7 @@ def refresh_learned_travel_defaults() -> int:
             sample_count=len(samples),
             first_seen_at=dates[0] if dates else "",
             last_seen_at=dates[-1] if dates else "",
-            note="Learned from previous roster notes.",
+            note=note,
         )
         saved += 1
     return saved
@@ -2847,6 +2930,57 @@ def travel_default_rows() -> list[dict[str, object]]:
         item["travel_label"] = format_minutes_duration(int(item.get("travel_minutes") or 0))
         rows.append(item)
     return rows
+
+
+def admin_location_rows(
+    planning_locations: list[dict[str, object]],
+    travel_defaults: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    locations: dict[str, dict[str, object]] = {}
+    for planning in planning_locations:
+        key = travel_default_key(planning.get("display_name") or planning.get("location_key"))
+        if not key:
+            continue
+        locations[key] = {
+            "location_key": planning.get("location_key") or key,
+            "display_name": planning.get("display_name") or key,
+            "planning_enabled": bool(int(planning.get("is_enabled") or 0)),
+            "meeting_count": int(planning.get("meeting_count") or 0),
+            "first_date": planning.get("first_date") or "",
+            "last_date": planning.get("last_date") or "",
+            "club_names": planning.get("club_names") or "",
+            "travel_defaults": [],
+        }
+
+    for travel in travel_defaults:
+        key = travel_default_key(travel.get("track_label") or travel.get("track_key"))
+        if not key:
+            continue
+        location = locations.setdefault(
+            key,
+            {
+                "location_key": key,
+                "display_name": travel.get("track_label") or key,
+                "planning_enabled": None,
+                "meeting_count": 0,
+                "first_date": "",
+                "last_date": "",
+                "club_names": "",
+                "travel_defaults": [],
+            },
+        )
+        location["travel_defaults"].append(travel)
+
+    for location in locations.values():
+        sources = []
+        if location.get("planning_enabled") is not None:
+            sources.append("Love Racing")
+        for travel in location.get("travel_defaults") or []:
+            source = str(travel.get("source") or "").title()
+            if source and source not in sources:
+                sources.append(source)
+        location["source_labels"] = sources
+    return sorted(locations.values(), key=lambda item: str(item.get("display_name") or "").lower())
 
 
 def diagnostic_source_payloads(limit: int = 8) -> list[dict[str, object]]:
@@ -3152,6 +3286,7 @@ def admin_view(request: Request, notice: str | None = None) -> object:
     love_racing_snapshot, love_racing_status = love_racing_view_context(
         datetime.now(settings.timezone).date())
     planning_locations = list_planning_locations()
+    location_rows = admin_location_rows(planning_locations, travel_defaults)
     return templates.TemplateResponse(
         "admin.html",
         {
@@ -3170,6 +3305,7 @@ def admin_view(request: Request, notice: str | None = None) -> object:
             "love_racing_status": love_racing_status,
             "love_racing_url": LOVE_RACING_URL,
             "planning_locations": planning_locations,
+            "location_rows": location_rows,
             "planning_location_enabled_count": sum(
                 1 for location in planning_locations if int(location.get("is_enabled") or 0)
             ),
@@ -3321,7 +3457,7 @@ async def admin_save_travel_default(request: Request) -> RedirectResponse:
     require_admin_user(request)
     form = await request.form()
     track_label = str(form.get("track_label") or "").strip()
-    base_label = str(form.get("base_label") or "Clow Place").strip() or "Clow Place"
+    base_label = canonical_travel_base_label(form.get("base_label"))
     minutes_text = str(form.get("travel_minutes") or "").strip()
     note = str(form.get("note") or "").strip()
     try:
@@ -3355,7 +3491,7 @@ async def admin_edit_travel_default(request: Request, default_id: int) -> Redire
     require_admin_user(request)
     form = await request.form()
     track_label = str(form.get("track_label") or "").strip()
-    base_label = str(form.get("base_label") or "Clow Place").strip() or "Clow Place"
+    base_label = canonical_travel_base_label(form.get("base_label"))
     minutes_text = str(form.get("travel_minutes") or "").strip()
     note = str(form.get("note") or "").strip()
     try:
@@ -3549,6 +3685,11 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
         [decorate_shift(row) for row in fetch_shifts_for_date(date_text, owner_user_id=owner_user_id)]
     )
     open_shifts = open_schedule_by_date(date_text, date_text).get(date_text, [])
+    planning_meetings = love_racing_by_date(
+        date_text,
+        date_text,
+        {date_text: shifts},
+    ).get(date_text, [])
     changes_by_shift: dict[int, list[dict[str, object]]] = {}
     for row in get_shift_changes_for_date(date_text):
         change = decorate_change(row)
@@ -3621,6 +3762,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             "month_number": day_date.month,
             "shifts": shifts,
             "open_shifts": open_shifts,
+            "planning_meetings": planning_meetings,
             "deputy_schedule_people": deputy_schedule_people,
             "deputy_schedule_label": deputy_schedule_label,
             "deputy_schedule_changed": deputy_schedule_changed,

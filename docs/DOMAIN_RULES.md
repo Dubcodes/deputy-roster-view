@@ -94,9 +94,10 @@ If Deputy has known schedule areas for the user's race-day location but no curre
 Known but not fully solved. For now:
 
 - Travel day may show `Travel then Overnighter`.
+- An explicit `Travel then Overnighter` shift immediately before a race day may teach the one-way `Office / Clow Place` to track travel time from that shift's duration.
 - The travel day and next race day usually involve the same crew.
 - If the travel day has no useful crew list, it can borrow the next day's crew list and label it as next-day crew.
-- Hotel/stay location and travel timing rules need a real current example before building more logic.
+- Hotel-to-track travel must remain attached to a named hotel/base. Do not infer it until the actual stay is known, because crews may be split across several hotels or a nearby town.
 
 ## Public Race-Day Planning
 
@@ -105,5 +106,6 @@ Love Racing data is public planning information only. Use it to show future race
 - Only location/date are useful.
 - Deputy rostered shifts and Deputy schedule rows are always higher priority.
 - Planning markers should look different from confirmed shifts and should use Love Racing gold plus the location colour.
+- Planning markers open the app's day view. Show only the saved date, location, club, and Love Racing calendar source; do not link out or infer roster details.
 - If a Deputy shift already exists for the same user/date/location, hide the public planning marker for that date/location.
 - Admins may ignore public planning locations that do not concern this crew. This affects only Love Racing planning hints; Deputy shifts and shared crew data remain unchanged.

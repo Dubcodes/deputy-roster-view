@@ -368,6 +368,7 @@ def init_db(settings: Settings | None = None) -> None:
             WHERE area_location_id IS NULL
             """
         )
+        _merge_equivalent_travel_bases(conn)
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -412,6 +413,62 @@ def row_to_dict(row: sqlite3.Row | None) -> dict | None:
 
 def calendar_location_key(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def canonical_travel_base_label(value: object) -> str:
+    label = re.sub(r"\s+", " ", str(value or "").strip())
+    key = calendar_location_key(label)
+    if not key or key in {"office", "clowplace", "officeclowplace", "clowplaceoffice"}:
+        return "Office / Clow Place"
+    return label
+
+
+def _merge_equivalent_travel_bases(conn: sqlite3.Connection) -> None:
+    rows = [dict(row) for row in conn.execute("SELECT * FROM travel_time_defaults").fetchall()]
+    grouped: dict[tuple[str, str], list[dict[str, object]]] = {}
+    for row in rows:
+        base_label = canonical_travel_base_label(row.get("base_label"))
+        grouped.setdefault((str(row.get("track_key") or ""), base_label.lower()), []).append(row)
+
+    for (_, _), matches in grouped.items():
+        canonical_base = canonical_travel_base_label(matches[0].get("base_label"))
+        if len(matches) == 1 and str(matches[0].get("base_label") or "") == canonical_base:
+            continue
+        matches.sort(
+            key=lambda row: (
+                1 if str(row.get("source") or "") == "manual" else 0,
+                str(row.get("updated_at") or ""),
+                int(row.get("sample_count") or 0),
+            ),
+            reverse=True,
+        )
+        winner = matches[0]
+        loser_ids = [int(row["id"]) for row in matches[1:]]
+        if loser_ids:
+            placeholders = ",".join("?" for _ in loser_ids)
+            conn.execute(f"DELETE FROM travel_time_defaults WHERE id IN ({placeholders})", loser_ids)
+        first_seen = min(
+            (str(row.get("first_seen_at") or "") for row in matches if str(row.get("first_seen_at") or "")),
+            default="",
+        )
+        last_seen = max(
+            (str(row.get("last_seen_at") or "") for row in matches if str(row.get("last_seen_at") or "")),
+            default="",
+        )
+        conn.execute(
+            """
+            UPDATE travel_time_defaults
+            SET base_label = ?, sample_count = ?, first_seen_at = ?, last_seen_at = ?
+            WHERE id = ?
+            """,
+            (
+                canonical_base,
+                sum(int(row.get("sample_count") or 0) for row in matches),
+                first_seen,
+                last_seen,
+                int(winner["id"]),
+            ),
+        )
 
 
 def count_app_users() -> int:
@@ -1411,6 +1468,7 @@ def list_planning_locations() -> list[dict[str, object]]:
                 COUNT(*) AS meeting_count,
                 MIN(meetings.meeting_date) AS first_date,
                 MAX(meetings.meeting_date) AS last_date,
+                GROUP_CONCAT(DISTINCT NULLIF(TRIM(meetings.club_name), '')) AS club_names,
                 COALESCE(preference.is_enabled, 1) AS is_enabled
             FROM love_racing_meetings meetings
             LEFT JOIN planning_location_preferences preference
@@ -1458,12 +1516,12 @@ def set_planning_location_enabled(location_key: str, enabled: bool) -> bool:
     return True
 
 
-def get_travel_time_default(track_keys: list[str], base_label: str = "Clow Place") -> sqlite3.Row | None:
+def get_travel_time_default(track_keys: list[str], base_label: str = "Office / Clow Place") -> sqlite3.Row | None:
     keys = [key.strip().lower() for key in track_keys if str(key or "").strip()]
     if not keys:
         return None
     placeholders = ",".join("?" for _ in keys)
-    params: list[object] = [*keys, base_label.strip() or "Clow Place"]
+    params: list[object] = [*keys, canonical_travel_base_label(base_label)]
     with get_connection() as conn:
         return conn.execute(
             f"""
@@ -1492,7 +1550,7 @@ def upsert_travel_time_default(
 ) -> None:
     now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
     clean_source = "manual" if source != "learned" else "learned"
-    clean_base = base_label.strip() or "Clow Place"
+    clean_base = canonical_travel_base_label(base_label)
     clean_key = track_key.strip().lower()
     if not clean_key or not track_label.strip() or travel_minutes <= 0:
         return
@@ -1565,11 +1623,22 @@ def update_travel_time_default(
 ) -> int:
     clean_key = track_key.strip().lower()
     clean_label = track_label.strip()
-    clean_base = base_label.strip() or "Clow Place"
+    clean_base = canonical_travel_base_label(base_label)
     if not clean_key or not clean_label or travel_minutes <= 0:
         return 0
     now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
     with get_connection() as conn:
+        conflict = conn.execute(
+            """
+            SELECT id
+            FROM travel_time_defaults
+            WHERE track_key = ? AND LOWER(base_label) = LOWER(?) AND id != ?
+            LIMIT 1
+            """,
+            (clean_key, clean_base, default_id),
+        ).fetchone()
+        if conflict is not None:
+            conn.execute("DELETE FROM travel_time_defaults WHERE id = ?", (int(conflict["id"]),))
         result = conn.execute(
             """
             UPDATE travel_time_defaults
@@ -1599,10 +1668,11 @@ def fetch_shifts_for_travel_learning(limit: int = 800) -> list[sqlite3.Row]:
     with get_connection() as conn:
         return conn.execute(
             """
-            SELECT id, title, description, location, start_at, end_at, date, source_payload
+            SELECT
+                id, owner_user_id, title, description, location,
+                start_at, end_at, date, paid_hours, source_payload
             FROM shifts
             WHERE deleted_from_source = 0
-              AND TRIM(COALESCE(description, '')) != ''
             ORDER BY date DESC, start_at DESC
             LIMIT ?
             """,
