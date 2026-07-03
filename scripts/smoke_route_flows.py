@@ -152,6 +152,65 @@ def main() -> None:
     admin_user = get_app_user_by_email("admin@example.com")
     if admin_user is None:
         raise AssertionError("Expected signed-up admin user to remain queryable.")
+
+    builder = client.get("/admin/roster-days/new")
+    if builder.status_code != 200 or "Build a race day" not in builder.text or "Crew and vehicles" not in builder.text:
+        raise AssertionError("Expected admin roster builder to render.")
+    draft = client.post(
+        "/admin/roster-days/save",
+        data={
+            "roster_date": "2026-07-12",
+            "new_track_label": "Test Park",
+            "race_type": "thoroughbred",
+            "office_start": "08:00",
+            "on_track_time": "09:15",
+            "first_race_time": "11:00",
+            "last_race_time": "16:30",
+            "race_count": "9",
+            "position_label": "Director",
+            "assignee": str(admin_user["id"]),
+            "vehicle_label": "684",
+            "notes": "Use the north gate.",
+        },
+        follow_redirects=False,
+    )
+    assert_redirect(draft, "/admin/roster-days/")
+    draft_location = draft.headers["location"]
+    roster_day_id = int(draft_location.split("/admin/roster-days/", 1)[1].split("?", 1)[0])
+    draft_page = client.get(f"/admin/roster-days/{roster_day_id}")
+    if "Not published yet" not in draft_page.text or "Use the north gate." not in draft_page.text:
+        raise AssertionError("Expected saved roster draft to render privately.")
+    publish = client.post(f"/admin/roster-days/{roster_day_id}/publish", follow_redirects=False)
+    assert_redirect(publish, "Roster+version+1+published")
+    published_day = client.get("/day/2026-07-12")
+    if "Published roster" not in published_day.text or "Test Park" not in published_day.text or "684" not in published_day.text:
+        raise AssertionError("Expected published roster to appear on the assigned user's day view.")
+    published_month = client.get("/month?year=2026&month=7")
+    if "published-roster-marker" not in published_month.text or "Test Park" not in published_month.text:
+        raise AssertionError("Expected published roster marker on the assigned user's month view.")
+    changed_draft = client.post(
+        "/admin/roster-days/save",
+        data={
+            "roster_day_id": str(roster_day_id),
+            "roster_date": "2026-07-12",
+            "track_label": "Test Park",
+            "race_type": "thoroughbred",
+            "office_start": "08:15",
+            "on_track_time": "09:30",
+            "first_race_time": "11:00",
+            "last_race_time": "16:30",
+            "race_count": "9",
+            "position_label": "Director",
+            "assignee": str(admin_user["id"]),
+            "vehicle_label": "684",
+            "notes": "Use the north gate.",
+        },
+        follow_redirects=False,
+    )
+    assert_redirect(changed_draft, f"/admin/roster-days/{roster_day_id}")
+    review_page = client.get(f"/admin/roster-days/{roster_day_id}")
+    if "Review unpublished changes" not in review_page.text or "08:00" not in review_page.text or "08:15" not in review_page.text:
+        raise AssertionError("Expected saved changes to be highlighted against the published roster.")
     diagnostic_marker = "LAZY-DIAGNOSTIC-MARKER"
     save_deputy_web_capture_diagnostic(
         owner_user_id=int(admin_user["id"]),

@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+
+{% block title %}Build Race Day - Deputy Roster View{% endblock %}
+
+{% block content %}
+  <section class="page-heading compact-heading">
+    <div>
+      <p class="eyebrow">Admin · Roster builder</p>
+      <h1>{% if roster_day.id %}Edit {{ roster_day.track_label }}{% else %}Build a race day{% endif %}</h1>
+      <p class="muted">Save a private draft first. Publishing is a separate action after you review the changes.</p>
+    </div>
+    <div class="heading-actions">
+      <a class="button button-secondary" href="/admin">Back to admin</a>
+      {% if roster_day.id and roster_day.status != "published" %}
+        <form action="/admin/roster-days/{{ roster_day.id }}/publish" method="post" onsubmit="return confirm('Publish this roster to the assigned crew?');">
+          <button class="button" type="submit">Publish roster</button>
+        </form>
+      {% endif %}
+    </div>
+  </section>
+
+  {% if roster_day.id %}
+    <section class="builder-status-strip">
+      <span class="badge{% if roster_day.status == 'changes_pending' %} badge-warn{% endif %}">{{ roster_day.status|replace('_', ' ')|title }}</span>
+      {% if roster_day.published_at %}<span>Last published {{ roster_day.published_at|datetime }}</span>{% else %}<span>Not published yet</span>{% endif %}
+    </section>
+  {% endif %}
+
+  {% if changes %}
+    <section class="table-panel builder-review-panel">
+      <div class="section-heading"><h2>Review unpublished changes</h2><span class="badge badge-warn">{{ changes|length }} changed</span></div>
+      <p class="muted">These highlights compare this draft with the version crew can currently see.</p>
+      <div class="builder-change-list">
+        {% for change in changes %}
+          <div><strong>{{ change.label }}</strong><span>{{ change.old }} → {{ change.new }}</span></div>
+        {% endfor %}
+      </div>
+    </section>
+  {% elif has_published_version %}
+    <div class="notice">This draft matches the published roster.</div>
+  {% endif %}
+
+  <form class="builder-form" action="/admin/roster-days/save" method="post">
+    <input type="hidden" name="roster_day_id" value="{{ roster_day.id or '' }}">
+
+    <section class="table-panel">
+      <div class="section-heading"><h2>Race day</h2></div>
+      <div class="builder-race-grid">
+        <label class="form-row{% if 'roster_date' in changed_fields %} is-changed{% endif %}">
+          <span>Date</span>
+          <input type="date" name="roster_date" value="{{ roster_day.roster_date }}" required>
+        </label>
+        <label class="form-row{% if 'track_label' in changed_fields %} is-changed{% endif %}">
+          <span>Track</span>
+          <select name="track_label" data-track-select>
+            <option value="">Choose a track</option>
+            {% for track in track_options %}
+              <option value="{{ track.label }}" data-race-type="{{ track.default_race_type }}" data-travel-minutes="{{ track.travel_minutes }}"{% if track.label == roster_day.track_label %} selected{% endif %}>{{ track.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="form-row">
+          <span>New / unlisted track</span>
+          <input type="text" name="new_track_label" placeholder="Only use when it is not in the list">
+        </label>
+        <label class="form-row{% if 'race_type' in changed_fields %} is-changed{% endif %}">
+          <span>Race type</span>
+          <select name="race_type" data-race-type-select required>
+            {% for value, label in race_types %}<option value="{{ value }}"{% if value == roster_day.race_type %} selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section class="table-panel">
+      <div class="section-heading"><h2>Timing</h2></div>
+      <p class="muted">On-track time is suggested from the saved Office / Clow Place travel time. You can always overwrite it.</p>
+      <div class="builder-time-grid">
+        <label class="form-row{% if 'office_start' in changed_fields %} is-changed{% endif %}"><span>Start at office</span><input type="time" name="office_start" value="{{ roster_day.office_start }}" data-office-time></label>
+        <label class="form-row{% if 'on_track_time' in changed_fields %} is-changed{% endif %}"><span>Arrive on track</span><input type="time" name="on_track_time" value="{{ roster_day.on_track_time }}" data-on-track-time></label>
+        <label class="form-row{% if 'first_race_time' in changed_fields %} is-changed{% endif %}"><span>First race</span><input type="time" name="first_race_time" value="{{ roster_day.first_race_time }}"></label>
+        <label class="form-row{% if 'last_race_time' in changed_fields %} is-changed{% endif %}"><span>Last race</span><input type="time" name="last_race_time" value="{{ roster_day.last_race_time }}"></label>
+        <label class="form-row{% if 'race_count' in changed_fields %} is-changed{% endif %}"><span>Total races</span><input type="number" name="race_count" min="1" max="50" value="{{ roster_day.race_count or '' }}"></label>
+      </div>
+    </section>
+
+    <section class="table-panel">
+      <div class="section-heading"><h2>Crew and vehicles</h2><small>Blank positions are not published</small></div>
+      <div class="builder-assignment-list" role="table" aria-label="Crew assignments">
+        <div class="builder-assignment-row builder-assignment-head" role="row"><span>Position</span><span>Who</span><span>Vehicle</span></div>
+        {% for position in positions %}
+          {% set assignment = assignments.get(position|lower, {}) %}
+          <div class="builder-assignment-row{% if position|lower in changed_positions %} is-changed{% endif %}" role="row">
+            <strong>{{ position }}</strong>
+            <input type="hidden" name="position_label" value="{{ position }}">
+            <select name="assignee" aria-label="Person working {{ position }}">
+              <option value="">Not assigned</option>
+              <option value="tbc"{% if assignment.assignee_label == 'TBC' and not assignment.user_id %} selected{% endif %}>TBC</option>
+              {% for user in users %}
+                <option value="{{ user.id }}"{% if assignment.user_id == user.id %} selected{% endif %}>{{ user.display_name or user.deputy_email }}</option>
+              {% endfor %}
+            </select>
+            <select name="vehicle_label" aria-label="Vehicle for {{ position }}">
+              <option value="">No vehicle</option>
+              {% for vehicle in vehicles %}<option value="{{ vehicle }}"{% if assignment.vehicle_label == vehicle %} selected{% endif %}>{{ vehicle }}</option>{% endfor %}
+            </select>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="table-panel">
+      <label class="form-row{% if 'notes' in changed_fields %} is-changed{% endif %}"><span>Important notes shown to crew</span><textarea name="notes" rows="5" placeholder="Access, parking, gear, unusual timings…">{{ roster_day.notes }}</textarea></label>
+    </section>
+
+    <section class="table-panel spreadsheet-placeholder">
+      <div class="section-heading"><h2>Spreadsheet paste</h2><span class="badge">Waiting for sample</span></div>
+      <p class="muted">Once we have one real spreadsheet example, pasted rows will fill this draft and show a preview before saving. They will never publish automatically.</p>
+    </section>
+
+    <div class="builder-save-bar"><button class="button" type="submit">Save draft and review</button><span>Saving does not notify crew.</span></div>
+  </form>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    (() => {
+      const track = document.querySelector('[data-track-select]');
+      const raceType = document.querySelector('[data-race-type-select]');
+      const office = document.querySelector('[data-office-time]');
+      const onTrack = document.querySelector('[data-on-track-time]');
+      if (!track || !office || !onTrack) return;
+      const suggestArrival = () => {
+        const option = track.options[track.selectedIndex];
+        const minutes = Number(option?.dataset.travelMinutes || 0);
+        if (!office.value || !minutes || (onTrack.value && onTrack.dataset.suggested !== '1')) return;
+        const [hours, mins] = office.value.split(':').map(Number);
+        const total = (hours * 60 + mins + minutes) % 1440;
+        onTrack.value = `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+        onTrack.dataset.suggested = '1';
+      };
+      track.addEventListener('change', () => {
+        const option = track.options[track.selectedIndex];
+        if (option?.dataset.raceType) raceType.value = option.dataset.raceType;
+        suggestArrival();
+      });
+      office.addEventListener('change', suggestArrival);
+      onTrack.addEventListener('input', () => { onTrack.dataset.suggested = '0'; });
+    })();
+  </script>
+{% endblock %}

@@ -23,6 +23,12 @@
             <span>{{ day.date.day }}</span>
           </a>
           <div class="list-day-shifts">
+            {% for roster in day.manual_rosters %}
+              <a class="list-shift published-roster-marker" href="/day/{{ day.iso }}">
+                <span class="list-shift-main"><strong>{{ roster.track_label }}</strong><span>{{ roster.position_label }}</span></span>
+                <span class="list-shift-meta"><span>{{ roster.office_start or "Time TBC" }}</span><span>Published roster</span></span>
+              </a>
+            {% endfor %}
             {% for shift in day.shifts %}
               <a class="list-shift{% if shift.deleted_from_source %} is-deleted{% endif %}{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}" style="{{ shift.colour_style }}">
                 <span class="list-shift-main">
@@ -112,6 +118,12 @@
             </a>
 
             <div class="shift-list">
+              {% for roster in day.manual_rosters %}
+                <a class="shift-card published-roster-marker" href="/day/{{ day.iso }}">
+                  <strong class="shift-track">{{ roster.track_label }}</strong>
+                  <span class="shift-mini"><span class="shift-mini-role">{{ roster.position_label }}</span><span class="shift-mini-time">{{ roster.office_start or "TBC" }}</span></span>
+                </a>
+              {% endfor %}
               {% for shift in day.shifts %}
                 <a id="shift-card-{{ shift.id }}" class="shift-card{% if shift.deleted_from_source %} is-deleted{% endif %}{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}" style="{{ shift.colour_style }}">
                   <strong class="shift-track">{{ shift.track_label }}</strong>

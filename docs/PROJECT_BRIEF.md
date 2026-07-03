@@ -31,6 +31,7 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 - Let users change their own PIN, update their saved Deputy login details, and submit an error report with recent redacted diagnostics.
 - Let users deactivate their own account, with deactivated account/device data purged after a 30-day cooling-off period.
 - Let admins manage default track travel times used when Deputy roster notes are missing base/on-track timing.
+- Let admins build race-day roster drafts, review changes against the last published version, and publish assignments to the selected crew as an early test of replacing Deputy.
 - Keep personal roster views scoped to the signed-in user's own shifts. Shared crew context is only shown as race-day schedule context.
 - Stagger background syncs across users so Deputy is not hit by every account at once.
 - Run with Docker Compose / Portainer.
@@ -43,6 +44,7 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 - Full overnight/travel-day calculations beyond simple display and next-day crew fallback.
 - Timesheet submission and leave/time-off workflows.
 - Treating public racing calendars as confirmed work. They may become a faint planning overlay later, but Deputy remains the source of truth for rostered work.
+- Spreadsheet roster import until a real source spreadsheet is available to map and test.
 
 ## Primary UX
 

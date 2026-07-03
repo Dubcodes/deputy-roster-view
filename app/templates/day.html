@@ -13,8 +13,34 @@
     </div>
   </section>
 
-  {% if not shifts and not open_shifts and not planning_meetings %}
+  {% if not shifts and not open_shifts and not planning_meetings and not manual_rosters %}
     <div class="empty-state">No shifts listed for this day.</div>
+  {% endif %}
+
+  {% if manual_rosters %}
+    {% for roster in manual_rosters %}
+      <section class="detail-card published-roster-card">
+        <div class="detail-card-heading">
+          <div>
+            <p class="eyebrow">Published roster · version {{ roster.version_number }}</p>
+            <h2>{{ roster.track_label }}{% if roster.vehicle_label %} <span class="header-vehicle-label">- {{ roster.vehicle_label }}</span>{% endif %}</h2>
+            <p class="detail-subtitle">{{ roster.position_label }} · {{ roster.race_type_label }}</p>
+          </div>
+          {% if current_user.is_admin %}<a class="button button-secondary button-compact" href="/admin/roster-days/{{ roster.id }}">Edit roster</a>{% endif %}
+        </div>
+        <section class="race-day-panel race-day-panel-plain">
+          <div class="section-heading"><h3>Race Day</h3></div>
+          <dl class="race-day-rows">
+            {% if roster.office_start %}<div><dt>Office</dt><dd>{{ roster.office_start }}</dd></div>{% endif %}
+            {% if roster.on_track_time %}<div><dt>On track</dt><dd>{{ roster.on_track_time }}</dd></div>{% endif %}
+            {% if roster.first_race_time %}<div><dt>First race</dt><dd>{{ roster.first_race_time }}</dd></div>{% endif %}
+            {% if roster.last_race_time %}<div><dt>Last race</dt><dd>{{ roster.last_race_time }}</dd></div>{% endif %}
+            {% if roster.race_count %}<div><dt>Races</dt><dd>{{ roster.race_count }}</dd></div>{% endif %}
+          </dl>
+        </section>
+        {% if roster.notes %}<section class="description-block"><h3>Important notes</h3><p>{{ roster.notes }}</p></section>{% endif %}
+      </section>
+    {% endfor %}
   {% endif %}
 
   {% if planning_meetings %}

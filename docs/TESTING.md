@@ -15,7 +15,7 @@ If local Python does not have Jinja:
 
 ```powershell
 python -m pip install --target .codex_tmp_jinja jinja2==3.1.5
-$env:PYTHONPATH='.codex_tmp_jinja'; python -c "from jinja2 import Environment, FileSystemLoader; env=Environment(loader=FileSystemLoader('app/templates')); env.filters.update(datetime=lambda v, fmt='%a %d %b %H:%M': str(v), time=str, day_short=str, hours=str, urlencode=str); [env.get_template(t) for t in ['admin.html','base.html','help.html','login.html','month.html','day.html','settings.html','signup.html','timesheet.html']]; print('templates ok')"
+$env:PYTHONPATH='.codex_tmp_jinja'; python -c "from jinja2 import Environment, FileSystemLoader; env=Environment(loader=FileSystemLoader('app/templates')); env.filters.update(datetime=lambda v, fmt='%a %d %b %H:%M': str(v), time=str, day_short=str, hours=str, urlencode=str); [env.get_template(t) for t in ['admin.html','base.html','help.html','login.html','month.html','day.html','roster_day_builder.html','settings.html','signup.html','timesheet.html']]; print('templates ok')"
 $env:PYTHONPATH='.codex_tmp_jinja'; python scripts\smoke_render_templates.py
 ```
 
@@ -48,6 +48,7 @@ After Portainer redeploy:
 - Confirm spinner/progress appears and then hides.
 - Confirm a failed sync shows a useful message below the status.
 - Open `/admin`.
+- Open `/admin/roster-days/new`, save a draft, confirm it remains private, publish it, and verify only an assigned user's month/day views show it.
 - Confirm each user shows next planned sync and last sync status.
 - If using the temporary tunnel stack, confirm its `cloudflared` container logs show a `trycloudflare.com` URL.
 

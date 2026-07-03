@@ -306,6 +306,59 @@ def init_db(settings: Settings | None = None) -> None:
                 updated_at TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS roster_days (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                roster_date TEXT,
+                track_key TEXT,
+                track_label TEXT,
+                race_type TEXT,
+                office_start TEXT,
+                on_track_time TEXT,
+                first_race_time TEXT,
+                last_race_time TEXT,
+                race_count INTEGER,
+                notes TEXT,
+                status TEXT DEFAULT 'draft',
+                published_snapshot TEXT,
+                created_by_user_id INTEGER,
+                updated_by_user_id INTEGER,
+                published_by_user_id INTEGER,
+                created_at TEXT,
+                updated_at TEXT,
+                published_at TEXT,
+                UNIQUE(roster_date, track_key),
+                FOREIGN KEY (created_by_user_id) REFERENCES app_users(id) ON DELETE SET NULL,
+                FOREIGN KEY (updated_by_user_id) REFERENCES app_users(id) ON DELETE SET NULL,
+                FOREIGN KEY (published_by_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS roster_day_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                roster_day_id INTEGER,
+                position_label TEXT,
+                user_id INTEGER,
+                assignee_label TEXT,
+                vehicle_label TEXT,
+                sort_order INTEGER DEFAULT 999999,
+                created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(roster_day_id, position_label),
+                FOREIGN KEY (roster_day_id) REFERENCES roster_days(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS roster_day_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                roster_day_id INTEGER,
+                version_number INTEGER,
+                snapshot TEXT,
+                published_by_user_id INTEGER,
+                published_at TEXT,
+                UNIQUE(roster_day_id, version_number),
+                FOREIGN KEY (roster_day_id) REFERENCES roster_days(id) ON DELETE CASCADE,
+                FOREIGN KEY (published_by_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_shifts_date ON shifts(date);
             CREATE INDEX IF NOT EXISTS idx_shifts_start_at ON shifts(start_at);
             CREATE INDEX IF NOT EXISTS idx_shifts_changed ON shifts(changed_since_viewed);
@@ -323,6 +376,9 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_travel_time_defaults_track ON travel_time_defaults(track_key, base_label);
             CREATE INDEX IF NOT EXISTS idx_love_racing_meetings_date ON love_racing_meetings(meeting_date, racecourse_key);
             CREATE INDEX IF NOT EXISTS idx_planning_location_preferences_enabled ON planning_location_preferences(is_enabled);
+            CREATE INDEX IF NOT EXISTS idx_roster_days_date ON roster_days(roster_date, status);
+            CREATE INDEX IF NOT EXISTS idx_roster_day_assignments_user ON roster_day_assignments(user_id, roster_day_id);
+            CREATE INDEX IF NOT EXISTS idx_roster_day_versions_day ON roster_day_versions(roster_day_id, version_number DESC);
             """
         )
         _ensure_default_crew_pool(conn)
@@ -1266,6 +1322,219 @@ def list_admin_overrides(limit: int = 40) -> list[sqlite3.Row]:
             (limit,),
         ).fetchall()
     return rows
+
+
+def list_roster_days(limit: int = 40) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT d.*,
+                   creator.display_name AS created_by_name,
+                   publisher.display_name AS published_by_name,
+                   (SELECT COUNT(*) FROM roster_day_assignments a WHERE a.roster_day_id = d.id) AS assignment_count,
+                   (SELECT MAX(version_number) FROM roster_day_versions v WHERE v.roster_day_id = d.id) AS version_number
+            FROM roster_days d
+            LEFT JOIN app_users creator ON creator.id = d.created_by_user_id
+            LEFT JOIN app_users publisher ON publisher.id = d.published_by_user_id
+            ORDER BY d.roster_date DESC, LOWER(d.track_label)
+            LIMIT ?
+            """,
+            (max(1, int(limit or 40)),),
+        ).fetchall()
+
+
+def get_roster_day(roster_day_id: int) -> sqlite3.Row | None:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM roster_days WHERE id = ?",
+            (roster_day_id,),
+        ).fetchone()
+
+
+def get_roster_day_assignments(roster_day_id: int) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT a.*, u.display_name, u.deputy_email
+            FROM roster_day_assignments a
+            LEFT JOIN app_users u ON u.id = a.user_id
+            WHERE a.roster_day_id = ?
+            ORDER BY a.sort_order, LOWER(a.position_label)
+            """,
+            (roster_day_id,),
+        ).fetchall()
+
+
+def save_roster_day(
+    *,
+    roster_day_id: int | None,
+    roster_date: str,
+    track_key: str,
+    track_label: str,
+    race_type: str,
+    office_start: str,
+    on_track_time: str,
+    first_race_time: str,
+    last_race_time: str,
+    race_count: int | None,
+    notes: str,
+    updated_by_user_id: int,
+    assignments: list[dict[str, object]],
+) -> int:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        existing = None
+        if roster_day_id is not None:
+            existing = conn.execute(
+                "SELECT id, published_snapshot FROM roster_days WHERE id = ?",
+                (roster_day_id,),
+            ).fetchone()
+        if existing is None:
+            existing = conn.execute(
+                "SELECT id, published_snapshot FROM roster_days WHERE roster_date = ? AND track_key = ?",
+                (roster_date, track_key),
+            ).fetchone()
+
+        if existing is None:
+            cursor = conn.execute(
+                """
+                INSERT INTO roster_days (
+                    roster_date, track_key, track_label, race_type, office_start,
+                    on_track_time, first_race_time, last_race_time, race_count,
+                    notes, status, published_snapshot, created_by_user_id,
+                    updated_by_user_id, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', '', ?, ?, ?, ?)
+                """,
+                (
+                    roster_date, track_key, track_label, race_type, office_start,
+                    on_track_time, first_race_time, last_race_time, race_count,
+                    notes, updated_by_user_id, updated_by_user_id, now, now,
+                ),
+            )
+            saved_id = int(cursor.lastrowid)
+        else:
+            saved_id = int(existing["id"])
+            status = "changes_pending" if str(existing["published_snapshot"] or "").strip() else "draft"
+            conn.execute(
+                """
+                UPDATE roster_days
+                SET roster_date = ?, track_key = ?, track_label = ?, race_type = ?,
+                    office_start = ?, on_track_time = ?, first_race_time = ?,
+                    last_race_time = ?, race_count = ?, notes = ?, status = ?,
+                    updated_by_user_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    roster_date, track_key, track_label, race_type, office_start,
+                    on_track_time, first_race_time, last_race_time, race_count,
+                    notes, status, updated_by_user_id, now, saved_id,
+                ),
+            )
+
+        conn.execute("DELETE FROM roster_day_assignments WHERE roster_day_id = ?", (saved_id,))
+        for assignment in assignments:
+            conn.execute(
+                """
+                INSERT INTO roster_day_assignments (
+                    roster_day_id, position_label, user_id, assignee_label,
+                    vehicle_label, sort_order, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    saved_id,
+                    str(assignment.get("position_label") or "").strip(),
+                    assignment.get("user_id"),
+                    str(assignment.get("assignee_label") or "").strip(),
+                    str(assignment.get("vehicle_label") or "").strip(),
+                    int(assignment.get("sort_order") or 999999),
+                    now,
+                    now,
+                ),
+            )
+    return saved_id
+
+
+def publish_roster_day(roster_day_id: int, snapshot: str, published_by_user_id: int) -> int:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        row = conn.execute("SELECT id FROM roster_days WHERE id = ?", (roster_day_id,)).fetchone()
+        if row is None:
+            return 0
+        version_row = conn.execute(
+            "SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version FROM roster_day_versions WHERE roster_day_id = ?",
+            (roster_day_id,),
+        ).fetchone()
+        version_number = int(version_row["next_version"] or 1)
+        conn.execute(
+            """
+            UPDATE roster_days
+            SET status = 'published', published_snapshot = ?,
+                published_by_user_id = ?, published_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (snapshot, published_by_user_id, now, now, roster_day_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO roster_day_versions (
+                roster_day_id, version_number, snapshot, published_by_user_id, published_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (roster_day_id, version_number, snapshot, published_by_user_id, now),
+        )
+    return version_number
+
+
+def fetch_published_roster_days_between(start_date: str, end_date: str) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT d.*,
+                   (SELECT MAX(version_number) FROM roster_day_versions v WHERE v.roster_day_id = d.id) AS version_number
+            FROM roster_days d
+            WHERE d.roster_date BETWEEN ? AND ?
+              AND TRIM(COALESCE(d.published_snapshot, '')) != ''
+            ORDER BY d.roster_date, LOWER(d.track_label)
+            """,
+            (start_date, end_date),
+        ).fetchall()
+
+
+def list_roster_builder_location_labels() -> list[str]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT label
+            FROM (
+                SELECT display_name AS label FROM crew_known_locations
+                UNION
+                SELECT track_label AS label FROM travel_time_defaults
+                UNION
+                SELECT racecourse AS label FROM love_racing_meetings
+                UNION
+                SELECT name AS label FROM deputy_schedule_locations
+            )
+            WHERE TRIM(COALESCE(label, '')) != ''
+            ORDER BY LOWER(label)
+            """
+        ).fetchall()
+    return [str(row["label"]).strip() for row in rows]
+
+
+def list_roster_builder_area_names() -> list[str]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT name
+            FROM deputy_schedule_areas
+            WHERE TRIM(COALESCE(name, '')) != ''
+            ORDER BY COALESCE(roster_sort_order, 999999), LOWER(name)
+            """
+        ).fetchall()
+    return [str(row["name"]).strip() for row in rows]
 
 
 def list_travel_time_defaults() -> list[sqlite3.Row]:

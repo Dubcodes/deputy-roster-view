@@ -3394,6 +3394,131 @@ textarea {
   color: var(--danger);
 }
 
+/* Admin race-day builder */
+.builder-status-strip,
+.builder-save-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.builder-status-strip {
+  margin-bottom: 12px;
+  color: var(--muted);
+}
+
+.builder-form {
+  display: grid;
+  gap: 12px;
+}
+
+.builder-race-grid,
+.builder-time-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.builder-assignment-list,
+.roster-day-admin-list,
+.builder-change-list {
+  display: grid;
+  gap: 6px;
+}
+
+.builder-assignment-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.8fr) minmax(150px, 1.4fr) minmax(100px, 0.8fr);
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.builder-assignment-head {
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.builder-assignment-row.is-changed,
+.form-row.is-changed {
+  padding: 8px;
+  border: 2px solid var(--notice-accent);
+  border-radius: 8px;
+  background: var(--notice-bg);
+}
+
+.builder-change-list div,
+.roster-day-admin-list a {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(0, 1.8fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.builder-change-list div {
+  grid-template-columns: minmax(120px, 0.7fr) minmax(0, 1.8fr);
+}
+
+.roster-day-admin-list a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.builder-save-bar {
+  position: sticky;
+  z-index: 5;
+  bottom: 8px;
+  justify-content: space-between;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.published-roster-card,
+.published-roster-marker {
+  border-left: 5px solid var(--accent);
+  background: color-mix(in srgb, var(--surface-raised) 86%, var(--accent) 14%);
+}
+
+input[type="date"],
+input[type="number"] {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+}
+
+@media (max-width: 620px) {
+  .builder-assignment-head {
+    display: none;
+  }
+
+  .builder-assignment-row {
+    grid-template-columns: 1fr;
+  }
+
+  .builder-change-list div,
+  .roster-day-admin-list a {
+    grid-template-columns: 1fr;
+  }
+}
+
 .day-planning-list {
   display: grid;
   gap: 8px;

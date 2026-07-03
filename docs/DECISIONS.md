@@ -103,3 +103,13 @@ Love Racing entries are planning hints, not shifts. They render with a Love Raci
 Selecting a planning marker stays inside the app and opens that date's day view. The detail block shows only saved calendar facts and the Love Racing source; it has no external link and does not infer crew, positions, or timing.
 
 The live Love Racing calendar endpoint may return HTTP 403 to server-side requests. Refresh therefore falls back to NZTR's official final calendar PDF, using its positioned weekly columns and thoroughbred club codes. Static aliases may identify a known location, but must not introduce locations the collected roster data has never seen. Refresh runs weekly and replaces the prior snapshot so schedule corrections remove stale markers without retaining downloaded files.
+
+## Manual Roster Publishing Trial
+
+The replacement-roster trial uses an explicit draft, review, publish flow. Saving never changes what crew see. The builder compares the draft with the last published snapshot and highlights timing, notes, person, position, and vehicle changes before an admin publishes a new version.
+
+Known Deputy areas seed the position list, active app users seed the crew list, and known vehicle areas seed vehicles. Office-to-track defaults may suggest arrival time but never lock it. Greyhound remains selectable while it is still operational; the data model does not hard-code the four current race-day types as permanent database columns.
+
+Future personal calendar feeds should use a separate random revocable token per user because calendar clients cannot complete the normal PIN/cookie login. Store only a token hash. The feed must include only that user's published assignments, use a stable UID per roster day/user, and increment `SEQUENCE` when a roster version is published. Initially expose office start, track, position, vehicle, and essential notes; do not invent an end time when it is unknown.
+
+Spreadsheet paste must populate a draft preview and must never publish directly. Build the column adapter only after a real spreadsheet sample is available.

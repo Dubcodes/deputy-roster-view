@@ -55,6 +55,7 @@ def render_day_template() -> None:
         "day.html",
         "login.html",
         "month.html",
+        "roster_day_builder.html",
         "settings.html",
         "signup.html",
         "timesheet.html",

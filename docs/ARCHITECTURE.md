@@ -63,6 +63,7 @@ Admins can include or ignore individual saved planning locations. The preference
 - `/sync-now`: starts a background sync for the signed-in account and redirects/polls.
 - `/signup` and `/login`: one-time trusted-device flow.
 - `/admin`: user/sync health, per-user Deputy capture diagnostics, trusted devices, PIN/Deputy login maintenance, per-user sync, deactivate/reactivate controls, roster reset, error reports, and manual override audit.
+- `/admin/roster-days/new` and `/admin/roster-days/{id}`: admin-only race-day draft builder and publish review.
 
 ## Local State
 
@@ -89,6 +90,8 @@ Track travel defaults live in `travel_time_defaults`. Admin-entered defaults are
 Learning collapses duplicate user copies into one sample per track/date. Generic schedule context is excluded, and the legacy `G Cambridge` label is canonicalized to `Cambridge Greyhound` without merging it into the logically separate Harness location.
 
 The Admin Locations section joins planning-location visibility and travel defaults for display, but their effects remain separate: Active only controls Love Racing planning hints, while travel rows supply timing fallbacks. Deputy data is unaffected by either control.
+
+Manual roster test data lives in `roster_days`, `roster_day_assignments`, and append-only `roster_day_versions`. Editing updates a private draft. Publishing stores a complete JSON snapshot and version so crew keep seeing the previous published state until the admin explicitly publishes again. Published assignments appear only for the assigned user on month and day views; Deputy data remains visible alongside them during the trial.
 
 ## Change Detection
 

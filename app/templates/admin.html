@@ -8,6 +8,9 @@
       <p class="eyebrow">Admin</p>
       <h1>Shared roster control</h1>
     </div>
+    <div class="heading-actions">
+      <a class="button" href="/admin/roster-days/new">Build Race Day</a>
+    </div>
   </section>
 
   <section class="settings-grid">
@@ -31,6 +34,27 @@
       <strong>{{ app_version }}</strong>
       <p class="muted">Build {{ app_build }}</p>
     </article>
+  </section>
+
+  <section class="table-panel roster-day-admin-panel">
+    <div class="section-heading">
+      <h2>New Rostering Test</h2>
+      <a class="button button-secondary button-compact" href="/admin/roster-days/new">New race day</a>
+    </div>
+    <p class="muted">Drafts stay private. Published versions appear only for crew assigned to that race day.</p>
+    {% if roster_days %}
+      <div class="roster-day-admin-list">
+        {% for roster_day in roster_days %}
+          <a href="/admin/roster-days/{{ roster_day.id }}">
+            <span><strong>{{ roster_day.roster_date }}</strong> · {{ roster_day.track_label }}</span>
+            <span>{{ roster_day.race_type|replace('_', ' ')|title }} · {{ roster_day.assignment_count }} assigned</span>
+            <span class="badge{% if roster_day.status == 'changes_pending' %} badge-warn{% endif %}">{{ roster_day.status|replace('_', ' ')|title }}</span>
+          </a>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-state">No race-day drafts yet.</div>
+    {% endif %}
   </section>
 
   <section class="table-panel admin-maintenance-panel">
