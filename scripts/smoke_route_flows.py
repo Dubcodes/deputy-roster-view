@@ -4,6 +4,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+from datetime import date
 from pathlib import Path
 
 
@@ -72,11 +73,14 @@ def main() -> None:
         upsert_travel_time_default,
     )
     from app.main import (
+        apply_schedule_role_context,
         app,
+        build_roster_insights,
         build_race_day_calculation,
         build_race_day_summary,
         parse_roster_summary,
         refresh_learned_travel_defaults,
+        roster_builder_positions,
         schedule_people,
     )
     from app.security import encrypt_text, hash_pin
@@ -153,9 +157,31 @@ def main() -> None:
     if admin_user is None:
         raise AssertionError("Expected signed-up admin user to remain queryable.")
 
+    with get_connection() as conn:
+        conn.executemany(
+            """
+            INSERT INTO shifts (
+                source_uid, title, start_at, end_at, date, raw_hours, paid_hours,
+                deleted_from_source, owner_user_id, source_payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, '{}')
+            """,
+            [
+                ("stats:completed", "[T-Test Park] Director", "2026-05-01T08:00:00+12:00", "2026-05-01T16:00:00+12:00", "2026-05-01", 8, 8, int(admin_user["id"])),
+                ("stats:today", "[T-Test Park] Director", "2026-07-04T08:00:00+12:00", "2026-07-04T16:00:00+12:00", "2026-07-04", 8, 8, int(admin_user["id"])),
+            ],
+        )
+    insights = build_roster_insights(int(admin_user["id"]), date(2026, 7, 4))
+    friday = next(item for item in insights["weekday_chart"] if item["label"] == "Fri")
+    saturday = next(item for item in insights["weekday_chart"] if item["label"] == "Sat")
+    if insights["past_90_count"] != 1 or friday["hours"] != 8 or friday["shift_count"] != 1 or saturday["shift_count"] != 0:
+        raise AssertionError(f"Expected completed-only labelled weekday insights, got {insights!r}")
+
     builder = client.get("/admin/roster-days/new")
     if builder.status_code != 200 or "Build a race day" not in builder.text or "Crew and vehicles" not in builder.text:
         raise AssertionError("Expected admin roster builder to render.")
+    filtered_positions = roster_builder_positions(["FCR CCU 1", "FCR DIR", "H-Cambridge", "Travel then Overnighter", "Side 1"])
+    if filtered_positions.count("Side 1") != 1 or any(value in filtered_positions for value in ("FCR CCU 1", "FCR DIR", "H-Cambridge", "Travel then Overnighter")):
+        raise AssertionError(f"Expected builder context areas to be filtered, got {filtered_positions!r}")
     draft = client.post(
         "/admin/roster-days/save",
         data={
@@ -211,6 +237,25 @@ def main() -> None:
     review_page = client.get(f"/admin/roster-days/{roster_day_id}")
     if "Review unpublished changes" not in review_page.text or "08:00" not in review_page.text or "08:15" not in review_page.text:
         raise AssertionError("Expected saved changes to be highlighted against the published roster.")
+    travel_draft = client.post(
+        "/admin/roster-days/save",
+        data={
+            "roster_date": "2026-07-13",
+            "new_track_label": "Rotorua",
+            "race_type": "thoroughbred",
+            "is_travel_day": "1",
+            "hotel_user_id": str(admin_user["id"]),
+            "hotel_name": "Lake Hotel",
+        },
+        follow_redirects=False,
+    )
+    assert_redirect(travel_draft, "/admin/roster-days/")
+    travel_day_id = int(travel_draft.headers["location"].split("/admin/roster-days/", 1)[1].split("?", 1)[0])
+    travel_publish = client.post(f"/admin/roster-days/{travel_day_id}/publish", follow_redirects=False)
+    assert_redirect(travel_publish, "Roster+version+1+published")
+    travel_day = client.get("/day/2026-07-13")
+    if "Travel day" not in travel_day.text or "Lake Hotel" not in travel_day.text:
+        raise AssertionError("Expected hotel-only travel day to publish to its assigned traveller.")
     diagnostic_marker = "LAZY-DIAGNOSTIC-MARKER"
     save_deputy_web_capture_diagnostic(
         owner_user_id=int(admin_user["id"]),
@@ -518,6 +563,67 @@ def main() -> None:
     if len(side_one_rows) != 1 or side_one_rows[0]["employee_name"] != "TBC":
         raise AssertionError(f"Expected missing Side 1 placeholder, got {side_one_rows!r}")
 
+    moved_people = schedule_people(
+        [
+            {
+                "source_shift_id": 110,
+                "captured_at": "2026-07-03T12:45:00+12:00",
+                "area_id": 1,
+                "area_name": "Side 1",
+                "area_location_id": 58,
+                "employee_id": 10,
+                "employee_name": "Leger",
+                "start_at": "2026-07-04T09:30:00+12:00",
+                "end_at": "2026-07-04T17:30:00+12:00",
+                "changed_since_viewed": 1,
+                "change_summary": "Position: Head On -> Side 1",
+            },
+            {
+                "source_shift_id": 111,
+                "captured_at": "2026-07-03T12:45:00+12:00",
+                "area_id": 2,
+                "area_name": "Side 2",
+                "area_location_id": 58,
+                "employee_id": 11,
+                "employee_name": "Nate",
+                "start_at": "2026-07-04T09:30:00+12:00",
+                "end_at": "2026-07-04T17:30:00+12:00",
+                "changed_since_viewed": 1,
+                "change_summary": "Position: Side 1 -> Side 2",
+            },
+            {
+                "source_shift_id": 112,
+                "captured_at": "2026-07-03T12:45:00+12:00",
+                "area_id": 3,
+                "area_name": "Vehicles",
+                "area_location_id": 58,
+                "employee_id": 11,
+                "employee_name": "Nate",
+                "start_at": "2026-07-04T09:15:00+12:00",
+                "end_at": "2026-07-04T17:30:00+12:00",
+            },
+            {
+                "source_shift_id": 113,
+                "captured_at": "2026-07-03T12:45:00+12:00",
+                "area_id": 4,
+                "area_name": "685",
+                "area_location_id": 58,
+                "employee_id": 11,
+                "employee_name": "Nate",
+                "start_at": "2026-07-04T09:15:00+12:00",
+                "end_at": "2026-07-04T17:30:00+12:00",
+            },
+        ]
+    )
+    moved_side_one = next((person for person in moved_people if person["position_label"] == "Side 1"), None)
+    moved_side_two = next((person for person in moved_people if person["position_label"] == "Side 2"), None)
+    if moved_side_one is None or moved_side_two is None:
+        raise AssertionError(f"Expected both moved production rows, got {moved_people!r}")
+    if moved_side_one["change_summary"] != "Side 1: Nate -> Leger":
+        raise AssertionError(f"Expected person-focused Side 1 change, got {moved_side_one!r}")
+    if moved_side_two["vehicle_label"] != "685":
+        raise AssertionError(f"Expected generic Vehicles label to be removed, got {moved_side_two!r}")
+
     stale_role_people = schedule_people(
         [
             {
@@ -581,6 +687,78 @@ def main() -> None:
     )
     if len(same_capture_people) != 1 or "CCU2" not in same_capture_people[0]["position_label"] or "Sound VT" not in same_capture_people[0]["position_label"]:
         raise AssertionError(f"Expected same-capture dual roles to remain visible, got {same_capture_people!r}")
+
+    split_sound_vt_rows = [
+        {
+            "source_shift_id": 204,
+            "captured_at": "2026-07-05T08:13:00+12:00",
+            "date": "2026-07-05",
+            "area_id": 1491,
+            "area_name": "SVT",
+            "area_location_id": 69,
+            "employee_id": 17,
+            "employee_name": "Jayden-lee",
+            "start_at": "2026-07-05T10:00:00+12:00",
+            "end_at": "2026-07-05T18:00:00+12:00",
+            "is_published": 1,
+        },
+        {
+            "source_shift_id": 205,
+            "captured_at": "2026-07-05T08:13:00+12:00",
+            "date": "2026-07-05",
+            "area_id": 1500,
+            "area_name": "VT",
+            "area_location_id": 69,
+            "employee_id": 18,
+            "employee_name": "Gary McClure",
+            "start_at": "2026-07-05T10:00:00+12:00",
+            "end_at": "2026-07-05T18:00:00+12:00",
+            "is_published": 1,
+        },
+    ]
+    split_sound_vt_people = schedule_people(split_sound_vt_rows)
+    split_positions = {
+        str(person["employee_name"]): str(person["position_label"])
+        for person in split_sound_vt_people
+    }
+    if split_positions != {"Jayden-lee": "Sound", "Gary McClure": "VT"}:
+        raise AssertionError(f"Expected separate Sound and VT positions, got {split_sound_vt_people!r}")
+
+    own_sound_shift = {
+        "date": "2026-07-05",
+        "track_label": "Te Aroha",
+        "schedule_location_id": 69,
+        "schedule_location_ids": [69],
+        "role_label": "SVT",
+        "role_full_label": "Sound VT",
+        "display_title": "SVT at Te Aroha",
+        "role_segments": [
+            {"role": "Sound VT", "role_short": "SVT", "kind": "role"},
+        ],
+        "role_chain_label": "Sound VT",
+    }
+    apply_schedule_role_context([own_sound_shift], split_sound_vt_rows)
+    if own_sound_shift["role_full_label"] != "Sound" or own_sound_shift["role_chain_label"] != "Sound":
+        raise AssertionError(f"Expected the user's SVT shift to display as Sound, got {own_sound_shift!r}")
+
+    combined_sound_people = schedule_people(split_sound_vt_rows[:1])
+    if len(combined_sound_people) != 1 or combined_sound_people[0]["position_label"] != "Sound VT":
+        raise AssertionError(f"Expected SVT to stay combined without a separate VT assignment, got {combined_sound_people!r}")
+
+    same_employee_split_rows = [dict(row) for row in split_sound_vt_rows]
+    same_employee_split_rows[1]["employee_id"] = 17
+    same_employee_split_rows[1]["employee_name"] = "Jayden-lee"
+    same_employee_people = schedule_people(same_employee_split_rows)
+    if len(same_employee_people) != 1 or same_employee_people[0]["position_label"] != "Sound VT, VT":
+        raise AssertionError(f"Expected one person's explicit dual assignment to remain visible, got {same_employee_people!r}")
+
+    unknown_location_rows = [dict(row) for row in split_sound_vt_rows]
+    for row in unknown_location_rows:
+        row["area_location_id"] = None
+    unknown_location_people = schedule_people(unknown_location_rows)
+    unknown_positions = {str(person["position_label"]) for person in unknown_location_people}
+    if unknown_positions != {"Sound VT", "VT"}:
+        raise AssertionError(f"Expected unknown-location rows not to infer a split, got {unknown_location_people!r}")
 
     print("route smoke flows ok")
 

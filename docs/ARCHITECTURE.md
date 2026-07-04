@@ -34,6 +34,8 @@ If the broad location search misses a user's own roster area, the capture follow
 
 Schedule display is scoped by both date and Deputy location ID. This keeps split-crew days clean when two meetings or work groups happen at once.
 
+The effective schedule interpretation pass also resolves context-dependent area labels before building the crew table. In particular, an `SVT` row becomes `Sound` only when a different employee has an overlapping `VT` row for that same date and Deputy location. The same context is then applied to the signed-in user's own shift labels so month, day, and crew views agree.
+
 ### Crew/Location Groundwork
 
 All users currently belong to one shared crew pool, `Northern Crew`. When a user's rostered shift syncs with a usable location, the app records that location in `crew_known_locations` for the shared crew. This does not filter open shifts or change the UI yet; it only leaves a clean data shape for future location, crew, or region tagging.
@@ -92,6 +94,10 @@ Learning collapses duplicate user copies into one sample per track/date. Generic
 The Admin Locations section joins planning-location visibility and travel defaults for display, but their effects remain separate: Active only controls Love Racing planning hints, while travel rows supply timing fallbacks. Deputy data is unaffected by either control.
 
 Manual roster test data lives in `roster_days`, `roster_day_assignments`, and append-only `roster_day_versions`. Editing updates a private draft. Publishing stores a complete JSON snapshot and version so crew keep seeing the previous published state until the admin explicitly publishes again. Published assignments appear only for the assigned user on month and day views; Deputy data remains visible alongside them during the trial.
+
+`roster_days.day_type` distinguishes normal race days from occasional travel days. Structured per-user hotel allocations are stored with the draft snapshot so split-hotel crews see only their own accommodation on published views.
+
+Settings roster insights use completed roster days only, excluding today and future rows. Adjacent rows are combined with the same rules as the day view. The recent-days audit list exposes the exact rows feeding totals so a misleading weekday or hours figure can be traced directly.
 
 ## Change Detection
 

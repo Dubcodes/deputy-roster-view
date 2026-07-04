@@ -43,12 +43,16 @@ After Portainer redeploy:
 - Confirm Race Day strip includes start/on-track/first race/last race where present.
 - Confirm Deputy Schedule excludes Out of Region noise.
 - Confirm timing-only crew changes do not badge every row.
+- Confirm `SVT` displays as `Sound VT` when it is the only audio/replay assignment, and as `Sound` when another employee has an overlapping `VT` assignment at the same location.
 - Open `/settings`.
 - Run Sync and Update.
 - Confirm spinner/progress appears and then hides.
 - Confirm a failed sync shows a useful message below the status.
 - Open `/admin`.
 - Open `/admin/roster-days/new`, save a draft, confirm it remains private, publish it, and verify only an assigned user's month/day views show it.
+- Expand Travel day and hotels, assign two crew to different hotels, and confirm each published user sees only their own hotel.
+- Confirm FCR context, H-Cambridge, and Travel then Overnighter are absent from production positions.
+- In Settings, confirm weekday cards explicitly show rostered hours and shift counts, today is excluded from completed totals, and Recent Completed Roster Days matches those totals.
 - Confirm each user shows next planned sync and last sync status.
 - If using the temporary tunnel stack, confirm its `cloudflared` container logs show a `trycloudflare.com` URL.
 

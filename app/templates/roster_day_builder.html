@@ -72,6 +72,38 @@
       </div>
     </section>
 
+    <details class="table-panel builder-travel-panel"{% if roster_day.day_type == 'travel_day' %} open{% endif %}>
+      <summary>Travel day and hotels <span>Optional · expand when needed</span></summary>
+      <div class="builder-travel-body">
+        <label class="builder-travel-toggle">
+          <input type="checkbox" name="is_travel_day" value="1"{% if roster_day.day_type == 'travel_day' %} checked{% endif %}>
+          <span>This is a travel day</span>
+        </label>
+        <p class="muted">Assign each traveller to their hotel. Different crew can stay at different hotels, and hotel-only crew will still receive the published travel day.</p>
+        <div class="hotel-assignment-list" data-hotel-list>
+          {% for hotel in hotel_rows %}
+            <div class="hotel-assignment-row">
+              <select name="hotel_user_id" aria-label="Traveller">
+                <option value="">Choose crew member</option>
+                {% for user in users %}<option value="{{ user.id }}"{% if hotel.user_id == user.id %} selected{% endif %}>{{ user.display_name or user.deputy_email }}</option>{% endfor %}
+              </select>
+              <input type="text" name="hotel_name" value="{{ hotel.hotel_name or '' }}" placeholder="Hotel name">
+            </div>
+          {% endfor %}
+        </div>
+        <button class="button button-secondary button-compact" type="button" data-add-hotel>Add another hotel assignment</button>
+        <template data-hotel-template>
+          <div class="hotel-assignment-row">
+            <select name="hotel_user_id" aria-label="Traveller">
+              <option value="">Choose crew member</option>
+              {% for user in users %}<option value="{{ user.id }}">{{ user.display_name or user.deputy_email }}</option>{% endfor %}
+            </select>
+            <input type="text" name="hotel_name" placeholder="Hotel name">
+          </div>
+        </template>
+      </div>
+    </details>
+
     <section class="table-panel">
       <div class="section-heading"><h2>Timing</h2></div>
       <p class="muted">On-track time is suggested from the saved Office / Clow Place travel time. You can always overwrite it.</p>
@@ -146,6 +178,12 @@
       });
       office.addEventListener('change', suggestArrival);
       onTrack.addEventListener('input', () => { onTrack.dataset.suggested = '0'; });
+      const addHotel = document.querySelector('[data-add-hotel]');
+      const hotelList = document.querySelector('[data-hotel-list]');
+      const hotelTemplate = document.querySelector('[data-hotel-template]');
+      addHotel?.addEventListener('click', () => {
+        if (hotelList && hotelTemplate) hotelList.append(hotelTemplate.content.cloneNode(true));
+      });
     })();
   </script>
 {% endblock %}

@@ -312,12 +312,14 @@ def init_db(settings: Settings | None = None) -> None:
                 track_key TEXT,
                 track_label TEXT,
                 race_type TEXT,
+                day_type TEXT DEFAULT 'race_day',
                 office_start TEXT,
                 on_track_time TEXT,
                 first_race_time TEXT,
                 last_race_time TEXT,
                 race_count INTEGER,
                 notes TEXT,
+                hotel_assignments TEXT DEFAULT '[]',
                 status TEXT DEFAULT 'draft',
                 published_snapshot TEXT,
                 created_by_user_id INTEGER,
@@ -410,6 +412,8 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "deputy_user_secrets", "encrypted_ical_url", "TEXT")
         _ensure_column(conn, "app_users", "deactivated_at", "TEXT")
         _ensure_column(conn, "love_racing_meetings", "is_active", "INTEGER DEFAULT 1")
+        _ensure_column(conn, "roster_days", "day_type", "TEXT DEFAULT 'race_day'")
+        _ensure_column(conn, "roster_days", "hotel_assignments", "TEXT DEFAULT '[]'")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_location ON deputy_schedule_shifts(date, area_location_id)"
         )
@@ -1372,12 +1376,14 @@ def save_roster_day(
     track_key: str,
     track_label: str,
     race_type: str,
+    day_type: str,
     office_start: str,
     on_track_time: str,
     first_race_time: str,
     last_race_time: str,
     race_count: int | None,
     notes: str,
+    hotel_assignments: str,
     updated_by_user_id: int,
     assignments: list[dict[str, object]],
 ) -> int:
@@ -1399,17 +1405,17 @@ def save_roster_day(
             cursor = conn.execute(
                 """
                 INSERT INTO roster_days (
-                    roster_date, track_key, track_label, race_type, office_start,
+                    roster_date, track_key, track_label, race_type, day_type, office_start,
                     on_track_time, first_race_time, last_race_time, race_count,
-                    notes, status, published_snapshot, created_by_user_id,
+                    notes, hotel_assignments, status, published_snapshot, created_by_user_id,
                     updated_by_user_id, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', '', ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', '', ?, ?, ?, ?)
                 """,
                 (
-                    roster_date, track_key, track_label, race_type, office_start,
+                    roster_date, track_key, track_label, race_type, day_type, office_start,
                     on_track_time, first_race_time, last_race_time, race_count,
-                    notes, updated_by_user_id, updated_by_user_id, now, now,
+                    notes, hotel_assignments, updated_by_user_id, updated_by_user_id, now, now,
                 ),
             )
             saved_id = int(cursor.lastrowid)
@@ -1419,16 +1425,16 @@ def save_roster_day(
             conn.execute(
                 """
                 UPDATE roster_days
-                SET roster_date = ?, track_key = ?, track_label = ?, race_type = ?,
+                SET roster_date = ?, track_key = ?, track_label = ?, race_type = ?, day_type = ?,
                     office_start = ?, on_track_time = ?, first_race_time = ?,
-                    last_race_time = ?, race_count = ?, notes = ?, status = ?,
+                    last_race_time = ?, race_count = ?, notes = ?, hotel_assignments = ?, status = ?,
                     updated_by_user_id = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
-                    roster_date, track_key, track_label, race_type, office_start,
+                    roster_date, track_key, track_label, race_type, day_type, office_start,
                     on_track_time, first_race_time, last_race_time, race_count,
-                    notes, status, updated_by_user_id, now, saved_id,
+                    notes, hotel_assignments, status, updated_by_user_id, now, saved_id,
                 ),
             )
 

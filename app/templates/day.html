@@ -33,6 +33,7 @@
           <dl class="race-day-rows">
             {% if roster.office_start %}<div><dt>Office</dt><dd>{{ roster.office_start }}</dd></div>{% endif %}
             {% if roster.on_track_time %}<div><dt>On track</dt><dd>{{ roster.on_track_time }}</dd></div>{% endif %}
+            {% if roster.hotel_label %}<div><dt>Hotel</dt><dd>{{ roster.hotel_label }}</dd></div>{% endif %}
             {% if roster.first_race_time %}<div><dt>First race</dt><dd>{{ roster.first_race_time }}</dd></div>{% endif %}
             {% if roster.last_race_time %}<div><dt>Last race</dt><dd>{{ roster.last_race_time }}</dd></div>{% endif %}
             {% if roster.race_count %}<div><dt>Races</dt><dd>{{ roster.race_count }}</dd></div>{% endif %}

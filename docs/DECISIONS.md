@@ -112,4 +112,10 @@ Known Deputy areas seed the position list, active app users seed the crew list, 
 
 Future personal calendar feeds should use a separate random revocable token per user because calendar clients cannot complete the normal PIN/cookie login. Store only a token hash. The feed must include only that user's published assignments, use a stable UID per roster day/user, and increment `SEQUENCE` when a roster version is published. Initially expose office start, track, position, vehicle, and essential notes; do not invent an end time when it is unknown.
 
+`SVT` is interpreted from the complete event crew rather than expanded unconditionally. A distinct overlapping `VT` assignment for another employee at the same date and Deputy location proves that the `SVT` employee is handling Sound only. Without that evidence the combined `Sound VT` label is preserved.
+
 Spreadsheet paste must populate a draft preview and must never publish directly. Build the column adapter only after a real spreadsheet sample is available.
+
+Travel days are a separate day type rather than a fake crew position. Their hotel section stays collapsed by default and supports a different named hotel for each user. Observed Deputy context areas such as FCR variants, `H-Cambridge`, and `Travel then Overnighter` do not belong in the manual production-position list.
+
+Roster statistics describe rostered hours, not confirmed timesheet hours. Only completed dates contribute to historical totals. Weekday charts must label both hours and shift counts, and a recent-days list must show the source rows so the user can verify every aggregate.

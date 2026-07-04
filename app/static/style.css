@@ -1266,7 +1266,7 @@ a {
 
 .weekday-column {
   display: grid;
-  grid-template-rows: auto 110px auto;
+  grid-template-rows: auto 110px auto auto;
   gap: 5px;
   min-width: 0;
   text-align: center;
@@ -3394,6 +3394,37 @@ textarea {
   color: var(--danger);
 }
 
+.weekday-column small {
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 750;
+}
+
+.roster-day-audit {
+  margin-top: 12px;
+}
+
+.insight-day-list {
+  display: grid;
+  gap: 5px;
+}
+
+.insight-day-list a {
+  display: grid;
+  grid-template-columns: 92px minmax(100px, 1fr) minmax(100px, 1fr) 100px 70px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.insight-day-list a:hover {
+  background: var(--surface-raised);
+}
+
 /* Admin race-day builder */
 .builder-status-strip,
 .builder-save-bar {
@@ -3487,6 +3518,42 @@ textarea {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
 }
 
+.builder-travel-panel > summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.builder-travel-panel > summary span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.builder-travel-body,
+.hotel-assignment-list {
+  display: grid;
+  gap: 8px;
+}
+
+.builder-travel-body {
+  margin-top: 12px;
+}
+
+.builder-travel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 850;
+}
+
+.hotel-assignment-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(180px, 1.2fr);
+  gap: 8px;
+}
+
 .published-roster-card,
 .published-roster-marker {
   border-left: 5px solid var(--accent);
@@ -3513,9 +3580,21 @@ input[type="number"] {
     grid-template-columns: 1fr;
   }
 
+  .hotel-assignment-row {
+    grid-template-columns: 1fr;
+  }
+
   .builder-change-list div,
   .roster-day-admin-list a {
     grid-template-columns: 1fr;
+  }
+
+  .insight-day-list a {
+    grid-template-columns: 1fr auto;
+  }
+
+  .insight-day-list a span {
+    grid-column: 1 / -1;
   }
 }
 

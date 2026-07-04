@@ -63,6 +63,8 @@ The parser should accept both dash and pipe separators for first/last race short
 
 The reliable crew list should come from Deputy web schedule rows where possible, not from free-text roster notes.
 
+Deputy's `SVT` area means a combined Sound/VT position only when no separate VT operator is rostered for the same event. If a different person has an overlapping `VT` assignment at the same date and Deputy location, display `SVT` as `Sound` and keep the other assignment as `VT`.
+
 Crew data must be scoped by date and Deputy location/track, not only by date. Multiple race meetings or work groups can happen on the same day, so each user should see the crew list for the location attached to their own shift.
 
 The race-day crew table should stay as three columns: position, name, vehicle. A user's own vehicle can be shown beside their position in the day header, but should not be merged into the crew table position column.
@@ -83,6 +85,10 @@ Roster notes can put the clock before the timing label, for example `0845 Trucks
 
 Crew changed badges should only mean the person/position/open-slot assignment changed. Do not badge timing-only crew schedule changes.
 
+Crew change text should be position-centred but person-focused, for example `Side 1: Nate -> Leger`. When Deputy reports a chain of position moves, use those moves to reconstruct who previously occupied each current position instead of showing only `Position: Head On -> Side 1`.
+
+Generic schedule labels such as `Vehicle` or `Vehicles` are context, not vehicle names. If a specific allocation such as `684`, `Rav91`, or `OB` is known, show only that specific vehicle.
+
 Opening a changed badge or the Change History section must not automatically clear the changed flag. The app should only clear change flags through explicit clear actions, otherwise phone taps can make important changes disappear before the user has read them.
 
 Deputy schedule rows can leave stale local rows behind when an assignment is replaced with a new Deputy shift id. For display, overlapping rows for the same date/location/position should prefer the latest captured assignment and suppress the older one. If the older row carried an assignment-change flag, carry that change summary onto the displayed replacement row.
@@ -100,6 +106,7 @@ Known but not fully solved. For now:
 - The travel day and next race day usually involve the same crew.
 - If the travel day has no useful crew list, it can borrow the next day's crew list and label it as next-day crew.
 - Hotel-to-track travel must remain attached to a named hotel/base. Do not infer it until the actual stay is known, because crews may be split across several hotels or a nearby town.
+- Manually planned travel days may assign different crew members to different named hotels. Hotel assignments are user-specific and should remain collapsible in the admin builder because they are occasional rather than part of every race day.
 
 ## Public Race-Day Planning
 

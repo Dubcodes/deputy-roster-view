@@ -193,16 +193,22 @@
         <h2>Your Roster</h2>
         <span>{{ roster_insights.past_90_label }}</span>
       </div>
+      <p class="muted">Completed roster days only. These are rostered hours, not submitted timesheet hours; today and future shifts are excluded.</p>
       <div class="stats-card-grid">
         <div class="stat-card">
           <span>Last 30 days</span>
           <strong>{{ roster_insights.past_30_hours|hours }}</strong>
-          <small>{{ roster_insights.past_30_count }} shifts</small>
+          <small>{{ roster_insights.past_30_count }} shifts across {{ roster_insights.past_30_days }} days</small>
         </div>
         <div class="stat-card">
           <span>Last 90 days</span>
           <strong>{{ roster_insights.past_90_hours|hours }}</strong>
-          <small>{{ roster_insights.past_90_count }} shifts</small>
+          <small>{{ roster_insights.past_90_count }} shifts across {{ roster_insights.past_90_days }} days</small>
+        </div>
+        <div class="stat-card">
+          <span>Average shift</span>
+          <strong>{{ roster_insights.average_shift_hours|hours }}</strong>
+          <small>completed shifts, last 90 days</small>
         </div>
         <div class="stat-card">
           <span>Upcoming</span>
@@ -218,13 +224,14 @@
 
       <div class="stats-visual-grid">
         <section class="stats-chart weekday-chart-panel">
-          <h3>Workweek</h3>
-          <div class="weekday-chart" role="img" aria-label="Shifts by weekday for {{ roster_insights.past_90_label }}">
+          <h3>Rostered Hours By Weekday</h3>
+          <div class="weekday-chart" role="img" aria-label="Rostered hours and shifts by weekday for {{ roster_insights.past_90_label }}">
             {% for item in roster_insights.weekday_chart %}
               <div class="weekday-column">
-                <strong>{{ item.value }}</strong>
+                <strong>{{ item.hours|hours }}</strong>
                 <div class="weekday-track"><i style="height: {{ item.percent }}%;"></i></div>
                 <span>{{ item.label }}</span>
+                <small>{{ item.shift_count }} shift{% if item.shift_count != 1 %}s{% endif %}</small>
               </div>
             {% endfor %}
           </div>
@@ -266,6 +273,24 @@
           {% endif %}
         </section>
       </div>
+
+      <section class="stats-chart roster-day-audit">
+        <div class="section-heading"><h3>Recent Completed Roster Days</h3><span>{{ roster_insights.track_count }} locations · {{ roster_insights.changed_count }} changed</span></div>
+        <p class="muted">These rows are what feed the totals above. Adjacent Deputy rows for the same day are merged where the normal day view would merge them.</p>
+        <div class="insight-day-list">
+          {% for item in roster_insights.recent_days %}
+            <a href="/day/{{ item.date }}">
+              <strong>{{ item.date_label }}</strong>
+              <span>{{ item.track_label }}</span>
+              <span>{{ item.position_label }}</span>
+              <span>{{ item.time_range }}</span>
+              <strong>{{ item.hours|hours }}</strong>
+            </a>
+          {% else %}
+            <p class="muted">No completed roster days in the last 90 days.</p>
+          {% endfor %}
+        </div>
+      </section>
     </article>
   </section>
 
