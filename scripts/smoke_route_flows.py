@@ -70,7 +70,9 @@ def main() -> None:
         list_travel_time_defaults,
         save_love_racing_meetings,
         save_deputy_web_capture_diagnostic,
+        save_deputy_web_schedule,
         upsert_travel_time_default,
+        upsert_track_map,
     )
     from app.main import (
         apply_schedule_role_context,
@@ -86,6 +88,100 @@ def main() -> None:
     from app.security import encrypt_text, hash_pin
 
     init_db()
+    stale_schedule_payload = {
+        "captured_at": "2026-07-05T05:00:00+12:00",
+        "areas": [],
+        "locations": [],
+        "extracted_shifts": [],
+        "extracted_schedule_shifts": [
+            {
+                "id": 9001,
+                "area": 1500,
+                "areaName": "VT",
+                "areaLocationId": 69,
+                "employee": 18,
+                "employeeName": "Gary McClure",
+                "start": "2026-07-05T10:00:00+12:00",
+                "end": "2026-07-05T18:00:00+12:00",
+                "duration": 8,
+                "isPublished": True,
+            },
+            {
+                "id": 9002,
+                "area": 1501,
+                "areaName": "Head On",
+                "areaLocationId": 58,
+                "employee": 20,
+                "employeeName": "Other Location",
+                "start": "2026-07-05T10:00:00+12:00",
+                "end": "2026-07-05T18:00:00+12:00",
+                "duration": 8,
+                "isPublished": True,
+            },
+        ],
+    }
+    save_deputy_web_schedule(stale_schedule_payload)
+    partial_result = save_deputy_web_schedule(
+        {
+            "captured_at": "2026-07-05T06:00:00+12:00",
+            "areas": [],
+            "locations": [],
+            "extracted_shifts": [],
+            "extracted_schedule_shifts": [],
+        }
+    )
+    with get_connection() as conn:
+        retained_stale = conn.execute(
+            "SELECT COUNT(*) FROM deputy_schedule_shifts WHERE source_shift_id = 9001"
+        ).fetchone()[0]
+    if retained_stale != 1 or partial_result["schedule_removed"] != 0:
+        raise AssertionError("A partial Deputy capture must not remove missing schedule rows.")
+    selected_result = save_deputy_web_schedule(
+        {
+            "captured_at": "2026-07-05T07:00:00+12:00",
+            "areas": [],
+            "locations": [],
+            "extracted_shifts": [],
+            "extracted_schedule_shifts": [],
+            "schedule_coverage": [
+                {
+                    "start_date": "2026-07-01",
+                    "end_date": "2026-07-07",
+                    "mode": "selected",
+                    "location_ids": [69],
+                }
+            ],
+        }
+    )
+    with get_connection() as conn:
+        selected_remaining = conn.execute(
+            "SELECT source_shift_id FROM deputy_schedule_shifts WHERE source_shift_id IN (9001, 9002)"
+        ).fetchall()
+    if [row[0] for row in selected_remaining] != [9002] or selected_result["schedule_removed"] != 1:
+        raise AssertionError("Selected Deputy coverage should remove rows only at selected locations.")
+    authoritative_result = save_deputy_web_schedule(
+        {
+            "captured_at": "2026-07-05T08:00:00+12:00",
+            "areas": [],
+            "locations": [],
+            "extracted_shifts": [],
+            "extracted_schedule_shifts": [],
+            "schedule_coverage": [
+                {
+                    "start_date": "2026-07-01",
+                    "end_date": "2026-07-07",
+                    "mode": "all",
+                    "location_ids": [],
+                }
+            ],
+        }
+    )
+    with get_connection() as conn:
+        remaining_stale = conn.execute(
+            "SELECT COUNT(*) FROM deputy_schedule_shifts WHERE source_shift_id IN (9001, 9002)"
+        ).fetchone()[0]
+    if remaining_stale != 0 or authoritative_result["schedule_removed"] != 1:
+        raise AssertionError("A complete Deputy window should remove rows Deputy no longer returns.")
     migrated_legacy = [
         dict(row) for row in list_travel_time_defaults() if row["track_key"] == "legacyvenue"
     ]
@@ -99,7 +195,22 @@ def main() -> None:
     if len(migrated_greyhound) != 1 or migrated_greyhound[0]["track_label"] != "Cambridge Greyhound":
         raise AssertionError(f"Expected G Cambridge alias rows to merge, got {migrated_greyhound!r}")
     client = TestClient(app)
-
+    track_map_dir = temp_dir / "track_maps"
+    track_map_dir.mkdir(parents=True, exist_ok=True)
+    (track_map_dir / "tearoha.jpg").write_bytes(b"track-map-smoke")
+    upsert_track_map(
+        track_key="tearoha",
+        track_label="Te Aroha",
+        course_label="Te Aroha",
+        course_url="https://loveracing.nz/RaceInfo/Clubs-And-Courses/34/35/Club.aspx",
+        image_url="https://loveracing.nz/Common/Image.ashx?w=1200&p=te-aroha",
+        file_name="tearoha.jpg",
+        content_type="image/jpeg",
+        image_hash="smoke",
+        status="ok",
+        checked_at="2026-07-05T08:00:00+12:00",
+        updated_at="2026-07-05T08:00:00+12:00",
+    )
     signup = client.post(
         "/signup",
         data={
@@ -113,6 +224,12 @@ def main() -> None:
         follow_redirects=False,
     )
     assert_redirect(signup, "/settings")
+    track_map_response = client.get("/track-map/tearoha")
+    if track_map_response.status_code != 200 or track_map_response.content != b"track-map-smoke":
+        raise AssertionError(
+            "Expected the cached track-map route to serve the local image, got "
+            f"{track_map_response.status_code} {track_map_response.content[:120]!r}."
+        )
 
     settings_save = client.post(
         "/settings/deputy-login",
@@ -562,6 +679,59 @@ def main() -> None:
     side_one_rows = [person for person in people if person["position_label"] == "Side 1"]
     if len(side_one_rows) != 1 or side_one_rows[0]["employee_name"] != "TBC":
         raise AssertionError(f"Expected missing Side 1 placeholder, got {side_one_rows!r}")
+
+    optional_people = schedule_people(
+        [
+            {
+                "source_shift_id": 109,
+                "captured_at": "2026-07-05T08:00:00+12:00",
+                "date": "2026-07-05",
+                "area_id": 1,
+                "area_name": "Side 1",
+                "area_location_id": 69,
+                "employee_id": 19,
+                "employee_name": "Joshua Druett",
+                "start_at": "2026-07-05T10:00:00+12:00",
+                "end_at": "2026-07-05T18:00:00+12:00",
+                "is_published": 1,
+            },
+            {
+                "source_shift_id": 108,
+                "captured_at": "2026-07-05T08:00:00+12:00",
+                "date": "2026-07-05",
+                "area_id": 2,
+                "area_name": "RTS",
+                "area_location_id": 69,
+                "employee_id": None,
+                "employee_name": "",
+                "start_at": "2026-07-05T10:00:00+12:00",
+                "end_at": "2026-07-05T18:00:00+12:00",
+                "is_open": 1,
+                "is_published": 1,
+            },
+            {
+                "source_shift_id": 107,
+                "captured_at": "2026-07-05T08:00:00+12:00",
+                "date": "2026-07-05",
+                "area_id": 3,
+                "area_name": "FM",
+                "area_location_id": 69,
+                "employee_id": None,
+                "employee_name": "",
+                "start_at": "2026-07-05T10:00:00+12:00",
+                "end_at": "2026-07-05T18:00:00+12:00",
+                "is_open": 1,
+                "is_published": 1,
+            },
+        ],
+        expected_areas=[
+            {"area_id": 1, "name": "Side 1", "location_id": 69, "roster_sort_order": 1},
+            {"area_id": 2, "name": "RTS", "location_id": 69, "roster_sort_order": 8},
+            {"area_id": 3, "name": "FM", "location_id": 69, "roster_sort_order": 14},
+        ],
+    )
+    if any(person["position_label"] in {"RTS", "FM"} for person in optional_people):
+        raise AssertionError(f"Unassigned optional RTS/FM rows should stay hidden, got {optional_people!r}")
 
     moved_people = schedule_people(
         [

@@ -4396,3 +4396,37 @@ th {
     gap: 4px;
   }
 }
+.track-map-section {
+  width: 100%;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.track-map-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.track-map-heading h2,
+.track-map-section h3 {
+  margin: 0;
+}
+
+.track-map-heading span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.track-map-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+}

@@ -73,6 +73,13 @@ def render_day_template() -> None:
         deputy_schedule_changed=False,
         deputy_schedule_people=[],
         deputy_schedule_label="Deputy Schedule",
+        track_maps=[
+            {
+                "track_label": "Te Rapa",
+                "course_label": "Te Rapa",
+                "image_url": "/track-map/terapa",
+            }
+        ],
         shifts=[
             {
                 "id": 1,
@@ -132,6 +139,8 @@ def render_day_template() -> None:
         raise AssertionError("Day template did not render expected race-day content.")
     if "--shift-location-colour: var(--location-colour-8)" not in html:
         raise AssertionError("Day template did not render per-shift location colour style.")
+    if 'src="/track-map/terapa"' not in html or 'alt="Te Rapa racecourse 2D track map"' not in html:
+        raise AssertionError("Day template did not render the cached track map.")
 
 
 def render_month_template() -> None:

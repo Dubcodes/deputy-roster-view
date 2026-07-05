@@ -294,4 +294,22 @@
       </article>
     {% endfor %}
   </section>
+  {% if track_maps %}
+    <section class="track-map-section" aria-labelledby="track-map-heading">
+      <div class="track-map-heading">
+        <h2 id="track-map-heading">Track map</h2>
+        <span>Love Racing</span>
+      </div>
+      {% for track_map in track_maps %}
+        {% if track_maps|length > 1 %}<h3>{{ track_map.track_label }}</h3>{% endif %}
+        <img
+          class="track-map-image"
+          src="{{ track_map.image_url }}"
+          alt="{{ track_map.course_label }} racecourse 2D track map"
+          loading="lazy"
+          decoding="async"
+        >
+      {% endfor %}
+    </section>
+  {% endif %}
 {% endblock %}

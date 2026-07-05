@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import Settings, get_settings
@@ -24,6 +25,7 @@ from .database import (
 from .deputy_web import sync_deputy_web_schedule
 from .planning_calendar import refresh_planning_calendar
 from .sync_ics import sync_deputy_calendar
+from .track_maps import refresh_track_maps_if_due
 from .user_credentials import settings_for_user
 
 
@@ -72,6 +74,22 @@ def start_scheduler(settings: Settings | None = None) -> BackgroundScheduler:
         refresh_planning_calendar,
         trigger=CronTrigger(day_of_week="mon", hour=4, minute=30, timezone=settings.timezone),
         id="weekly_planning_calendar",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        refresh_track_maps_if_due,
+        trigger=CronTrigger(day=1, hour=4, minute=45, timezone=settings.timezone),
+        id="monthly_track_maps",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        refresh_track_maps_if_due,
+        trigger=DateTrigger(run_date=_now(settings) + timedelta(minutes=2), timezone=settings.timezone),
+        id="startup_track_maps",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

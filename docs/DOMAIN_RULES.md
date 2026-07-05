@@ -95,7 +95,11 @@ Deputy schedule rows can leave stale local rows behind when an assignment is rep
 
 The same stale-row problem can leave one person with two overlapping production roles. If those roles came from different captures, show only the newer captured role. If both roles came from the same capture, preserve both because Deputy is explicitly reporting both assignments.
 
+A successful complete Deputy schedule-search window is authoritative for that window. Rows that were previously saved in the same date/location scope but are absent from the latest complete result should be removed. Failed, partial, or ordinary page captures must never prune saved crew rows. This is how a removed roster assignment, such as someone no longer working that day, disappears without guessing from roles or notes.
+
 If Deputy has known schedule areas for the user's race-day location but no current employee row for one of the normal production positions, show a muted `TBC` placeholder row. This makes likely contractor/unknown slots visible without pretending the person is known. Keep this inferred from Deputy's area list for now; do not add a heavy manual region/default-position UI yet.
+
+`RTS` and `FM` are assigned-only positions. Show either position when Deputy supplies a person, but do not create a `TBC` placeholder merely because the area exists. Their presence varies with the production and they commonly appear together, but the app must not infer one from the other.
 
 ## Overnight Travel
 
@@ -118,3 +122,13 @@ Love Racing data is public planning information only. Use it to show future race
 - Planning markers open the app's day view. Show only the saved date, location, club, and Love Racing calendar source; do not link out or infer roster details.
 - If a Deputy shift already exists for the same user/date/location, hide the public planning marker for that date/location.
 - Admins may ignore public planning locations that do not concern this crew. This affects only Love Racing planning hints; Deputy shifts and shared crew data remain unchanged.
+
+## Track Maps
+
+For Thoroughbred race days, the app may show Love Racing's official 2D course map at the bottom of the day view.
+
+- Only cache maps for racecourses already seen in roster data.
+- Do not attach the Cambridge Thoroughbred map to Cambridge Harness or Greyhound meetings.
+- Serve cached maps from the app; the day view should not link users out to Love Racing.
+- Refresh map files no more than about monthly unless an admin/developer explicitly forces a refresh.
+- If a course cannot be matched confidently or the image fetch fails, show no map rather than guessing.

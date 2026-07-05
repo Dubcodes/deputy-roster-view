@@ -566,6 +566,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     captured: list[dict[str, Any]] = []
     extracted_shifts_by_id: dict[str, dict[str, Any]] = {}
     extracted_schedule_shifts_by_id: dict[str, dict[str, Any]] = {}
+    schedule_coverage: list[dict[str, Any]] = []
     area_refs_by_id: dict[str, dict[str, Any]] = {}
     location_refs_by_id: dict[str, dict[str, Any]] = {}
     captured_employee_id = ""
@@ -1050,6 +1051,11 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             remember_employee_id(shift.get("employee"))
                     return len(shifts)
 
+                def schedule_search_body_is_complete(body: Any) -> bool:
+                    if not isinstance(body, dict):
+                        return True
+                    return not str(body.get("nextCursor") or "").strip()
+
                 async def capture_expanded_area_refs() -> None:
                     paths = [
                         "/api/management/v2/areas?limit=50000&excludeSoft=0",
@@ -1151,6 +1157,21 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         status = int(result.get("status") or 0) if isinstance(result, dict) else 0
                         if isinstance(result, dict) and result.get("ok"):
                             rows_seen += store_schedule_search_body(body)
+                            if schedule_search_body_is_complete(body):
+                                schedule_coverage.append(
+                                    {
+                                        "start_date": window_start.date().isoformat(),
+                                        "end_date": window_end.date().isoformat(),
+                                        "mode": "all",
+                                        "location_ids": [],
+                                    }
+                                )
+                            else:
+                                events.append(
+                                    "Direct all-locations schedule search returned a pagination cursor for "
+                                    f"{window_start.date().isoformat()} to {window_end.date().isoformat()}; "
+                                    "saved rows were retained outside the returned page."
+                                )
                         elif location_ids:
                             failed_requests += 1
                             events.append(
@@ -1194,6 +1215,21 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                     )
                                     continue
                                 rows_seen += store_schedule_search_body(fallback_payload)
+                                if schedule_search_body_is_complete(fallback_payload):
+                                    schedule_coverage.append(
+                                        {
+                                            "start_date": window_start.date().isoformat(),
+                                            "end_date": window_end.date().isoformat(),
+                                            "mode": "selected",
+                                            "location_ids": list(batch_location_ids),
+                                        }
+                                    )
+                                else:
+                                    events.append(
+                                        "Selected-location schedule search returned a pagination cursor for "
+                                        f"{window_start.date().isoformat()} to {window_end.date().isoformat()}; "
+                                        "saved rows were retained outside the returned page."
+                                    )
                         else:
                             failed_requests += 1
                             events.append(
@@ -1395,6 +1431,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
             key=lambda item: (str(item.get("start") or ""), str(item.get("id") or "")),
         ),
         "extracted_schedule_shifts": extracted_schedule_shifts,
+        "schedule_coverage": schedule_coverage,
     }
     if login_problem_message:
         payload["auth_status"] = "login_failed"
@@ -1425,6 +1462,7 @@ async def capture_and_save_deputy_web(
     own_shift_rows_created = 0
     own_shift_rows_updated = 0
     saved_schedule_rows = 0
+    removed_schedule_rows = 0
     try:
         result = await run_deputy_web_capture(settings)
     except Exception as exc:
@@ -1451,6 +1489,7 @@ async def capture_and_save_deputy_web(
             "own_shift_rows_created": 0,
             "own_shift_rows_updated": 0,
             "saved_schedule_rows": 0,
+            "removed_schedule_rows": 0,
             "payload": payload,
         }
 
@@ -1468,12 +1507,17 @@ async def capture_and_save_deputy_web(
         own_shift_rows_created = int(save_result.get("own_created", 0))
         own_shift_rows_updated = int(save_result.get("own_updated", 0))
         saved_schedule_rows = int(save_result.get("schedule_saved", 0))
+        removed_schedule_rows = int(save_result.get("schedule_removed", 0))
         if saved_own_shift_rows:
             result.payload.setdefault("events", []).append(
                 f"Saved {saved_own_shift_rows} own roster rows locally."
             )
         if saved_schedule_rows:
             result.payload.setdefault("events", []).append(f"Saved {saved_schedule_rows} schedule rows locally.")
+        if removed_schedule_rows:
+            result.payload.setdefault("events", []).append(
+                f"Removed {removed_schedule_rows} schedule rows absent from complete Deputy windows."
+            )
         update_app_settings({"last_deputy_web_capture": json.dumps(result.payload, ensure_ascii=True)})
 
     return {
@@ -1483,6 +1527,7 @@ async def capture_and_save_deputy_web(
         "own_shift_rows_created": own_shift_rows_created,
         "own_shift_rows_updated": own_shift_rows_updated,
         "saved_schedule_rows": saved_schedule_rows,
+        "removed_schedule_rows": removed_schedule_rows,
         "payload": result.payload,
     }
 
@@ -1497,6 +1542,7 @@ def sync_deputy_web_schedule(settings: Settings | None = None, owner_user_id: in
             "own_shift_rows_created": 0,
             "own_shift_rows_updated": 0,
             "saved_schedule_rows": 0,
+            "removed_schedule_rows": 0,
             "payload": {},
         }
     return asyncio.run(capture_and_save_deputy_web(settings, owner_user_id=owner_user_id))

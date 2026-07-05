@@ -5,7 +5,7 @@
 Run before committing:
 
 ```powershell
-python -m py_compile app\main.py app\database.py app\deputy_web.py app\scheduler.py app\sync_ics.py app\config.py app\auth.py app\security.py app\user_credentials.py
+python -m py_compile app\main.py app\database.py app\deputy_web.py app\scheduler.py app\sync_ics.py app\config.py app\auth.py app\security.py app\user_credentials.py app\track_maps.py
 git -C \\192.168.0.238\storage\projects\deputy-recalender diff --check
 ```
 
@@ -44,6 +44,9 @@ After Portainer redeploy:
 - Confirm Deputy Schedule excludes Out of Region noise.
 - Confirm timing-only crew changes do not badge every row.
 - Confirm `SVT` displays as `Sound VT` when it is the only audio/replay assignment, and as `Sound` when another employee has an overlapping `VT` assignment at the same location.
+- Confirm a removed Deputy schedule assignment disappears after the next successful complete schedule-window sync, while a failed/partial capture retains the previous crew list.
+- Confirm empty RTS/FM areas do not create TBC rows, while assigned RTS/FM people still appear.
+- On a known Thoroughbred track, confirm the cached 2D map appears at the bottom of the day page without an outbound link. Confirm Harness/Greyhound days do not borrow the Cambridge Thoroughbred map.
 - Open `/settings`.
 - Run Sync and Update.
 - Confirm spinner/progress appears and then hides.

@@ -32,6 +32,8 @@ Deputy's schedule UI can fail to expose All Locations in a headless capture, esp
 
 The direct search tries Deputy's all-location schedule mode first because it covers the same shared crew rows with fewer requests. If that fails, it falls back to selected known racing location IDs. Static IDs are only a safety net for display/import gaps and should be corrected whenever live Deputy row metadata disagrees with them.
 
+Only a successful direct schedule-search response is allowed to retire missing saved assignments. Its date window and all/selected location scope are stored with the capture and used during the same database save. This keeps removed people from lingering while preventing a failed or partial capture from wiping a crew list.
+
 Deputy rejects the tempting `areaIds` schedule-search shape with invalid-format errors, so the app does not use targeted area-ID searches. Area overrides are allowed only for confirmed Deputy IDs, such as the H-Cambridge position and vehicle areas seen in user captures, and should be treated as display/import fallbacks rather than the primary data source. Overrides also relabel existing saved rows at display time, so old `Web / Shift` rows can improve without waiting for Deputy to resend every field.
 
 ## Stagger User Syncs
@@ -103,6 +105,8 @@ Love Racing entries are planning hints, not shifts. They render with a Love Raci
 Selecting a planning marker stays inside the app and opens that date's day view. The detail block shows only saved calendar facts and the Love Racing source; it has no external link and does not infer crew, positions, or timing.
 
 The live Love Racing calendar endpoint may return HTTP 403 to server-side requests. Refresh therefore falls back to NZTR's official final calendar PDF, using its positioned weekly columns and thoroughbred club codes. Static aliases may identify a known location, but must not introduce locations the collected roster data has never seen. Refresh runs weekly and replaces the prior snapshot so schedule corrections remove stale markers without retaining downloaded files.
+
+Official 2D course maps are a separate, slower-changing cache. The app keeps a verified course-to-image catalog, downloads maps only for roster-known Thoroughbred locations, and checks them roughly monthly. Cached images are served internally on day pages; uncertain matches, Harness/Greyhound meetings, and failed downloads produce no map rather than an incorrect one.
 
 ## Manual Roster Publishing Trial
 

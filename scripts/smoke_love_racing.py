@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 from app.love_racing import parse_love_racing_events, parse_nztr_calendar_fragments
+from app.track_maps import parse_track_map_image_url, track_map_course_key
 
 
 def main() -> None:
@@ -35,6 +36,29 @@ def main() -> None:
     ]
     if summary != expected:
         raise AssertionError(f"Known-location filtering failed: {summary!r}")
+
+    track_html = """
+    <img src="/Common/Image.ashx?version=3.191&amp;w=400&amp;p=/OnHorseFiles/Racecourses/Tracks/2D%20with%20updated%20Logo/Te-Aroha_new.jpg"
+         alt="Track - 2D">
+    """
+    image_url = parse_track_map_image_url(
+        track_html,
+        "https://loveracing.nz/RaceInfo/Clubs-And-Courses/34/35/Club.aspx",
+    )
+    if "loveracing.nz/Common/Image.ashx" not in image_url or "w=1200" not in image_url:
+        raise AssertionError(f"Track-map image was not normalised: {image_url!r}")
+    if "Te-Aroha_new.jpg" not in image_url:
+        raise AssertionError(f"Track-map source path was lost: {image_url!r}")
+    aliases = {
+        "Te Aroha": "tearoha",
+        "Rotorua": "arawapark",
+        "Cambridge Synthetic": "cambridge",
+        "Cambridge Harness": "",
+    }
+    for label, expected_key in aliases.items():
+        actual_key = track_map_course_key(label)
+        if actual_key != expected_key:
+            raise AssertionError(f"Track-map alias failed for {label!r}: {actual_key!r}")
     print("Love Racing/NZTR planning smoke ok")
 
 

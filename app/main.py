@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.gzip import GZipMiddleware
@@ -60,6 +60,7 @@ from .database import (
     get_next_upcoming_shift,
     get_recent_source_payloads,
     get_travel_time_default,
+    get_track_map,
     get_recent_sync_logs,
     get_upcoming_shifts,
     get_user_sync_state,
@@ -111,11 +112,12 @@ from .security import (
     verify_pin,
 )
 from .user_credentials import settings_for_user
+from .track_maps import track_map_course_key
 
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.05.1"
+APP_BUILD = "2026.07.05.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -465,7 +467,11 @@ SCHEDULE_POSITION_ORDER = {
 HIDDEN_SCHEDULE_POSITION_KEYS = {
     "outofregion",
 }
-PLACEHOLDER_SCHEDULE_POSITION_KEYS = set(SCHEDULE_POSITION_ORDER) - {"northern"}
+ASSIGNED_ONLY_SCHEDULE_POSITION_KEYS = {"rts", "fm"}
+PLACEHOLDER_SCHEDULE_POSITION_KEYS = set(SCHEDULE_POSITION_ORDER) - {
+    "northern",
+    *ASSIGNED_ONLY_SCHEDULE_POSITION_KEYS,
+}
 ROSTER_RACE_TYPES = (
     ("thoroughbred", "Thoroughbred racing"),
     ("harness", "Harness racing"),
@@ -2408,6 +2414,8 @@ def schedule_people(rows: list[object], expected_areas: list[object] | None = No
         is_vehicle = bool(item.get("is_vehicle_area"))
 
         if not employee_name:
+            if schedule_item_position_key(item) in ASSIGNED_ONLY_SCHEDULE_POSITION_KEYS:
+                continue
             vehicle_label = area_label if is_vehicle else ""
             open_entries.append(
                 {
@@ -2490,6 +2498,35 @@ def shift_schedule_location_ids(shifts: list[dict[str, object]]) -> list[int]:
         values.extend(list(shift.get("schedule_location_ids") or []))
         values.append(shift.get("schedule_location_id"))
     return unique_ints(values)
+
+
+def track_maps_for_day(
+    shifts: list[dict[str, object]],
+    manual_rosters: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    maps = []
+    seen = set()
+    for item in list(shifts) + list(manual_rosters):
+        race_type = str(item.get("race_type_label") or item.get("race_type") or "").strip().lower()
+        if "thoroughbred" not in race_type:
+            continue
+        track_label = str(item.get("track_label") or item.get("location_label") or "").strip()
+        course_key = track_map_course_key(track_label)
+        if not course_key or course_key in seen:
+            continue
+        row = get_track_map(course_key)
+        if row is None:
+            continue
+        seen.add(course_key)
+        maps.append(
+            {
+                "track_key": course_key,
+                "track_label": track_label or str(row["track_label"] or row["course_label"] or "Track"),
+                "course_label": str(row["course_label"] or track_label or "Track"),
+                "image_url": f"/track-map/{course_key}",
+            }
+        )
+    return maps
 
 
 def deputy_schedule_label_for_shifts(base_label: str, shifts: list[dict[str, object]]) -> str:
@@ -4151,6 +4188,24 @@ def timesheet_view(request: Request, date_text: str, notice: str | None = None) 
     )
 
 
+@app.get("/track-map/{track_key}")
+def track_map_image(track_key: str) -> FileResponse:
+    course_key = track_map_course_key(track_key)
+    row = get_track_map(course_key) if course_key else None
+    if row is None:
+        raise HTTPException(status_code=404, detail="Track map not found")
+    file_name = Path(str(row["file_name"] or "")).name
+    map_dir = (Path(get_settings().data_dir) / "track_maps").resolve()
+    image_path = (map_dir / file_name).resolve()
+    if image_path.parent != map_dir or not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Track map file not found")
+    return FileResponse(
+        image_path,
+        media_type=str(row["content_type"] or "image/jpeg"),
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
 @app.get("/day/{date_text}")
 def day_view(request: Request, date_text: str, notice: str | None = None) -> object:
     try:
@@ -4248,6 +4303,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             "open_shifts": open_shifts,
             "planning_meetings": planning_meetings,
             "manual_rosters": manual_rosters,
+            "track_maps": track_maps_for_day(shifts, manual_rosters),
             "deputy_schedule_people": deputy_schedule_people,
             "deputy_schedule_label": deputy_schedule_label,
             "deputy_schedule_changed": deputy_schedule_changed,

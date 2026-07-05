@@ -30,6 +30,8 @@ After login, it also asks Deputy's own web endpoint for the user's personal publ
 
 For crew coverage, the capture also learns Deputy's primary location list and then performs weekly all-location schedule-search requests. If that broad read fails, it falls back to batched selected-location searches for known racing locations. This avoids relying only on the visible roster page when All Locations cannot be selected and helps fill shared crew rows for other users. Direct shared schedule capture is capped at 42 days ahead by default to keep multi-user syncs polite.
 
+Successful direct schedule-search requests record their authoritative date/location coverage in the saved capture. `save_deputy_web_schedule()` upserts returned rows and removes older rows that are missing only inside those complete coverage windows. Browser/page captures, failed searches, and responses without explicit coverage remain additive and cannot delete crew data.
+
 If the broad location search misses a user's own roster area, the capture follows up with a targeted roster-area search. It includes the user's own area IDs and, when possible, sibling areas for the same missed Deputy location. This helps Harness/other sparse areas resolve without scanning unrelated locations.
 
 Schedule display is scoped by both date and Deputy location ID. This keeps split-crew days clean when two meetings or work groups happen at once.
@@ -49,6 +51,10 @@ All users currently belong to one shared crew pool, `Northern Crew`. When a user
 These rows are intentionally not shifts. They have no crew, start time, or hours, and the month view suppresses a planning hint when the signed-in user's Deputy roster already has a shift for that same date/location. Deputy data always takes priority.
 
 Admins can include or ignore individual saved planning locations. The preference lives in `planning_location_preferences` and filters only Love Racing planning hints and counts; it never removes or changes Deputy roster data. Ignored public rows remain in the current planning snapshot so they can be restored immediately.
+
+### Love Racing Track Maps
+
+`app/track_maps.py` maintains a small verified catalog of northern Thoroughbred course pages and their official 2D map images. A monthly scheduler job checks only courses already known from roster data, downloads changed image bytes into `data/track_maps`, and stores metadata in `track_maps`. Day views serve the local file through `/track-map/{track_key}` so users do not leave the app and slow/blocked Love Racing page requests do not affect normal page loads.
 
 ### Multi-User Sync Queue
 
@@ -110,5 +116,7 @@ Crew visible change badges should only appear for assignment changes:
 - open shift status changed
 
 Day-view schedule reconciliation also suppresses an older overlapping production role for the same employee when a newer capture supplies a different role. Same-capture dual roles remain visible rather than being guessed away.
+
+Empty `RTS` and `FM` areas are not emitted as inferred `TBC` rows. Assigned rows still display normally.
 
 Timing-only crew schedule changes should not badge every crew row.

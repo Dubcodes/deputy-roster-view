@@ -299,6 +299,20 @@ def init_db(settings: Settings | None = None) -> None:
                 is_active INTEGER DEFAULT 1
             );
 
+            CREATE TABLE IF NOT EXISTS track_maps (
+                track_key TEXT PRIMARY KEY,
+                track_label TEXT,
+                course_label TEXT,
+                course_url TEXT,
+                image_url TEXT,
+                file_name TEXT,
+                content_type TEXT,
+                image_hash TEXT,
+                status TEXT,
+                checked_at TEXT,
+                updated_at TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS planning_location_preferences (
                 location_key TEXT PRIMARY KEY,
                 display_name TEXT,
@@ -1557,7 +1571,7 @@ def list_travel_time_defaults() -> list[sqlite3.Row]:
         ).fetchall()
 
 
-def list_known_racecourse_names() -> list[str]:
+def list_known_racecourse_names(*, include_fallback: bool = True) -> list[str]:
     names: list[str] = []
     seen: set[str] = set()
 
@@ -1607,7 +1621,7 @@ def list_known_racecourse_names() -> list[str]:
             if match:
                 add(match.group(1))
 
-    if not names:
+    if not names and include_fallback:
         for fallback in (
             "Cambridge",
             "Cambridge Synthetic",
@@ -2646,6 +2660,59 @@ def _display_change_value(value: object) -> str:
     return str(value)
 
 
+def _prune_missing_deputy_schedule_rows(
+    conn: sqlite3.Connection,
+    payload: dict[str, object],
+    captured_shift_ids: set[int],
+) -> int:
+    coverage_rows = payload.get("schedule_coverage")
+    if not isinstance(coverage_rows, list):
+        return 0
+
+    remove_ids: set[int] = set()
+    for coverage in coverage_rows:
+        if not isinstance(coverage, dict):
+            continue
+        start_date = str(coverage.get("start_date") or "")[:10]
+        end_date = str(coverage.get("end_date") or "")[:10]
+        mode = str(coverage.get("mode") or "").strip().lower()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", start_date) or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}", end_date
+        ):
+            continue
+        location_ids = {
+            value
+            for value in (_optional_int(item) for item in coverage.get("location_ids") or [])
+            if value is not None
+        }
+        if mode not in {"all", "selected"} or (mode == "selected" and not location_ids):
+            continue
+        existing_rows = conn.execute(
+            """
+            SELECT s.source_shift_id,
+                   COALESCE(s.area_location_id, a.location_id) AS schedule_location_id
+            FROM deputy_schedule_shifts s
+            LEFT JOIN deputy_schedule_areas a ON a.area_id = s.area_id
+            WHERE s.date BETWEEN ? AND ?
+            """,
+            (start_date, end_date),
+        ).fetchall()
+        for row in existing_rows:
+            source_shift_id = int(row["source_shift_id"])
+            if source_shift_id in captured_shift_ids:
+                continue
+            if mode == "selected" and _optional_int(row["schedule_location_id"]) not in location_ids:
+                continue
+            remove_ids.add(source_shift_id)
+
+    if remove_ids:
+        conn.executemany(
+            "DELETE FROM deputy_schedule_shifts WHERE source_shift_id = ?",
+            ((source_shift_id,) for source_shift_id in sorted(remove_ids)),
+        )
+    return len(remove_ids)
+
+
 def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | None = None) -> dict[str, int]:
     captured_at = str(payload.get("captured_at") or datetime.now().isoformat(timespec="seconds"))
     areas = payload.get("areas") if isinstance(payload.get("areas"), list) else []
@@ -2875,12 +2942,79 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                 ),
             )
             saved += 1
+        removed = _prune_missing_deputy_schedule_rows(
+            conn,
+            payload,
+            {
+                int(shift_id)
+                for shift_id in schedule_shift_lookup
+                if str(shift_id).isdigit()
+            },
+        )
     return {
         "own_seen": own_counts["seen"],
         "own_created": own_counts["created"],
         "own_updated": own_counts["updated"],
         "schedule_saved": saved,
+        "schedule_removed": removed,
     }
+
+
+def upsert_track_map(
+    *,
+    track_key: str,
+    track_label: str,
+    course_label: str,
+    course_url: str,
+    image_url: str,
+    file_name: str,
+    content_type: str,
+    image_hash: str,
+    status: str,
+    checked_at: str,
+    updated_at: str,
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO track_maps (
+                track_key, track_label, course_label, course_url, image_url,
+                file_name, content_type, image_hash, status, checked_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(track_key) DO UPDATE SET
+                track_label = excluded.track_label,
+                course_label = excluded.course_label,
+                course_url = excluded.course_url,
+                image_url = excluded.image_url,
+                file_name = excluded.file_name,
+                content_type = excluded.content_type,
+                image_hash = excluded.image_hash,
+                status = excluded.status,
+                checked_at = excluded.checked_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                track_key,
+                track_label,
+                course_label,
+                course_url,
+                image_url,
+                file_name,
+                content_type,
+                image_hash,
+                status,
+                checked_at,
+                updated_at,
+            ),
+        )
+
+
+def get_track_map(track_key: str) -> sqlite3.Row | None:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM track_maps WHERE track_key = ? AND status = 'ok'",
+            (track_key,),
+        ).fetchone()
 
 
 def _save_deputy_web_own_shifts(
