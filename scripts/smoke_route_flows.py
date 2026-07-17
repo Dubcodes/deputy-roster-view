@@ -76,14 +76,17 @@ def main() -> None:
     )
     from app.main import (
         apply_schedule_role_context,
+        apply_vehicle_carryover_from_people,
         app,
         build_roster_insights,
         build_race_day_calculation,
         build_race_day_summary,
+        merge_description_change_lines,
         parse_roster_summary,
         refresh_learned_travel_defaults,
         roster_builder_positions,
         schedule_people,
+        schedule_rows_are_vehicle_travel_context,
     )
     from app.security import encrypt_text, hash_pin
 
@@ -455,6 +458,60 @@ def main() -> None:
     if inferred_calc.get("start_label") != "08:30":
         raise AssertionError(f"Expected inferred Clow Place start at 08:30, got {inferred_calc!r}")
 
+    beachfront_summary = parse_roster_summary([
+        "Accommodation Beachfront",
+        "On track 0900",
+        "7 races 1234 | 1605",
+    ])
+    beachfront_calc = build_race_day_calculation(
+        {
+            "track_label": "Ruakaka",
+            "source_code": "T-Ruakaka",
+            "start_at": "2026-07-18T09:15:00+12:00",
+            "end_at": "2026-07-18T22:00:00+12:00",
+            "description_lines": ["Accommodation Beachfront", "On track 0900", "7 races 1234 | 1605"],
+            "roster_summary": beachfront_summary,
+        }
+    )
+    if beachfront_calc.get("start_label") != "08:30" or beachfront_calc.get("travel_label") != "0h 30m":
+        raise AssertionError(f"Expected Beachfront hotel default to infer 08:30 start, got {beachfront_calc!r}")
+    unknown_hotel_summary = parse_roster_summary([
+        "Accommodation Unknown Motel",
+        "On track 0900",
+        "7 races 1234 | 1605",
+    ])
+    unknown_hotel_calc = build_race_day_calculation(
+        {
+            "track_label": "Ruakaka",
+            "source_code": "T-Ruakaka",
+            "start_at": "2026-07-18T09:15:00+12:00",
+            "end_at": "2026-07-18T22:00:00+12:00",
+            "description_lines": ["Accommodation Unknown Motel", "On track 0900", "7 races 1234 | 1605"],
+            "roster_summary": unknown_hotel_summary,
+        }
+    )
+    if unknown_hotel_calc.get("available"):
+        raise AssertionError(f"Unknown hotels must not fall back to office travel defaults, got {unknown_hotel_calc!r}")
+
+    changed_note_shift = {
+        "track_label": "Ruakaka",
+        "source_code": "T-Ruakaka",
+        "start_at": "2026-07-17T13:00:00+12:00",
+        "end_at": "2026-07-17T17:00:00+12:00",
+        "description_lines": ["Accommodation Beachfront Motel"],
+        "roster_summary": parse_roster_summary(["Accommodation Beachfront Motel"]),
+        "changes": [
+            {
+                "field_name": "description",
+                "old_value": "1pm Gaz reckons...don't argue",
+                "new_value": "Accommodation Beachfront Motel",
+            }
+        ],
+    }
+    merge_description_change_lines(changed_note_shift)
+    if "1pm Gaz reckons...don't argue" not in changed_note_shift.get("description_lines", []):
+        raise AssertionError(f"Expected overwritten roster note line to stay visible, got {changed_note_shift!r}")
+
     settings_page = client.get("/settings")
     if settings_page.status_code != 200 or "Your Roster" not in settings_page.text:
         raise AssertionError("Expected settings page to render roster insights.")
@@ -679,6 +736,111 @@ def main() -> None:
     side_one_rows = [person for person in people if person["position_label"] == "Side 1"]
     if len(side_one_rows) != 1 or side_one_rows[0]["employee_name"] != "TBC":
         raise AssertionError(f"Expected missing Side 1 placeholder, got {side_one_rows!r}")
+
+    ruakaka_travel_rows = [
+        {
+            "source_shift_id": 201,
+            "captured_at": "2026-07-17T11:18:00+12:00",
+            "date": "2026-07-17",
+            "area_id": 1600,
+            "area_name": "684",
+            "area_location_id": 59,
+            "area_roster_sort_order": 30,
+            "employee_id": 17,
+            "employee_name": "Jayden-lee",
+            "start_at": "2026-07-17T13:00:00+12:00",
+            "end_at": "2026-07-17T17:00:00+12:00",
+            "is_published": 1,
+        },
+        {
+            "source_shift_id": 202,
+            "captured_at": "2026-07-17T11:18:00+12:00",
+            "date": "2026-07-17",
+            "area_id": 1601,
+            "area_name": "Rav91",
+            "area_location_id": 59,
+            "area_roster_sort_order": 31,
+            "employee_id": 24,
+            "employee_name": "Grant Woolston",
+            "start_at": "2026-07-17T12:00:00+12:00",
+            "end_at": "2026-07-17T17:00:00+12:00",
+            "is_published": 1,
+        },
+        {
+            "source_shift_id": 203,
+            "captured_at": "2026-07-17T11:18:00+12:00",
+            "date": "2026-07-17",
+            "area_id": 1602,
+            "area_name": "Tender",
+            "area_location_id": 59,
+            "area_roster_sort_order": 32,
+            "employee_id": 18,
+            "employee_name": "Dylan Holden",
+            "start_at": "2026-07-17T12:00:00+12:00",
+            "end_at": "2026-07-17T17:00:00+12:00",
+            "is_published": 1,
+        },
+    ]
+    if schedule_people(ruakaka_travel_rows):
+        raise AssertionError("Vehicle-only rows must remain hidden on normal crew tables.")
+    if not schedule_rows_are_vehicle_travel_context(ruakaka_travel_rows):
+        raise AssertionError("Expected Ruakaka vehicle rows to be detected as travel context.")
+    travel_people = schedule_people(
+        ruakaka_travel_rows,
+        include_vehicle_only=True,
+        include_placeholders=False,
+    )
+    jayden_travel = [person for person in travel_people if person["employee_name"] == "Jayden-lee"]
+    if len(jayden_travel) != 1 or jayden_travel[0]["position_label"] != "Travel" or jayden_travel[0]["vehicle_label"] != "684":
+        raise AssertionError(f"Expected vehicle-only travel row for Jayden-lee, got {travel_people!r}")
+
+    ruakaka_race_people = schedule_people(
+        [
+            {
+                "source_shift_id": 211,
+                "captured_at": "2026-07-18T11:18:00+12:00",
+                "date": "2026-07-18",
+                "area_id": 1,
+                "area_name": "Director",
+                "area_location_id": 59,
+                "employee_id": 17,
+                "employee_name": "Jayden-lee",
+                "start_at": "2026-07-18T09:15:00+12:00",
+                "end_at": "2026-07-18T22:00:00+12:00",
+                "is_published": 1,
+            },
+            {
+                "source_shift_id": 212,
+                "captured_at": "2026-07-18T11:18:00+12:00",
+                "date": "2026-07-18",
+                "area_id": 2,
+                "area_name": "Sound",
+                "area_location_id": 59,
+                "employee_id": 24,
+                "employee_name": "Grant Woolston",
+                "start_at": "2026-07-18T09:15:00+12:00",
+                "end_at": "2026-07-18T22:00:00+12:00",
+                "is_published": 1,
+            },
+            {
+                "source_shift_id": 213,
+                "captured_at": "2026-07-18T11:18:00+12:00",
+                "date": "2026-07-18",
+                "area_id": 3,
+                "area_name": "Side 1",
+                "area_location_id": 59,
+                "employee_id": 18,
+                "employee_name": "Dylan Holden",
+                "start_at": "2026-07-18T09:15:00+12:00",
+                "end_at": "2026-07-18T22:00:00+12:00",
+                "is_published": 1,
+            },
+        ]
+    )
+    apply_vehicle_carryover_from_people(ruakaka_race_people, travel_people)
+    carryover = {person["employee_name"]: person["vehicle_label"] for person in ruakaka_race_people}
+    if carryover.get("Jayden-lee") != "684" or carryover.get("Grant Woolston") != "Rav91" or carryover.get("Dylan Holden") != "Tender":
+        raise AssertionError(f"Expected previous-day Ruakaka vehicles to carry onto race crew, got {carryover!r}")
 
     optional_people = schedule_people(
         [

@@ -117,7 +117,7 @@ from .track_maps import track_map_course_key
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.05.2"
+APP_BUILD = "2026.07.17.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -720,6 +720,29 @@ def timing_lookup(summary: dict[str, object]) -> dict[str, str]:
     return lookup
 
 
+def accommodation_base_labels_for_shift(shift: dict[str, object]) -> list[str]:
+    labels: list[str] = []
+    for line in list(shift.get("description_lines") or []):
+        match = re.match(r"(?i)^\s*accommodation\s*[:\-]?\s*(.+?)\s*$", str(line or ""))
+        if not match:
+            continue
+        label = re.sub(r"\s+", " ", match.group(1).strip(" -:.,"))
+        if not label:
+            continue
+        append_unique(labels, label)
+        if not re.search(r"(?i)\b(hotel|motel|lodge|apartments?)\b", label):
+            append_unique(labels, f"{label} Motel")
+            append_unique(labels, f"{label} Hotel")
+    return labels
+
+
+def accommodation_default_for_shift(shift: dict[str, object]) -> dict[str, object] | None:
+    for base_label in accommodation_base_labels_for_shift(shift):
+        row = travel_default_for_shift(shift, base_label)
+        if row:
+            return row
+    return None
+
 def clock_datetime_for_shift(shift: dict[str, object], clock_value: str, after: datetime | None = None) -> datetime | None:
     clock_value = clean_time_value(clock_value)
     if not re.fullmatch(r"\d{2}:\d{2}", clock_value):
@@ -1237,6 +1260,28 @@ def decorate_change(row: object) -> dict[str, object]:
     return change
 
 
+def merge_description_change_lines(shift: dict[str, object]) -> None:
+    current_lines = list(shift.get("description_lines") or [])
+    seen = {line.strip().lower() for line in current_lines if str(line or "").strip()}
+    added = False
+    for change in list(shift.get("changes") or []):
+        if str(change.get("field_name") or "") != "description":
+            continue
+        for source_key in ("old_value", "new_value"):
+            for line in description_lines(str(change.get(source_key) or "")):
+                key = line.strip().lower()
+                if not key or key in seen:
+                    continue
+                current_lines.append(line)
+                seen.add(key)
+                added = True
+    if not added:
+        return
+    shift["description_lines"] = current_lines
+    shift["roster_summary"] = parse_roster_summary(current_lines)
+    shift["race_day_summary"] = build_race_day_summary(shift, {})
+    shift["race_day_calculation"] = build_race_day_calculation(shift)
+
 def build_shift_change_summary(changes: list[dict[str, object]]) -> str:
     parts = []
     for change in changes[:4]:
@@ -1283,7 +1328,18 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
         "lines": [],
         "formula": "",
     }
-    default_row = travel_default_for_shift(shift, base_label)
+    accommodation_labels = accommodation_base_labels_for_shift(shift)
+    default_row = None
+    if base_clock:
+        default_row = travel_default_for_shift(shift, base_label)
+    elif accommodation_labels:
+        default_row = accommodation_default_for_shift(shift)
+        if default_row:
+            base_label = str(default_row.get("base_label") or accommodation_labels[0])
+        else:
+            base_label = accommodation_labels[0]
+    else:
+        default_row = travel_default_for_shift(shift, base_label)
     default_travel_minutes = int(default_row["travel_minutes"]) if default_row else 0
     default_source = str(default_row["source"] or "default") if default_row else ""
 
@@ -2401,11 +2457,18 @@ def expected_schedule_placeholders(
     return placeholders
 
 
-def schedule_people(rows: list[object], expected_areas: list[object] | None = None) -> list[dict[str, object]]:
+def schedule_people(
+    rows: list[object],
+    expected_areas: list[object] | None = None,
+    *,
+    include_vehicle_only: bool = False,
+    include_placeholders: bool = True,
+    vehicle_only_position_label: str = "Travel",
+) -> list[dict[str, object]]:
     people_by_key: dict[str, dict[str, object]] = {}
     open_entries: list[dict[str, object]] = []
     items, _split_contexts = effective_schedule_items(rows)
-    placeholders = expected_schedule_placeholders(expected_areas, items)
+    placeholders = expected_schedule_placeholders(expected_areas, items) if include_placeholders else []
 
     for item in items:
         area_label = str(item.get("area_display") or "Role")
@@ -2462,7 +2525,9 @@ def schedule_people(rows: list[object], expected_areas: list[object] | None = No
         position_parts = list(person.get("position_parts") or [])
         vehicle_parts = list(person.get("vehicle_parts") or [])
         if not position_parts:
-            continue
+            if not include_vehicle_only or not vehicle_parts:
+                continue
+            position_parts = [vehicle_only_position_label]
         position_label = ", ".join(position_parts)
         vehicle_label = ", ".join(vehicle_parts)
         sort_order = schedule_sort_value(person.get("position_sort"))
@@ -2490,6 +2555,102 @@ def schedule_people(rows: list[object], expected_areas: list[object] | None = No
             str(person.get("employee_name") or ""),
         ),
     )
+
+def shifts_are_vehicle_travel_context(shifts: list[dict[str, object]]) -> bool:
+    visible_shifts = [shift for shift in shifts if not int(shift.get("deleted_from_source") or 0)]
+    if not visible_shifts:
+        return False
+    if is_overnight_travel_day(visible_shifts):
+        return True
+
+    has_vehicle_assignment = False
+    has_accommodation_note = False
+    for shift in visible_shifts:
+        note_text = " ".join(
+            str(shift.get(key) or "")
+            for key in ("note", "roster_note", "raw_note", "raw_roster_note", "notes")
+        ).lower()
+        if "accommodation" in note_text or "motel" in note_text or "hotel" in note_text:
+            has_accommodation_note = True
+
+        role_parts: list[str] = []
+        for segment in list(shift.get("role_segments") or []):
+            role = str(segment.get("role_short") or segment.get("role") or "").strip()
+            if role:
+                role_parts.append(role)
+        if not role_parts:
+            role = str(
+                shift.get("role_label")
+                or shift.get("role_full_label")
+                or shift.get("title")
+                or ""
+            ).strip()
+            if role:
+                role_parts.append(role)
+        meaningful_parts = [part for part in role_parts if schedule_label_key(part) not in {"travel", "vehicles"}]
+        if not meaningful_parts:
+            continue
+        if all(role_is_vehicleish(part) for part in meaningful_parts):
+            has_vehicle_assignment = True
+            continue
+        return False
+    return has_vehicle_assignment and has_accommodation_note
+
+
+def schedule_rows_are_vehicle_travel_context(rows: list[object]) -> bool:
+    items, _split_contexts = effective_schedule_items(rows)
+    assigned_items = [item for item in items if str(item.get("employee_name") or "").strip()]
+    if not assigned_items:
+        return False
+    vehicle_items = [item for item in assigned_items if item.get("is_vehicle_area")]
+    production_items = [item for item in assigned_items if not item.get("is_vehicle_area")]
+    return bool(vehicle_items) and not production_items
+
+
+def apply_vehicle_carryover_from_people(
+    people: list[dict[str, object]],
+    vehicle_people: list[dict[str, object]],
+) -> None:
+    if not people or not vehicle_people:
+        return
+    vehicle_by_alias: dict[str, set[str]] = {}
+    for person in vehicle_people:
+        vehicle = str(person.get("vehicle_label") or "").strip()
+        name = str(person.get("employee_name") or "").strip()
+        if not vehicle or vehicle == "-" or not name:
+            continue
+        for key in note_person_keys(name):
+            vehicle_by_alias.setdefault(key, set()).add(vehicle)
+
+    for person in people:
+        current_vehicle = str(person.get("vehicle_label") or "").strip()
+        if current_vehicle and current_vehicle != "-":
+            continue
+        matches: set[str] = set()
+        for key in note_person_keys(person.get("employee_name")):
+            matches.update(vehicle_by_alias.get(key, set()))
+        if len(matches) == 1:
+            person["vehicle_label"] = next(iter(matches))
+
+
+def show_vehicle_assignment_as_travel(shifts: list[dict[str, object]]) -> None:
+    for shift in shifts:
+        role_label = str(shift.get("role_label") or shift.get("role_full_label") or "").strip()
+        if not role_is_vehicleish(role_label):
+            continue
+        vehicle_label = str(shift.get("header_vehicle_label") or "").strip()
+        if not vehicle_label:
+            shift["header_vehicle_label"] = role_label
+        shift["role_label"] = "Travel"
+        shift["role_full_label"] = "Travel"
+        track_label = str(shift.get("track_label") or "").strip()
+        shift["display_title"] = f"Travel to {track_label}" if track_label else "Travel"
+        for segment in list(shift.get("role_segments") or []):
+            segment_role = str(segment.get("role_short") or segment.get("role") or "").strip()
+            if role_is_vehicleish(segment_role):
+                segment["role"] = "Travel"
+                segment["role_short"] = "Travel"
+        shift["role_chain_label"] = role_chain_label(list(shift.get("role_segments") or []))
 
 
 def shift_schedule_location_ids(shifts: list[dict[str, object]]) -> list[int]:
@@ -4239,6 +4400,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             for change in changes_by_shift.get(shift_id, [])
         ]
         shift["changes"] = compact_shift_changes(list(shift.get("changes") or []))
+        merge_description_change_lines(shift)
         latest_change_at = latest_iso_datetime(
             shift.get("last_changed_at"),
             *(change.get("changed_at") for change in shift.get("changes") or []),
@@ -4248,8 +4410,12 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             shift["change_badge_label"] = f"Changed · {shift['change_time_label']}"
         shift["change_summary_text"] = build_shift_change_summary(list(shift.get("changes") or []))
     schedule_location_ids = shift_schedule_location_ids(shifts)
-    schedule_expected_areas = fetch_deputy_schedule_areas_for_locations(schedule_location_ids)
-    deputy_schedule_label = deputy_schedule_label_for_shifts("Deputy Schedule", shifts)
+    travel_schedule_context = shifts_are_vehicle_travel_context(shifts)
+    schedule_expected_areas = [] if travel_schedule_context else fetch_deputy_schedule_areas_for_locations(schedule_location_ids)
+    deputy_schedule_label = deputy_schedule_label_for_shifts(
+        "Travel / Vehicles" if travel_schedule_context else "Deputy Schedule",
+        shifts,
+    )
     deputy_schedule_rows = fetch_deputy_schedule_for_date(
         date_text,
         location_ids=schedule_location_ids or None,
@@ -4257,9 +4423,26 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
     deputy_schedule_people = schedule_people(
         deputy_schedule_rows,
         expected_areas=schedule_expected_areas,
+        include_vehicle_only=travel_schedule_context,
+        include_placeholders=not travel_schedule_context,
     )
     apply_schedule_role_context(shifts, deputy_schedule_rows)
     apply_roster_note_vehicles(deputy_schedule_people, shifts)
+    if travel_schedule_context:
+        show_vehicle_assignment_as_travel(shifts)
+    elif schedule_location_ids:
+        previous_day_text = (day_date - timedelta(days=1)).isoformat()
+        previous_day_rows = fetch_deputy_schedule_for_date(
+            previous_day_text,
+            location_ids=schedule_location_ids,
+        )
+        if schedule_rows_are_vehicle_travel_context(previous_day_rows):
+            previous_day_vehicle_people = schedule_people(
+                previous_day_rows,
+                include_vehicle_only=True,
+                include_placeholders=False,
+            )
+            apply_vehicle_carryover_from_people(deputy_schedule_people, previous_day_vehicle_people)
     if not deputy_schedule_people and is_overnight_travel_day(shifts):
         next_day_text = (day_date + timedelta(days=1)).isoformat()
         next_day_shifts = combine_adjacent_shifts(
