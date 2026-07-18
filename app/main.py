@@ -119,7 +119,7 @@ from .track_maps import refresh_track_maps, track_map_course_key
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.18.3"
+APP_BUILD = "2026.07.18.4"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -3339,6 +3339,7 @@ def aggregate_global_schedule(rows: list[object]) -> list[dict[str, object]]:
                 "id": f"global-{date_key}-{location_id or track_label}",
                 "date": date_key,
                 "track_label": track_label,
+                "schedule_location_id": int(location_id) if str(location_id or "").isdigit() else 0,
                 "race_type_label": "",
                 "global_event": True,
                 "crew_names": set(),
@@ -4478,7 +4479,13 @@ def track_map_image(track_key: str) -> FileResponse:
 
 
 @app.get("/day/{date_text}")
-def day_view(request: Request, date_text: str, notice: str | None = None) -> object:
+def day_view(
+    request: Request,
+    date_text: str,
+    notice: str | None = None,
+    scope: str = "personal",
+    location_id: int | None = None,
+) -> object:
     try:
         day_date = date.fromisoformat(date_text)
     except ValueError as exc:
@@ -4486,6 +4493,67 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
 
     user = current_user(request)
     owner_user_id = int(user["id"]) if user and user.get("id") is not None else None
+    global_view = scope == "global"
+    if global_view:
+        global_events = aggregate_global_schedule(fetch_deputy_schedule_between(date_text, date_text))
+        selected_event = next(
+            (
+                event
+                for event in global_events
+                if location_id is not None and int(event.get("schedule_location_id") or 0) == location_id
+            ),
+            None,
+        )
+        if selected_event is None and len(global_events) == 1:
+            selected_event = global_events[0]
+        selected_location_id = int(selected_event.get("schedule_location_id") or 0) if selected_event else 0
+        global_schedule_rows = (
+            fetch_deputy_schedule_for_date(date_text, location_ids=[selected_location_id])
+            if selected_location_id
+            else []
+        )
+        global_schedule_people = schedule_people(
+            global_schedule_rows,
+            expected_areas=(
+                fetch_deputy_schedule_areas_for_locations({selected_location_id})
+                if selected_location_id
+                else []
+            ),
+        )
+        for person in global_schedule_people:
+            person["changed"] = False
+        return templates.TemplateResponse(
+            "day.html",
+            {
+                "request": request,
+                "notice": notice,
+                "current_user": user,
+                "date_text": date_text,
+                "day_date": day_date,
+                "month_year": day_date.year,
+                "month_number": day_date.month,
+                "back_to_month_url": f"/month?year={day_date.year}&month={day_date.month}&scope=global",
+                "calendar_home_url": f"/month?year={day_date.year}&month={day_date.month}&scope=global",
+                "global_view": True,
+                "global_events": global_events,
+                "global_event": selected_event,
+                "shifts": [],
+                "open_shifts": [],
+                "planning_meetings": [],
+                "manual_rosters": [],
+                "track_maps": [],
+                "deputy_schedule_people": global_schedule_people,
+                "deputy_schedule_label": (
+                    f"Deputy Schedule - {selected_event['track_label']}" if selected_event else "Deputy Schedule"
+                ),
+                "deputy_schedule_changed": False,
+                "deputy_schedule_changes": [],
+                "deputy_assignment_history": [],
+                "day_total": 0,
+                "has_changed": False,
+                "mark_fields": MARK_FIELDS,
+            },
+        )
     manual_rosters = published_rosters_by_date(date_text, date_text, owner_user_id).get(date_text, [])
     shifts = combine_adjacent_shifts(
         [decorate_shift(row) for row in fetch_shifts_for_date(date_text, owner_user_id=owner_user_id)]
@@ -4618,6 +4686,11 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             "day_date": day_date,
             "month_year": day_date.year,
             "month_number": day_date.month,
+            "back_to_month_url": f"/month?year={day_date.year}&month={day_date.month}",
+            "calendar_home_url": f"/month?year={day_date.year}&month={day_date.month}",
+            "global_view": False,
+            "global_events": [],
+            "global_event": None,
             "shifts": shifts,
             "open_shifts": open_shifts,
             "planning_meetings": planning_meetings,

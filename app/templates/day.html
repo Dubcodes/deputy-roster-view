@@ -9,12 +9,54 @@
       <h1>{{ day_date.strftime("%A %d %B %Y") }}</h1>
     </div>
     <div class="heading-actions">
-      <a class="button button-secondary" href="/month?year={{ month_year }}&month={{ month_number }}">Back to month</a>
+      <a class="button button-secondary" href="{{ back_to_month_url or '/month?year=' ~ month_year ~ '&month=' ~ month_number }}">Back to month</a>
     </div>
   </section>
 
-  {% if not shifts and not open_shifts and not planning_meetings and not manual_rosters %}
+  {% if not shifts and not open_shifts and not planning_meetings and not manual_rosters and not global_events %}
     <div class="empty-state">No shifts listed for this day.</div>
+  {% endif %}
+
+  {% if global_view and global_event %}
+    <section class="detail-card global-day-card" style="{{ global_event.colour_style }}">
+      <div class="detail-card-heading">
+        <div>
+          <p class="eyebrow">{{ global_event.time_range }}</p>
+          <h2>{{ global_event.track_label }}</h2>
+          <p class="detail-subtitle">Shared crew schedule</p>
+        </div>
+      </div>
+      {% if deputy_schedule_people %}
+        <section class="race-day-panel deputy-schedule-panel">
+          <div class="section-heading"><h3>{{ deputy_schedule_label }}</h3></div>
+          <div class="crew-roster" role="table" aria-label="Deputy schedule crew">
+            <div class="crew-roster-row crew-roster-head" role="row">
+              <span role="columnheader">Position</span><span role="columnheader">Name</span><span role="columnheader">Vehicle</span>
+            </div>
+            {% for person in deputy_schedule_people %}
+              <div class="crew-roster-row{% if person.placeholder %} is-placeholder{% endif %}" role="row">
+                <span role="cell">{{ person.position_label }}</span>
+                <strong class="crew-name" role="cell">{{ person.employee_name }}</strong>
+                <span role="cell">{{ person.vehicle_label or "-" }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        </section>
+      {% else %}
+        <div class="empty-state">No crew assignments were captured for this location.</div>
+      {% endif %}
+    </section>
+  {% elif global_view and global_events %}
+    <section class="table-panel">
+      <div class="section-heading"><h2>Crew locations</h2></div>
+      <div class="day-planning-list">
+        {% for event in global_events %}
+          <a class="day-planning-row" href="/day/{{ date_text }}?scope=global&amp;location_id={{ event.schedule_location_id }}" style="{{ event.colour_style }}">
+            <strong>{{ event.track_label }}</strong><span>{{ event.time_range }}</span>
+          </a>
+        {% endfor %}
+      </div>
+    </section>
   {% endif %}
 
   {% if manual_rosters %}

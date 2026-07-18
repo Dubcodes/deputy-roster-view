@@ -21,7 +21,7 @@
       {% for day in active_days %}
         <article class="list-day{% if day.date == today %} today-list-day{% endif %}">
           {% set timesheet = day["timesheet"] %}
-          <a class="list-day-date" href="{% if timesheet and not day.shifts %}{{ timesheet.url }}{% else %}/day/{{ day.iso }}{% endif %}">
+          <a class="list-day-date" href="{% if global_view and day.shifts %}/day/{{ day.iso }}?scope=global&amp;location_id={{ day.shifts[0].schedule_location_id }}{% elif timesheet and not day.shifts %}{{ timesheet.url }}{% else %}/day/{{ day.iso }}{% endif %}">
             <strong>{{ day.date.strftime("%a") }}</strong>
             <span>{{ day.date.day }}</span>
           </a>
@@ -33,7 +33,7 @@
               </a>
             {% endfor %}
             {% for shift in day.shifts %}
-              <a class="list-shift{% if shift.deleted_from_source %} is-deleted{% endif %}{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}" style="{{ shift.colour_style }}">
+              <a class="list-shift{% if shift.deleted_from_source %} is-deleted{% endif %}{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}{% if global_view %}?scope=global&amp;location_id={{ shift.schedule_location_id }}{% endif %}" style="{{ shift.colour_style }}">
                 <span class="list-shift-main">
                   <strong>{{ shift.track_label }}</strong>
                   <span>{{ shift.role_chain_label or shift.role_label or shift.title or "Shift" }}</span>
@@ -115,7 +115,7 @@
         {% for day in week.days %}
           <article class="day-cell{% if not day.in_month %} outside-month{% endif %}{% if day.is_today %} today{% endif %}">
             {% set timesheet = day["timesheet"] %}
-            <a class="day-link" href="/day/{{ day.iso }}">
+            <a class="day-link" href="/day/{{ day.iso }}{% if global_view and day.shifts %}?scope=global&amp;location_id={{ day.shifts[0].schedule_location_id }}{% endif %}">
               <span>{{ day.date.strftime("%a") }}</span>
               <strong>{{ day.day_number }}</strong>
             </a>
@@ -128,7 +128,7 @@
                 </a>
               {% endfor %}
               {% for shift in day.shifts %}
-                <a id="shift-card-{{ shift.id }}" class="shift-card{% if shift.deleted_from_source %} is-deleted{% endif %}{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}" style="{{ shift.colour_style }}">
+                <a id="shift-card-{{ shift.id }}" class="shift-card{% if shift.deleted_from_source %} is-deleted{% endif %}{% if shift.changed_since_viewed %} has-change{% endif %}" href="/day/{{ day.iso }}{% if global_view %}?scope=global&amp;location_id={{ shift.schedule_location_id }}{% endif %}" style="{{ shift.colour_style }}">
                   <strong class="shift-track">{{ shift.track_label }}</strong>
                   <span class="shift-mini">
                     <span class="shift-mini-role">{{ shift.role_chain_label or shift.role_label or shift.title or "Shift" }}</span>

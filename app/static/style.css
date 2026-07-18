@@ -3157,6 +3157,80 @@ textarea {
   align-items: stretch;
 }
 
+.settings-quiet .settings-panel {
+  padding: 12px;
+}
+
+.settings-quiet .sync-panel {
+  grid-column: 1 / -1;
+}
+
+.sync-next-shift {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 12px;
+  align-items: baseline;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+}
+
+.sync-next-shift .summary-label,
+.sync-next-shift small {
+  grid-column: 1 / -1;
+}
+
+.sync-next-shift span:not(.summary-label),
+.sync-next-shift small {
+  color: var(--muted);
+}
+
+.management-panel-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.management-panel-summary::-webkit-details-marker {
+  display: none;
+}
+
+.management-panel-summary > span {
+  display: grid;
+  gap: 2px;
+}
+
+.management-panel-summary > span:last-child {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-align: right;
+}
+
+.management-panel-summary strong {
+  color: var(--text);
+  font-size: 1.02rem;
+}
+
+.management-panel-summary small {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.management-panel-body {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+}
+
+.compact-stats-panel {
+  margin-bottom: 12px;
+}
+
 .roster-snapshot-panel strong {
   display: block;
 }
@@ -3660,7 +3734,7 @@ input[type="number"] {
   margin-top: 10px;
 }
 
-.location-management-panel > .section-heading small {
+.location-management-panel > .management-panel-summary small {
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 800;
@@ -4188,6 +4262,19 @@ th {
 
   .shared-stats-panel > summary {
     align-items: flex-start;
+  }
+
+  .management-panel-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .management-panel-summary > span:last-child {
+    text-align: left;
+  }
+
+  .sync-next-shift {
+    grid-template-columns: 1fr;
   }
 
   .admin-user-row {

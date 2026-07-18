@@ -3,7 +3,7 @@
 {% block title %}Settings - Deputy Roster View{% endblock %}
 
 {% block content %}
-  <section class="settings-grid settings-grid-three settings-quiet">
+  <section class="settings-grid settings-grid-two settings-quiet">
     <article class="settings-panel">
       <span class="summary-label">Account</span>
       {% if current_user %}
@@ -159,36 +159,26 @@
       <form action="/sync-now" method="post" data-progress-form>
         <button class="button" type="submit" data-progress-button {% if sync_status.running %}disabled{% endif %}>Sync my roster</button>
       </form>
-      <p class="muted">Manual sync updates this account. Auto sync runs at 5am, 12 hours before a shift, one hour before start, and again 30 minutes before start if changes were found. User accounts are staggered so Deputy is not hit all at once.</p>
-    </article>
-
-    <article class="settings-panel">
-      <span class="summary-label">Next shift</span>
-      {% if next_shift %}
-        <strong>{{ next_shift.start_at|datetime }}</strong>
-        <p>{{ next_shift.role_full_label or next_shift.role_label or "Shift" }} at {{ next_shift.track_label }}{% if next_shift.race_type_label %}, {{ next_shift.race_type_label }}{% endif %}</p>
-      {% else %}
-        <strong>None listed</strong>
-      {% endif %}
-      <p class="muted">Last sync: {{ user_last_sync_at|datetime if user_last_sync_at else "Never" }}</p>
-    </article>
-
-    <article class="settings-panel roster-snapshot-panel">
-      <span class="summary-label">Roster snapshot</span>
-      <strong>{{ roster_snapshot.status_label }}</strong>
-      <p>
-        {{ roster_snapshot.published }} published · {{ roster_snapshot.open }} open ·
-        {{ roster_snapshot.unavailable }} unavailable · {{ roster_snapshot.warnings }} warnings
-      </p>
-      <p class="muted">
-        {{ roster_snapshot.target }}{% if roster_snapshot.date_label %} · {{ roster_snapshot.date_label }}{% endif %}
-        {% if roster_snapshot.changed %} · {{ roster_snapshot.changed }} changed{% endif %}
-      </p>
+      <p class="muted">Automatic checks also run at 5am and around upcoming shifts.</p>
+      <div class="sync-next-shift">
+        <span class="summary-label">Next shift</span>
+        {% if next_shift %}
+          <strong>{{ next_shift.start_at|datetime }}</strong>
+          <span>{{ next_shift.role_full_label or next_shift.role_label or "Shift" }} at {{ next_shift.track_label }}{% if next_shift.race_type_label %}, {{ next_shift.race_type_label }}{% endif %}</span>
+        {% else %}
+          <strong>None listed</strong>
+        {% endif %}
+        <small>Last sync: {{ user_last_sync_at|datetime if user_last_sync_at else "Never" }}</small>
+      </div>
     </article>
   </section>
 
-  <section class="settings-grid roster-insights-grid">
-    <article class="settings-panel roster-insights-panel">
+  <details class="table-panel roster-insights-panel compact-stats-panel">
+    <summary class="management-panel-summary">
+      <span><strong>Your roster stats</strong><small>{{ roster_insights.past_90_label }}</small></span>
+      <span>{{ roster_insights.past_30_hours|hours }} in 30 days · {{ roster_insights.upcoming_count }} upcoming</span>
+    </summary>
+    <div class="management-panel-body">
       <div class="section-heading">
         <h2>Your Roster</h2>
         <span>{{ roster_insights.past_90_label }}</span>
@@ -215,14 +205,9 @@
           <strong>{{ roster_insights.upcoming_count }}</strong>
           <small>{{ roster_insights.upcoming_label }}</small>
         </div>
-        <div class="stat-card">
-          <span>Locations</span>
-          <strong>{{ roster_insights.track_count }}</strong>
-          <small>{{ roster_insights.changed_count }} changed</small>
-        </div>
       </div>
 
-      <div class="stats-visual-grid">
+      <div class="stats-visual-grid compact-stats-grid">
         <section class="stats-chart weekday-chart-panel">
           <h3>Rostered Hours By Weekday</h3>
           <div class="weekday-chart" role="img" aria-label="Rostered hours and shifts by weekday for {{ roster_insights.past_90_label }}">
@@ -237,25 +222,7 @@
           </div>
         </section>
 
-        <section class="stats-chart donut-panel">
-          <h3>Position Mix</h3>
-          {% if roster_insights.position_mix['items'] %}
-            <div class="donut-layout">
-              <div class="donut-chart" style="--donut-gradient: {{ roster_insights.position_mix.gradient }};">
-                <div><strong>{{ roster_insights.past_90_count }}</strong><span>shifts</span></div>
-              </div>
-              <div class="chart-legend">
-                {% for item in roster_insights.position_mix['items'] %}
-                  <div><i style="{{ item.colour_style }}"></i><span>{{ item.label }}</span><strong>{{ item.value|int }}</strong></div>
-                {% endfor %}
-              </div>
-            </div>
-          {% else %}
-            <p class="muted">No position data yet.</p>
-          {% endif %}
-        </section>
-
-        <section class="stats-chart stats-chart-wide">
+        <section class="stats-chart">
           <h3>Hours By Location</h3>
           {% if roster_insights.location_hours_mix['items'] %}
             <div class="segment-chart">
@@ -274,25 +241,8 @@
         </section>
       </div>
 
-      <section class="stats-chart roster-day-audit">
-        <div class="section-heading"><h3>Recent Completed Roster Days</h3><span>{{ roster_insights.track_count }} locations · {{ roster_insights.changed_count }} changed</span></div>
-        <p class="muted">These rows are what feed the totals above. Adjacent Deputy rows for the same day are merged where the normal day view would merge them.</p>
-        <div class="insight-day-list">
-          {% for item in roster_insights.recent_days %}
-            <a href="/day/{{ item.date }}">
-              <strong>{{ item.date_label }}</strong>
-              <span>{{ item.track_label }}</span>
-              <span>{{ item.position_label }}</span>
-              <span>{{ item.time_range }}</span>
-              <strong>{{ item.hours|hours }}</strong>
-            </a>
-          {% else %}
-            <p class="muted">No completed roster days in the last 90 days.</p>
-          {% endfor %}
-        </div>
-      </section>
-    </article>
-  </section>
+    </div>
+  </details>
 
   <details class="table-panel shared-stats-panel">
     <summary>

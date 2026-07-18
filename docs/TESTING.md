@@ -55,7 +55,9 @@ After Portainer redeploy:
 - Open `/admin/roster-days/new`, save a draft, confirm it remains private, publish it, and verify only an assigned user's month/day views show it.
 - Expand Travel day and hotels, assign two crew to different hotels, and confirm each published user sees only their own hotel.
 - Confirm FCR context, H-Cambridge, and Travel then Overnighter are absent from production positions.
-- In Settings, confirm weekday cards explicitly show rostered hours and shift counts, today is excluded from completed totals, and Recent Completed Roster Days matches those totals.
+- In Settings, expand Your roster stats and confirm weekday cards show rostered hours and shift counts, today is excluded from completed totals, and the location-hours summary remains readable.
+- In the crew calendar, open two locations on the same date and confirm each day shows only that location's crew. Confirm Back to month and the calendar icon both retain crew view.
+- In Admin, confirm Locations starts collapsed and that each location can save separate office and hotel travel times.
 - Confirm each user shows next planned sync and last sync status.
 - If using the temporary tunnel stack, confirm its `cloudflared` container logs show a `trycloudflare.com` URL.
 

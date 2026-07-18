@@ -368,6 +368,14 @@ def main() -> None:
         raise AssertionError("Expected the global crew calendar to render.")
     if "aria-label=\"Personal roster\"" not in global_month.text:
         raise AssertionError("Expected a personal-roster return control in global view.")
+    if "/day/2026-07-18?scope=global&amp;location_id=88" not in global_month.text:
+        raise AssertionError("Expected global calendar markers to carry their exact Deputy location.")
+    global_day = client.get("/day/2026-07-18?scope=global&location_id=88")
+    if global_day.status_code != 200 or "Current Operator" not in global_day.text or "Ruakaka" not in global_day.text:
+        raise AssertionError("Expected the global day to render the selected location's crew data.")
+    global_back_url = "/month?year=2026&amp;month=7&amp;scope=global"
+    if global_back_url not in global_day.text:
+        raise AssertionError("Expected global day calendar controls to return to the global month.")
     timesheet_page = client.get("/timesheet/2026-07-04")
     if "Remember the cable return." not in timesheet_page.text or "Calculation" not in timesheet_page.text:
         raise AssertionError("Expected private notes and collapsible calculation details on the timesheet.")
@@ -557,6 +565,10 @@ def main() -> None:
     settings_page = client.get("/settings")
     if settings_page.status_code != 200 or "Your Roster" not in settings_page.text:
         raise AssertionError("Expected settings page to render roster insights.")
+    if "compact-stats-panel" not in settings_page.text or "sync-next-shift" not in settings_page.text:
+        raise AssertionError("Expected settings insights to be collapsed and next-shift details consolidated with sync.")
+    if "Roster snapshot" in settings_page.text:
+        raise AssertionError("Expected the duplicate roster snapshot panel to remain removed.")
     if "Refresh Planning Calendar" in settings_page.text:
         raise AssertionError("Planning refresh must remain admin-only.")
 
@@ -651,8 +663,10 @@ def main() -> None:
         raise AssertionError("Generic contractor context must not remain as a learned travel destination.")
 
     admin_page = client.get("/admin")
-    if admin_page.status_code != 200 or "<h2>Locations</h2>" not in admin_page.text or "/admin/travel-defaults/" not in admin_page.text:
+    if admin_page.status_code != 200 or "<strong>Locations</strong>" not in admin_page.text or "/admin/travel-defaults/" not in admin_page.text:
         raise AssertionError("Expected admin page to render unified editable locations.")
+    if "Add hotel/base" not in admin_page.text or "location-management-panel" not in admin_page.text:
+        raise AssertionError("Expected collapsible location management to include per-track hotel travel entry.")
     if "Office / Clow Place" not in admin_page.text or "Beachfront Hotel" not in admin_page.text:
         raise AssertionError("Expected unified locations to show canonical office and custom hotel bases.")
     if "/admin/love-racing-refresh" not in admin_page.text or "Refresh Planning Calendar" not in admin_page.text:

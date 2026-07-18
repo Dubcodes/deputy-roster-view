@@ -141,17 +141,18 @@
 
     <p class="muted planning-location-pointer">Choose which locations appear on the calendar and manage their travel times in Locations below.</p>
   </section>
-  <section class="table-panel location-management-panel">
-    <div class="section-heading">
-      <h2>Locations</h2>
-      <small>{{ planning_location_enabled_count }} of {{ planning_locations|length }} planning locations active</small>
-    </div>
-    <p class="muted">Active controls Love Racing planning hints only. Deputy roster shifts always remain visible. Travel times are fallbacks when a roster note is missing base or on-track timing.</p>
+  <details class="table-panel location-management-panel">
+    <summary class="management-panel-summary">
+      <span><strong>Locations</strong><small>{{ planning_location_enabled_count }} of {{ planning_locations|length }} planning locations active</small></span>
+      <span>Manage locations and travel</span>
+    </summary>
+    <div class="management-panel-body">
+    <p class="muted">Active controls Love Racing planning hints only. Deputy shifts always remain visible. Save separate journeys from the office or each hotel used for a track.</p>
 
     <details class="location-travel-entry">
-      <summary>Add a travel time</summary>
+      <summary>Add a location, office, or hotel travel time</summary>
       <div class="location-travel-entry-body">
-        <p class="muted">Office and Clow Place are the same base. Add a hotel by its real name once the stay is known; each hotel can have its own journey to the track.</p>
+        <p class="muted">Office and Clow Place are the same base. Use the hotel’s real name so several hotels at the same track can each keep their own travel time.</p>
         <form class="marks-form admin-override-form" action="/admin/travel-defaults" method="post">
           <div class="form-grid-two">
             <label class="form-row">
@@ -159,8 +160,8 @@
               <input type="text" name="track_label" placeholder="Ruakaka" required>
             </label>
             <label class="form-row">
-              <span>From</span>
-              <input type="text" name="base_label" value="Office / Clow Place" placeholder="Office / Clow Place or hotel name" required>
+              <span>Starting point or hotel</span>
+              <input type="text" name="base_label" value="Office / Clow Place" placeholder="Office / Clow Place or Beachfront Motel" required>
             </label>
           </div>
           <div class="form-grid-two">
@@ -231,6 +232,25 @@
                   </label>
                 </form>
               {% endif %}
+              <details class="inline-settings-details compact-row-details">
+                <summary class="button button-compact button-secondary">Add hotel/base</summary>
+                <form class="settings-form compact-settings-form" action="/admin/travel-defaults" method="post">
+                  <input type="hidden" name="track_label" value="{{ location.display_name }}">
+                  <label class="form-row">
+                    <span>Starting point or hotel</span>
+                    <input type="text" name="base_label" placeholder="Beachfront Motel" required>
+                  </label>
+                  <label class="form-row">
+                    <span>Travel minutes</span>
+                    <input type="number" name="travel_minutes" min="1" max="480" required>
+                  </label>
+                  <label class="form-row">
+                    <span>Note</span>
+                    <input type="text" name="note" placeholder="Optional stay or route detail">
+                  </label>
+                  <button class="button button-compact" type="submit">Save</button>
+                </form>
+              </details>
               {% for item in location.travel_defaults %}
                 <div class="location-travel-actions">
                   <details class="inline-settings-details compact-row-details">
@@ -265,7 +285,8 @@
         {% endfor %}
       </div>
     {% endif %}
-  </section>
+    </div>
+  </details>
 
   <section class="table-panel">
     <div class="section-heading">

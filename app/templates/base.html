@@ -12,7 +12,7 @@
   <body>
     <header class="site-header {% if header_context %}has-month-nav{% else %}no-month-nav{% endif %}">
       <div class="brand-stack">
-        <a class="brand" href="/month">Deputy Roster View</a>
+        <a class="brand" href="{{ calendar_home_url or '/month' }}">Deputy Roster View</a>
         {% if current_user %}
           <span class="brand-meta">
             {{ current_user.display_name or "Roster" }}
@@ -64,14 +64,14 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9.5 9a2.7 2.7 0 0 1 5.2 1c0 2-2.7 2-2.7 4"></path><path d="M12 17h.01"></path></svg>
           </a>
         {% elif header_mode == "settings" %}
-          <a class="icon-button" href="/month" aria-label="Calendar">
+          <a class="icon-button" href="{{ calendar_home_url or '/month' }}" aria-label="Calendar">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"></rect><path d="M8 2v4M16 2v4M3 10h18"></path></svg>
           </a>
           <a class="icon-button" href="/help" aria-label="Help" title="Help">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9.5 9a2.7 2.7 0 0 1 5.2 1c0 2-2.7 2-2.7 4"></path><path d="M12 17h.01"></path></svg>
           </a>
         {% else %}
-          <a class="icon-button" href="/month" aria-label="Calendar">
+          <a class="icon-button" href="{{ calendar_home_url or '/month' }}" aria-label="Calendar">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"></rect><path d="M8 2v4M16 2v4M3 10h18"></path></svg>
           </a>
           <a class="icon-button" href="/settings" aria-label="Settings">
