@@ -119,7 +119,7 @@ from .track_maps import refresh_track_maps, track_map_course_key
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.18.1"
+APP_BUILD = "2026.07.18.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
