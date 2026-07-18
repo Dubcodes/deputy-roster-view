@@ -3394,6 +3394,16 @@ textarea {
   color: var(--danger);
 }
 
+.global-roster-notice {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.global-week-total {
+  opacity: 0.72;
+}
+
 .weekday-column small {
   color: var(--muted);
   font-size: 0.62rem;
@@ -3911,14 +3921,49 @@ th {
   display: grid;
 }
 
+.timesheet-day {
+  border-bottom: 1px solid var(--line);
+}
+
 .timesheet-row {
   display: grid;
   grid-template-columns: minmax(92px, 0.8fr) minmax(70px, 0.45fr) minmax(0, 1.3fr);
   gap: 10px;
   align-items: center;
   padding: 12px 14px;
-  border-bottom: 1px solid var(--line);
   text-decoration: none;
+}
+
+.timesheet-note {
+  margin: -4px 14px 10px;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.timesheet-maths {
+  padding: 0 14px 12px;
+}
+
+.timesheet-maths summary {
+  width: max-content;
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.timesheet-maths summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.timesheet-calculation {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.timesheet-calculation p {
+  margin: 6px 0;
 }
 
 .timesheet-row span {

@@ -62,6 +62,7 @@ def main() -> None:
 
     from app.database import (
         create_app_user,
+        fetch_deputy_assignment_history_for_date,
         fetch_love_racing_meetings_between,
         get_connection,
         get_app_user_by_email,
@@ -179,6 +180,27 @@ def main() -> None:
             ],
         }
     )
+    assignment_payload = {
+        "captured_at": "2026-07-18T08:00:00+12:00",
+        "areas": [],
+        "locations": [{"id": 88, "name": "T-Ruakaka", "address": ""}],
+        "extracted_shifts": [],
+        "extracted_schedule_shifts": [{
+            "id": 9901, "area": 501, "areaName": "Side 2", "areaLocationId": 88,
+            "employee": 41, "employeeName": "Previous Operator",
+            "start": "2026-07-18T09:00:00+12:00", "end": "2026-07-18T18:00:00+12:00",
+            "duration": 9, "isPublished": True,
+        }],
+    }
+    save_deputy_web_schedule(assignment_payload)
+    assignment_payload["captured_at"] = "2026-07-18T09:00:00+12:00"
+    assignment_payload["extracted_schedule_shifts"][0].update(
+        employee=42, employeeName="Current Operator"
+    )
+    save_deputy_web_schedule(assignment_payload)
+    assignment_history = fetch_deputy_assignment_history_for_date("2026-07-18", [88])
+    if not assignment_history or assignment_history[0]["old_employee_name"] != "Previous Operator" or assignment_history[0]["new_employee_name"] != "Current Operator":
+        raise AssertionError(f"Expected durable crew assignment history, got {assignment_history!r}")
     with get_connection() as conn:
         remaining_stale = conn.execute(
             "SELECT COUNT(*) FROM deputy_schedule_shifts WHERE source_shift_id IN (9001, 9002)"
@@ -290,6 +312,13 @@ def main() -> None:
                 ("stats:today", "[T-Test Park] Director", "2026-07-04T08:00:00+12:00", "2026-07-04T16:00:00+12:00", "2026-07-04", 8, 8, int(admin_user["id"])),
             ],
         )
+        worked_shift = conn.execute(
+            "SELECT id FROM shifts WHERE source_uid = 'stats:today'"
+        ).fetchone()
+        conn.execute(
+            "INSERT INTO shift_marks (shift_id, private_note, updated_at) VALUES (?, ?, ?)",
+            (int(worked_shift["id"]), "Remember the cable return.", "2026-07-04T18:00:00+12:00"),
+        )
     insights = build_roster_insights(int(admin_user["id"]), date(2026, 7, 4))
     friday = next(item for item in insights["weekday_chart"] if item["label"] == "Fri")
     saturday = next(item for item in insights["weekday_chart"] if item["label"] == "Sat")
@@ -334,6 +363,14 @@ def main() -> None:
     published_month = client.get("/month?year=2026&month=7")
     if "published-roster-marker" not in published_month.text or "Test Park" not in published_month.text:
         raise AssertionError("Expected published roster marker on the assigned user's month view.")
+    global_month = client.get("/month?year=2026&month=7&scope=global")
+    if global_month.status_code != 200 or "Shared crew schedule" not in global_month.text:
+        raise AssertionError("Expected the global crew calendar to render.")
+    if "aria-label=\"Personal roster\"" not in global_month.text:
+        raise AssertionError("Expected a personal-roster return control in global view.")
+    timesheet_page = client.get("/timesheet/2026-07-04")
+    if "Remember the cable return." not in timesheet_page.text or "Calculation" not in timesheet_page.text:
+        raise AssertionError("Expected private notes and collapsible calculation details on the timesheet.")
     changed_draft = client.post(
         "/admin/roster-days/save",
         data={
@@ -475,6 +512,11 @@ def main() -> None:
     )
     if beachfront_calc.get("start_label") != "08:30" or beachfront_calc.get("travel_label") != "0h 30m":
         raise AssertionError(f"Expected Beachfront hotel default to infer 08:30 start, got {beachfront_calc!r}")
+    if not beachfront_calc.get("roster_start_conflict") or not any(
+        line.get("label") == "Deputy roster start" and line.get("value") == "09:15"
+        for line in beachfront_calc.get("lines") or []
+    ):
+        raise AssertionError(f"Expected the late Deputy roster start to remain visible, got {beachfront_calc!r}")
     unknown_hotel_summary = parse_roster_summary([
         "Accommodation Unknown Motel",
         "On track 0900",
@@ -615,6 +657,8 @@ def main() -> None:
         raise AssertionError("Expected unified locations to show canonical office and custom hotel bases.")
     if "/admin/love-racing-refresh" not in admin_page.text or "Refresh Planning Calendar" not in admin_page.text:
         raise AssertionError("Expected admin page to render the planning refresh control.")
+    if "/admin/track-maps-refresh" not in admin_page.text or "Refresh Track Maps" not in admin_page.text:
+        raise AssertionError("Expected admin page to render the track-map refresh control.")
     if diagnostic_marker in admin_page.text or f'/admin/users/{int(admin_user["id"])}/diagnostics.txt' not in admin_page.text:
         raise AssertionError("Expected Admin diagnostics to be loaded on demand rather than embedded in the page.")
     diagnostic_response = client.get(f'/admin/users/{int(admin_user["id"])}/diagnostics.txt')

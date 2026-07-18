@@ -72,6 +72,21 @@
     <p class="muted">Deactivated accounts and untrusted devices are automatically purged after 30 days. Active users are not purged. This runs the same cleanup now.</p>
   </section>
 
+  <section class="table-panel">
+    <div class="section-heading">
+      <h2>Track Maps</h2>
+      <form action="/admin/track-maps-refresh" method="post">
+        <button class="button button-secondary" type="submit">Refresh Track Maps</button>
+      </form>
+    </div>
+    <p class="muted">Maps are cached only for thoroughbred tracks already known from crew rosters.</p>
+    {% if track_maps %}
+      <p>{{ track_maps|selectattr("status", "equalto", "ok")|list|length }} maps ready · {{ track_maps|length }} checked</p>
+    {% else %}
+      <p class="muted">No track maps have been checked yet.</p>
+    {% endif %}
+  </section>
+
   <section class="table-panel love-racing-panel">
     <div class="section-heading">
       <h2>Planning Race Days</h2>

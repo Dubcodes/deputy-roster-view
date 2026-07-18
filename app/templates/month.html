@@ -3,6 +3,9 @@
 {% block title %}{{ month_name }} - Deputy Roster View{% endblock %}
 
 {% block content %}
+  {% if global_view %}
+    <p class="global-roster-notice">Shared crew schedule. Each rostered location is shown once for maintenance planning.</p>
+  {% endif %}
   <div
     data-roster-nav
     data-prev-url="{{ header_prev_url }}"
@@ -165,15 +168,15 @@
             </div>
           </article>
         {% endfor %}
-        <aside class="week-total">
+        <aside class="week-total{% if global_view %} global-week-total{% endif %}">
           <span>Week</span>
-          <strong>{{ week.total|hours }}</strong>
+          <strong>{% if global_view %}Crew{% else %}{{ week.total|hours }}{% endif %}</strong>
         </aside>
       {% endfor %}
     </section>
   {% endif %}
 
-  {% if view == "month" %}
+  {% if view == "month" and not global_view %}
     <section class="upcoming-strip" aria-label="Upcoming shifts">
       <div class="section-heading">
         <h2>Next Up</h2>

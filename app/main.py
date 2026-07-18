@@ -36,6 +36,7 @@ from .database import (
     fetch_open_deputy_schedule_shifts,
     fetch_published_roster_days_between,
     fetch_deputy_schedule_between,
+    fetch_deputy_assignment_history_for_date,
     fetch_love_racing_meetings_between,
     fetch_deputy_schedule_for_date,
     fetch_deputy_schedule_areas_for_locations,
@@ -73,6 +74,7 @@ from .database import (
     list_roster_builder_location_labels,
     list_roster_days,
     list_travel_time_defaults,
+    list_track_maps,
     list_trusted_devices_for_user,
     mark_user_sync_finished,
     mark_user_sync_started,
@@ -112,12 +114,12 @@ from .security import (
     verify_pin,
 )
 from .user_credentials import settings_for_user
-from .track_maps import track_map_course_key
+from .track_maps import refresh_track_maps, track_map_course_key
 
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.17.2"
+APP_BUILD = "2026.07.18.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -737,10 +739,18 @@ def accommodation_base_labels_for_shift(shift: dict[str, object]) -> list[str]:
 
 
 def accommodation_default_for_shift(shift: dict[str, object]) -> dict[str, object] | None:
-    for base_label in accommodation_base_labels_for_shift(shift):
+    base_labels = accommodation_base_labels_for_shift(shift)
+    for base_label in base_labels:
         row = travel_default_for_shift(shift, base_label)
         if row:
             return row
+    track_label = str(shift.get("track_label") or shift.get("location_label") or "").lower()
+    if "ruakaka" in track_label and any("beachfront" in label.lower() for label in base_labels):
+        return {
+            "base_label": "Beachfront Motel",
+            "travel_minutes": 30,
+            "source": "known accommodation",
+        }
     return None
 
 def clock_datetime_for_shift(shift: dict[str, object], clock_value: str, after: datetime | None = None) -> datetime | None:
@@ -1343,6 +1353,7 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     default_travel_minutes = int(default_row["travel_minutes"]) if default_row else 0
     default_source = str(default_row["source"] or "default") if default_row else ""
 
+    roster_start_at = parse_iso_datetime(str(shift.get("start_at") or ""))
     start_at = clock_datetime_for_shift(shift, base_clock) if base_clock else None
     inferred_start = False
     inferred_on_track = False
@@ -1401,6 +1412,28 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     packup_done_at = race_clear_at + timedelta(minutes=PACKUP_MINUTES)
     calculated_end_at = packup_done_at + timedelta(minutes=travel_minutes)
     hours = max(0.0, round((calculated_end_at - start_at).total_seconds() / 3600, 2))
+    roster_start_conflict = bool(
+        inferred_start
+        and roster_start_at
+        and on_track_at
+        and roster_start_at >= on_track_at
+    )
+    calculation_lines = [
+        {"label": f"{base_label}{' inferred' if inferred_start else ''}", "value": start_at.strftime("%H:%M")},
+        {"label": f"On track{' inferred' if inferred_on_track else ''}", "value": on_track_at.strftime("%H:%M")},
+        {"label": "Travel each way", "value": format_minutes_duration(travel_minutes)},
+    ]
+    if roster_start_conflict and roster_start_at:
+        calculation_lines.append({"label": "Deputy roster start", "value": roster_start_at.strftime("%H:%M")})
+    calculation_lines.extend(
+        [
+            {"label": "Last race", "value": last_race_at.strftime("%H:%M")},
+            {"label": "Race cleared", "value": race_clear_at.strftime("%H:%M")},
+            {"label": "Pack-up done", "value": packup_done_at.strftime("%H:%M")},
+            {"label": "Back at base", "value": calculated_end_at.strftime("%H:%M")},
+            {"label": "Calculated total", "value": format_hours(hours)},
+        ]
+    )
     result.update(
         {
             "available": True,
@@ -1416,16 +1449,8 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
             "travel_label": format_minutes_duration(travel_minutes),
             "hours": hours,
             "hours_label": format_hours(hours),
-            "lines": [
-                {"label": f"{base_label}{' inferred' if inferred_start else ''}", "value": start_at.strftime("%H:%M")},
-                {"label": f"On track{' inferred' if inferred_on_track else ''}", "value": on_track_at.strftime("%H:%M")},
-                {"label": "Travel each way", "value": format_minutes_duration(travel_minutes)},
-                {"label": "Last race", "value": last_race_at.strftime("%H:%M")},
-                {"label": "Race cleared", "value": race_clear_at.strftime("%H:%M")},
-                {"label": "Pack-up done", "value": packup_done_at.strftime("%H:%M")},
-                {"label": "Back at base", "value": calculated_end_at.strftime("%H:%M")},
-                {"label": "Calculated total", "value": format_hours(hours)},
-            ],
+            "lines": calculation_lines,
+            "roster_start_conflict": roster_start_conflict,
             "formula": (
                 f"{base_label} {start_at.strftime('%H:%M')} to on track {on_track_at.strftime('%H:%M')} "
                 f"= {format_minutes_duration(travel_minutes)} travel each way. Last race "
@@ -1439,6 +1464,12 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
         result["formula"] = f"Using changed last race time. {result['formula']}"
     if inferred_start or inferred_on_track:
         result["formula"] = f"Using {default_source or 'saved'} default travel time. {result['formula']}"
+    if roster_start_conflict and roster_start_at:
+        result["formula"] = (
+            f"Deputy starts the shift at {roster_start_at.strftime('%H:%M')}, after the "
+            f"{on_track_at.strftime('%H:%M')} on-track note. The breakdown follows the roster note "
+            f"and accommodation travel time; check this discrepancy. {result['formula']}"
+        )
     return result
 
 
@@ -3250,10 +3281,14 @@ def build_timesheet_summary(submission_date: date, owner_user_id: int | None = N
         day_total = sum(shift_hours_value(shift) for shift in shifts)
         total_hours += day_total
         locations = []
+        notes = []
         for shift in shifts:
             location = str(shift.get("track_label") or shift.get("location") or "Shift")
             if location not in locations:
                 locations.append(location)
+            private_note = str(shift.get("private_note") or "").strip()
+            if private_note and private_note not in notes:
+                notes.append(private_note)
         day_rows.append(
             {
                 "date": day_item,
@@ -3262,6 +3297,7 @@ def build_timesheet_summary(submission_date: date, owner_user_id: int | None = N
                 "total": day_total,
                 "locations": ", ".join(locations) if locations else "-",
                 "shifts": shifts,
+                "notes": notes,
             }
         )
     return {
@@ -3278,6 +3314,68 @@ def safe_next_url(value: str | None, fallback: str = "/month") -> str:
     if value and value.startswith("/") and not value.startswith("//"):
         return value
     return fallback
+
+
+def aggregate_global_schedule(rows: list[object]) -> list[dict[str, object]]:
+    grouped: dict[tuple[str, str], dict[str, object]] = {}
+    for row in rows:
+        schedule = dict(row)
+        if not int(schedule.get("is_published") or 0):
+            continue
+        employee_name = str(schedule.get("employee_name") or "").strip()
+        if not employee_name:
+            continue
+        date_key = str(schedule.get("date") or "")
+        location_name = str(schedule.get("location_name") or "Unknown").strip()
+        track_label = str(parse_shift_title(f"[{location_name}] Shift").get("track_label") or location_name)
+        key = (date_key, re.sub(r"[^a-z0-9]+", "", track_label.lower()))
+        item = grouped.get(key)
+        start_at = parse_iso_datetime(str(schedule.get("start_at") or ""))
+        end_at = parse_iso_datetime(str(schedule.get("end_at") or ""))
+        if item is None:
+            location_id = schedule.get("schedule_location_id") or schedule.get("area_location_id")
+            colour_index = stable_location_colour_index(location_id, location_name, track_label)
+            item = {
+                "id": f"global-{date_key}-{location_id or track_label}",
+                "date": date_key,
+                "track_label": track_label,
+                "race_type_label": "",
+                "global_event": True,
+                "crew_names": set(),
+                "global_start_at": start_at,
+                "global_end_at": end_at,
+                "changed_since_viewed": False,
+                "deleted_from_source": False,
+                "colour_style": (
+                    f"--shift-location-colour: var(--location-colour-{colour_index}); "
+                    f"--location-colour: var(--location-colour-{colour_index});"
+                ),
+            }
+            grouped[key] = item
+        item["crew_names"].add(employee_name.lower())
+        if start_at and (item["global_start_at"] is None or start_at < item["global_start_at"]):
+            item["global_start_at"] = start_at
+        if end_at and (item["global_end_at"] is None or end_at > item["global_end_at"]):
+            item["global_end_at"] = end_at
+
+    events = []
+    for item in grouped.values():
+        crew_count = len(item.pop("crew_names"))
+        start_at = item.pop("global_start_at")
+        end_at = item.pop("global_end_at")
+        crew_label = "Crew scheduled"
+        item["crew_count"] = crew_count
+        item["role_chain_label"] = crew_label
+        item["role_label"] = crew_label
+        item["display_hours_label"] = crew_label
+        item["start_label"] = start_at.strftime("%H:%M") if start_at else "TBC"
+        item["time_range"] = (
+            f"{start_at.strftime('%H:%M')}-{end_at.strftime('%H:%M')}"
+            if start_at and end_at
+            else item["start_label"]
+        )
+        events.append(item)
+    return sorted(events, key=lambda item: (str(item.get("date") or ""), str(item.get("start_at") or "")))
 
 
 def infer_display_name_from_email(email: str) -> str:
@@ -3973,6 +4071,7 @@ def admin_view(request: Request, notice: str | None = None) -> object:
             "love_racing_url": LOVE_RACING_URL,
             "planning_locations": planning_locations,
             "location_rows": location_rows,
+            "track_maps": [dict(row) for row in list_track_maps()],
             "planning_location_enabled_count": sum(
                 1 for location in planning_locations if int(location.get("is_enabled") or 0)
             ),
@@ -4207,6 +4306,7 @@ def month_view(
     year: int | None = None,
     month: int | None = None,
     view: str = "month",
+    scope: str = "personal",
     notice: str | None = None,
 ) -> object:
     settings = get_settings()
@@ -4214,6 +4314,7 @@ def month_view(
     owner_user_id = int(user["id"]) if user and user.get("id") is not None else None
     today = datetime.now(settings.timezone).date()
     view = "list" if view == "list" else "month"
+    global_view = scope == "global"
     year = year or today.year
     month = month or today.month
     if month < 1 or month > 12:
@@ -4223,21 +4324,23 @@ def month_view(
     month_weeks = cal.monthdatescalendar(year, month)
     grid_start = month_weeks[0][0].isoformat()
     grid_end = month_weeks[-1][-1].isoformat()
-    rows = fetch_shifts_between(grid_start, grid_end, owner_user_id=owner_user_id)
+    rows = [] if global_view else fetch_shifts_between(grid_start, grid_end, owner_user_id=owner_user_id)
     schedule_role_rows = fetch_deputy_schedule_between(grid_start, grid_end)
-    open_shifts_by_date = open_schedule_by_date(grid_start, grid_end)
-    manual_rosters_by_date = published_rosters_by_date(grid_start, grid_end, owner_user_id)
+    open_shifts_by_date = {} if global_view else open_schedule_by_date(grid_start, grid_end)
+    manual_rosters_by_date = {} if global_view else published_rosters_by_date(grid_start, grid_end, owner_user_id)
 
     shifts_by_date: dict[str, list[dict[str, object]]] = {}
-    for row in rows:
-        shifts_by_date.setdefault(row["date"], []).append(decorate_shift(row))
+    display_rows = aggregate_global_schedule(schedule_role_rows) if global_view else [decorate_shift(row) for row in rows]
+    for row in display_rows:
+        shifts_by_date.setdefault(str(row["date"]), []).append(row)
     for date_key, day_shifts in list(shifts_by_date.items()):
-        shifts_by_date[date_key] = combine_adjacent_shifts(day_shifts)
-    apply_schedule_role_context(
-        [shift for day_shifts in shifts_by_date.values() for shift in day_shifts],
-        schedule_role_rows,
-    )
-    love_racing_by_day = love_racing_by_date(grid_start, grid_end, shifts_by_date)
+        shifts_by_date[date_key] = day_shifts if global_view else combine_adjacent_shifts(day_shifts)
+    if not global_view:
+        apply_schedule_role_context(
+            [shift for day_shifts in shifts_by_date.values() for shift in day_shifts],
+            schedule_role_rows,
+        )
+    love_racing_by_day = {} if global_view else love_racing_by_date(grid_start, grid_end, shifts_by_date)
 
     weeks = []
     active_days = []
@@ -4250,7 +4353,7 @@ def month_view(
             day_open_shifts = open_shifts_by_date.get(day_item.isoformat(), [])
             day_love_racing = love_racing_by_day.get(day_item.isoformat(), [])
             day_manual_rosters = manual_rosters_by_date.get(day_item.isoformat(), [])
-            timesheet = timesheet_marker(day_item)
+            timesheet = None if global_view else timesheet_marker(day_item)
             day_total = sum(
                 shift_hours_value(shift)
                 for shift in day_shifts
@@ -4293,10 +4396,14 @@ def month_view(
     next_year, next_month = add_months(year, month, 1)
     first_day = date(year, month, 1)
     now_iso = datetime.now(settings.timezone).replace(microsecond=0).isoformat()
-    upcoming_shifts = combine_adjacent_shifts(
-        [decorate_shift(row) for row in get_upcoming_shifts(now_iso, limit=10, owner_user_id=owner_user_id)]
-    )[:5]
-    apply_saved_schedule_role_context(upcoming_shifts)
+    upcoming_shifts = []
+    if not global_view:
+        upcoming_shifts = combine_adjacent_shifts(
+            [decorate_shift(row) for row in get_upcoming_shifts(now_iso, limit=10, owner_user_id=owner_user_id)]
+        )[:5]
+        apply_saved_schedule_role_context(upcoming_shifts)
+
+    scope_query = "&scope=global" if global_view else ""
 
     return templates.TemplateResponse(
         "month.html",
@@ -4304,9 +4411,9 @@ def month_view(
             "request": request,
             "notice": notice,
             "current_user": user,
-            "header_context": first_day.strftime("%B %Y"),
-            "header_prev_url": f"/month?year={prev_year}&month={prev_month}&view={view}",
-            "header_next_url": f"/month?year={next_year}&month={next_month}&view={view}",
+            "header_context": first_day.strftime("%B %Y") + (" · Crew" if global_view else ""),
+            "header_prev_url": f"/month?year={prev_year}&month={prev_month}&view={view}{scope_query}",
+            "header_next_url": f"/month?year={next_year}&month={next_month}&view={view}{scope_query}",
             "settings": settings,
             "weeks": weeks,
             "active_days": active_days,
@@ -4320,8 +4427,11 @@ def month_view(
             "next_month": next_month,
             "today": today,
             "view": view,
-            "month_view_url": f"/month?year={year}&month={month}&view=month",
-            "list_view_url": f"/month?year={year}&month={month}&view=list",
+            "global_view": global_view,
+            "month_view_url": f"/month?year={year}&month={month}&view=month{scope_query}",
+            "list_view_url": f"/month?year={year}&month={month}&view=list{scope_query}",
+            "global_view_url": f"/month?year={year}&month={month}&view={view}&scope=global",
+            "personal_view_url": f"/month?year={year}&month={month}&view={view}",
         },
     )
 
@@ -4466,6 +4576,32 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
         shift["header_vehicle_label"] = vehicle_for_user_from_schedule(deputy_schedule_people, user, shift)
     deputy_schedule_changed = any(bool(person.get("changed")) for person in deputy_schedule_people)
     deputy_schedule_changes = [person for person in deputy_schedule_people if person.get("changed")]
+    deputy_assignment_history = [
+        {
+            "position_label": str(row["position_label"] or "Position"),
+            "old_employee_name": str(row["old_employee_name"] or "TBC"),
+            "new_employee_name": str(row["new_employee_name"] or "TBC"),
+            "changed_at": row["changed_at"],
+            "changed_at_label": format_datetime(row["changed_at"], "%d %b %H:%M"),
+        }
+        for row in fetch_deputy_assignment_history_for_date(
+            date_text,
+            location_ids=schedule_location_ids or None,
+        )
+    ]
+    historical_assignments = {
+        (item["position_label"].lower(), item["new_employee_name"].lower())
+        for item in deputy_assignment_history
+    }
+    deputy_schedule_changes = [
+        person
+        for person in deputy_schedule_changes
+        if (
+            str(person.get("position_label") or "").lower(),
+            str(person.get("employee_name") or "").lower(),
+        )
+        not in historical_assignments
+    ]
     day_total = sum(
         shift_hours_value(shift)
         for shift in shifts
@@ -4491,6 +4627,7 @@ def day_view(request: Request, date_text: str, notice: str | None = None) -> obj
             "deputy_schedule_label": deputy_schedule_label,
             "deputy_schedule_changed": deputy_schedule_changed,
             "deputy_schedule_changes": deputy_schedule_changes,
+            "deputy_assignment_history": deputy_assignment_history,
             "day_total": day_total,
             "has_changed": has_changed,
             "mark_fields": MARK_FIELDS,
@@ -4773,6 +4910,17 @@ def admin_refresh_love_racing_calendar(request: Request) -> RedirectResponse:
     require_admin_user(request)
     result = refresh_planning_calendar()
     return RedirectResponse(url=notice_url("/admin", str(result["message"])), status_code=303)
+
+
+@app.post("/admin/track-maps-refresh")
+def admin_refresh_track_maps(request: Request) -> RedirectResponse:
+    require_admin_user(request)
+    result = refresh_track_maps()
+    message = (
+        f"Track maps checked: {result['checked']}; downloaded {result['downloaded']}; "
+        f"unchanged {result['unchanged']}; failed {result['failed']}."
+    )
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
 @app.post("/admin/planning-locations")

@@ -16,15 +16,42 @@
   <section class="table-panel timesheet-panel">
     <div class="timesheet-list">
       {% for day in summary["days"] %}
-        <a class="timesheet-row{% if day['total'] == 0 %} timesheet-row-empty{% endif %}" href="/day/{{ day['iso'] }}">
-          <span>{{ day["date_label"] }}</span>
-          {% if day["total"] == 0 %}
-            <small>Not worked</small>
-          {% else %}
-            <strong>{{ day["total"]|hours }}</strong>
-            <span>{{ day["locations"] }}</span>
+        <article class="timesheet-day{% if day['total'] == 0 %} timesheet-row-empty{% endif %}">
+          <a class="timesheet-row" href="/day/{{ day['iso'] }}">
+            <span>{{ day["date_label"] }}</span>
+            {% if day["total"] == 0 %}
+              <small>Not worked</small>
+            {% else %}
+              <strong>{{ day["total"]|hours }}</strong>
+              <span>{{ day["locations"] }}</span>
+            {% endif %}
+          </a>
+          {% for note in day["notes"] %}
+            <p class="timesheet-note">{{ note }}</p>
+          {% endfor %}
+          {% if day["total"] != 0 %}
+            <details class="timesheet-maths">
+              <summary><span>Calculation</span></summary>
+              {% for shift in day["shifts"] %}
+                {% set calculation = shift.timing_math.race_day %}
+                <section class="timesheet-calculation">
+                  <strong>{{ shift.track_label }}</strong>
+                  {% if calculation.available %}
+                    <p>Start {{ calculation.start_label }}, finish {{ calculation.end_label }} = {{ calculation.hours_label }}</p>
+                    <dl class="timeline-list maths-segments">
+                      {% for line in calculation.lines %}
+                        <div><dt>{{ line.value }}</dt><dd>{{ line.label }}</dd></div>
+                      {% endfor %}
+                    </dl>
+                    <p class="muted-text">{{ calculation.formula }}</p>
+                  {% else %}
+                    <p>{{ shift.time_range }} = {{ shift.display_hours_label }}.</p>
+                  {% endif %}
+                </section>
+              {% endfor %}
+            </details>
           {% endif %}
-        </a>
+        </article>
       {% endfor %}
     </div>
     <div class="timesheet-total">

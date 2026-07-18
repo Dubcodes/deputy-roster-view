@@ -193,7 +193,7 @@
           </section>
         {% endif %}
 
-        {% if shift.changes or (loop.first and deputy_schedule_changes) %}
+        {% if shift.changes or (loop.first and (deputy_schedule_changes or deputy_assignment_history)) %}
           <details class="change-panel">
             <summary>Change History</summary>
             <ul class="change-lines">
@@ -207,6 +207,17 @@
                     {% if person.change_time_label %}
                       <small>{{ person.change_time_label }}</small>
                     {% endif %}
+                  </li>
+                {% endfor %}
+              {% endif %}
+              {% if loop.first and deputy_assignment_history %}
+                {% for change in deputy_assignment_history %}
+                  <li>
+                    <span>
+                      <strong>Crew: {{ change.position_label }}</strong>
+                      {{ change.old_employee_name }} -> {{ change.new_employee_name }}
+                    </span>
+                    <small>{{ change.changed_at_label }}</small>
                   </li>
                 {% endfor %}
               {% endif %}

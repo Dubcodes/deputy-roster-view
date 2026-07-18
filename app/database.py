@@ -284,6 +284,18 @@ def init_db(settings: Settings | None = None) -> None:
                 raw_payload TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS deputy_schedule_assignment_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_shift_id INTEGER,
+                date TEXT,
+                area_location_id INTEGER,
+                position_label TEXT,
+                old_employee_name TEXT,
+                new_employee_name TEXT,
+                changed_at TEXT,
+                UNIQUE(source_shift_id, position_label, old_employee_name, new_employee_name, changed_at)
+            );
+
             CREATE TABLE IF NOT EXISTS love_racing_meetings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 meeting_date TEXT,
@@ -430,6 +442,9 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "roster_days", "hotel_assignments", "TEXT DEFAULT '[]'")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_location ON deputy_schedule_shifts(date, area_location_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_schedule_assignment_history_day ON deputy_schedule_assignment_history(date, area_location_id, changed_at DESC)"
         )
         conn.execute(
             """
@@ -2240,6 +2255,30 @@ def fetch_deputy_schedule_for_date(
     return rows
 
 
+def fetch_deputy_assignment_history_for_date(
+    date_text: str,
+    location_ids: list[int] | tuple[int, ...] | set[int] | None = None,
+) -> list[sqlite3.Row]:
+    location_ids = _normalise_int_list(location_ids)
+    location_sql = ""
+    params: list[object] = [date_text]
+    if location_ids:
+        placeholders = ", ".join("?" for _ in location_ids)
+        location_sql = f"AND area_location_id IN ({placeholders})"
+        params.extend(location_ids)
+    with get_connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT *
+            FROM deputy_schedule_assignment_history
+            WHERE date = ?
+              {location_sql}
+            ORDER BY changed_at DESC, id DESC
+            """,
+            params,
+        ).fetchall()
+
+
 def fetch_deputy_schedule_areas_for_locations(
     location_ids: list[int] | tuple[int, ...] | set[int] | None = None,
 ) -> list[sqlite3.Row]:
@@ -2654,6 +2693,61 @@ def _schedule_change_summary(existing: sqlite3.Row | None, values: dict[str, obj
     return "; ".join(changes)
 
 
+def _record_schedule_assignment_change(
+    conn: sqlite3.Connection,
+    source_shift_id: int,
+    existing: sqlite3.Row | None,
+    values: dict[str, object],
+    changed_at: str,
+) -> None:
+    if existing is None:
+        return
+    old_person = str(existing["employee_name"] or "").strip()
+    new_person = str(values.get("employee_name") or "").strip()
+    old_position = str(existing["area_name"] or "").strip()
+    new_position = str(values.get("area_name") or "").strip()
+    if old_person == new_person and old_position == new_position:
+        return
+    position_label = new_position or old_position or "Position"
+    if old_position != new_position and new_person:
+        candidates = conn.execute(
+            """
+            SELECT area_name, employee_name
+            FROM deputy_schedule_shifts
+            WHERE date = ?
+              AND COALESCE(area_location_id, -1) = COALESCE(?, -1)
+              AND source_shift_id != ?
+            """,
+            (values.get("date"), values.get("area_location_id"), source_shift_id),
+        ).fetchall()
+        target_key = re.sub(r"[^a-z0-9]+", "", new_position.lower())
+        for candidate in candidates:
+            candidate_key = re.sub(r"[^a-z0-9]+", "", str(candidate["area_name"] or "").lower())
+            if candidate_key == target_key:
+                old_person = str(candidate["employee_name"] or "").strip()
+                break
+    if old_person == new_person:
+        return
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO deputy_schedule_assignment_history (
+            source_shift_id, date, area_location_id, position_label,
+            old_employee_name, new_employee_name, changed_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            source_shift_id,
+            values.get("date"),
+            values.get("area_location_id"),
+            position_label,
+            old_person,
+            new_person,
+            changed_at,
+        ),
+    )
+
+
 def _display_change_value(value: object) -> str:
     if value in (None, ""):
         return "blank"
@@ -2884,6 +2978,8 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
             ).fetchone()
             change_summary = _schedule_change_summary(existing, values)
             changed = bool(change_summary)
+            if changed:
+                _record_schedule_assignment_change(conn, source_shift_id, existing, values, captured_at)
             conn.execute(
                 """
                 INSERT INTO deputy_schedule_shifts (
@@ -3015,6 +3111,13 @@ def get_track_map(track_key: str) -> sqlite3.Row | None:
             "SELECT * FROM track_maps WHERE track_key = ? AND status = 'ok'",
             (track_key,),
         ).fetchone()
+
+
+def list_track_maps() -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM track_maps ORDER BY track_label, track_key"
+        ).fetchall()
 
 
 def _save_deputy_web_own_shifts(

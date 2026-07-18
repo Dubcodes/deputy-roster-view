@@ -87,6 +87,8 @@ Crew changed badges should only mean the person/position/open-slot assignment ch
 
 Crew change text should be position-centred but person-focused, for example `Side 1: Nate -> Leger`. When Deputy reports a chain of position moves, use those moves to reconstruct who previously occupied each current position instead of showing only `Position: Head On -> Side 1`.
 
+Persist assignment changes separately from the current schedule row. A later sync must not erase the previous person's name from `old person -> new person` history.
+
 Generic schedule labels such as `Vehicle` or `Vehicles` are context, not vehicle names. If a specific allocation such as `684`, `Rav91`, or `OB` is known, show only that specific vehicle.
 
 Opening a changed badge or the Change History section must not automatically clear the changed flag. The app should only clear change flags through explicit clear actions, otherwise phone taps can make important changes disappear before the user has read them.
@@ -110,7 +112,13 @@ Known but not fully solved. For now:
 - The travel day and next race day usually involve the same crew.
 - If the travel day has no useful crew list, it can borrow the next day's crew list and label it as next-day crew.
 - Hotel-to-track travel must remain attached to a named hotel/base. Do not infer it until the actual stay is known, because crews may be split across several hotels or a nearby town.
+- Beachfront Motel accommodation for Ruakaka uses 30 minutes each way unless an admin travel default overrides it.
+- If the roster note's on-track time is earlier than Deputy's shift start, retain and show both values. Timing maths follows the explicit on-track note and accommodation travel time, while Deputy remains the source for rostered hours; flag the discrepancy for review.
 - Manually planned travel days may assign different crew members to different named hotels. Hotel assignments are user-specific and should remain collapsible in the admin builder because they are occasional rather than part of every race day.
+
+## Shared Calendar
+
+The personal calendar remains the default. The global crew calendar groups shared Deputy schedule rows by date and location and shows the overall time window for maintenance planning. It must not expose private notes, personal change flags, open shifts, or timesheet markers. Do not present the captured employee count as complete because some contractor assignments are not exposed by Deputy's web schedule.
 
 ## Public Race-Day Planning
 
