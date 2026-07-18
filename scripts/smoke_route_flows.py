@@ -228,7 +228,7 @@ def main() -> None:
         track_label="Te Aroha",
         course_label="Te Aroha",
         course_url="https://loveracing.nz/RaceInfo/Clubs-And-Courses/34/35/Club.aspx",
-        image_url="https://loveracing.nz/Common/Image.ashx?w=1200&p=te-aroha",
+        image_url="https://loveracing.nz/OnHorseFiles/Racecourses/Tracks/Te-Aroha_new.jpg",
         file_name="tearoha.jpg",
         content_type="image/jpeg",
         image_hash="smoke",
@@ -659,6 +659,11 @@ def main() -> None:
         raise AssertionError("Expected admin page to render the planning refresh control.")
     if "/admin/track-maps-refresh" not in admin_page.text or "Refresh Track Maps" not in admin_page.text:
         raise AssertionError("Expected admin page to render the track-map refresh control.")
+    help_page = client.get("/help")
+    if help_page.status_code != 200 or "<dt>Your shifts</dt>" not in help_page.text or "<dt>Day heading</dt>" not in help_page.text:
+        raise AssertionError("Expected help introductions to use the aligned label-and-detail layout.")
+    if "A quick note before you start" in help_page.text or "Admin tools" in help_page.text:
+        raise AssertionError("Expected unnecessary help sections to remain hidden.")
     if diagnostic_marker in admin_page.text or f'/admin/users/{int(admin_user["id"])}/diagnostics.txt' not in admin_page.text:
         raise AssertionError("Expected Admin diagnostics to be loaded on demand rather than embedded in the page.")
     diagnostic_response = client.get(f'/admin/users/{int(admin_user["id"])}/diagnostics.txt')

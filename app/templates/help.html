@@ -15,15 +15,12 @@
 
   <section class="help-layout">
     <article class="table-panel help-panel">
-      <h2>A quick note before you start</h2>
-      <p>This app keeps a clearer, phone-friendly copy of the roster in Deputy. It does not change anything in Deputy.</p>
-      <p>Most of the time this is the quickest place to check your day. If something is missing, urgent, or important for payroll, check Deputy as well because a sync can be a little behind.</p>
-    </article>
-
-    <article class="table-panel help-panel">
       <h2>Your calendar</h2>
-      <p>The calendar only shows shifts that belong to you. Available shifts are shown separately, so they should not be mistaken for work you have already been rostered for.</p>
       <dl class="help-list">
+        <div>
+          <dt>Your shifts</dt>
+          <dd>The calendar only shows shifts that belong to you. Available shifts are shown separately, so they should not be mistaken for work you have already been rostered for.</dd>
+        </div>
         <div>
           <dt>Calendar or list</dt>
           <dd>The first button in the top-right corner switches between the month calendar and the month list. Its icon changes to show the view you can switch to.</dd>
@@ -49,8 +46,11 @@
 
     <article class="table-panel help-panel">
       <h2>Opening a day</h2>
-      <p>Tap a shift to see the full day. The heading shows your location, vehicle when one is known, position, race type, and rostered hours.</p>
       <dl class="help-list">
+        <div>
+          <dt>Day heading</dt>
+          <dd>Tap a shift to see the full day. The heading shows your location, vehicle when one is known, position, race type, and rostered hours.</dd>
+        </div>
         <div>
           <dt>Race Day</dt>
           <dd>Shows the useful times from the roster note, such as trucks, office or Clow Place, on track, first cross, and the first and last race.</dd>
@@ -131,14 +131,6 @@
         </div>
       </dl>
     </article>
-
-    {% if current_user and current_user.is_admin %}
-      <article class="table-panel help-panel">
-        <h2>Admin tools</h2>
-        <p>Admin is where you can manage users and trusted devices, inspect error reports, correct travel defaults, refresh the public planning calendar and track maps, and clear old change flags.</p>
-        <p>Deactivating an account stops access but keeps its history for 30 days. Active accounts are never removed by the automatic cleanup.</p>
-      </article>
-    {% endif %}
 
     <article class="table-panel help-panel">
       <h2>Keyboard shortcuts</h2>

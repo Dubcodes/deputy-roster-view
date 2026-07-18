@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, unquote, urljoin, urlsplit, urlunsplit
 
 import requests
 
@@ -142,36 +142,33 @@ def track_map_course_key(track_label: object) -> str:
     return ""
 
 
-def _image_proxy_url(image_path: str) -> str:
-    query = urlencode({"w": "1200", "p": unquote(unescape(image_path))})
-    return f"{LOVE_RACING_ORIGIN}/Common/Image.ashx?{query}"
-
-
-def _large_image_url(value: str) -> str:
+def _direct_image_url(value: str) -> str:
     absolute = urljoin(LOVE_RACING_ORIGIN, value)
     parts = urlsplit(absolute)
     if not parts.path.lower().endswith("/common/image.ashx"):
         return absolute
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    query["w"] = "1200"
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
-
-
+    image_path = unquote(unescape(str(query.get("p") or "").strip()))
+    if not image_path:
+        return absolute
+    return urlunsplit((parts.scheme, parts.netloc, quote(image_path, safe="/"), "", ""))
 def parse_track_map_image_url(html: str, course_url: str) -> str:
     parser = _TrackMapImageParser()
     parser.feed(html)
-    return _large_image_url(urljoin(course_url, parser.image_src)) if parser.image_src else ""
+    if not parser.image_src:
+        return ""
+    return _direct_image_url(urljoin(course_url, parser.image_src))
 
 
 def _discover_image_url(session: requests.Session, course_url: str, fallback_path: str) -> str:
     try:
         response = session.get(course_url, headers=PAGE_HEADERS, timeout=20, allow_redirects=True)
     except requests.RequestException:
-        return _image_proxy_url(fallback_path)
+        return _direct_image_url(fallback_path)
     if response.status_code != 200 or not response.text.strip():
-        return _image_proxy_url(fallback_path)
+        return _direct_image_url(fallback_path)
     discovered = parse_track_map_image_url(response.text, course_url)
-    return discovered or _image_proxy_url(fallback_path)
+    return discovered or _direct_image_url(fallback_path)
 
 
 def refresh_track_maps(settings: Settings | None = None) -> dict[str, object]:
@@ -192,27 +189,60 @@ def refresh_track_maps(settings: Settings | None = None) -> dict[str, object]:
     downloaded = 0
     unchanged = 0
     failed = 0
+    errors: list[str] = []
 
     with requests.Session() as session:
         for course_key, course in targets:
             course_url = urljoin(LOVE_RACING_ORIGIN, str(course["course_path"]))
             image_url = _discover_image_url(session, course_url, str(course["image_path"]))
+            previous = get_track_map(course_key)
             headers = dict(IMAGE_HEADERS)
             headers["Referer"] = course_url
             try:
                 response = session.get(image_url, headers=headers, timeout=30, allow_redirects=True)
                 response.raise_for_status()
-            except requests.RequestException:
+            except requests.RequestException as exc:
                 failed += 1
+                reason = f"{type(exc).__name__}: {exc}"
+                errors.append(f"{course['label']}: {reason}")
+                if previous is None:
+                    upsert_track_map(
+                        track_key=course_key,
+                        track_label=str(course["label"]),
+                        course_label=str(course["course_label"]),
+                        course_url=course_url,
+                        image_url=image_url,
+                        file_name="",
+                        content_type="",
+                        image_hash="",
+                        status="error",
+                        checked_at=checked_at,
+                        updated_at="",
+                    )
                 continue
             content_type = str(response.headers.get("content-type") or "").split(";", 1)[0].lower()
             if content_type not in {"image/jpeg", "image/png", "image/webp"} or not response.content:
                 failed += 1
+                reason = f"unexpected content type {content_type or 'unknown'} ({len(response.content)} bytes)"
+                errors.append(f"{course['label']}: {reason}")
+                if previous is None:
+                    upsert_track_map(
+                        track_key=course_key,
+                        track_label=str(course["label"]),
+                        course_label=str(course["course_label"]),
+                        course_url=course_url,
+                        image_url=image_url,
+                        file_name="",
+                        content_type=content_type,
+                        image_hash="",
+                        status="error",
+                        checked_at=checked_at,
+                        updated_at="",
+                    )
                 continue
             extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[content_type]
             file_name = f"{course_key}{extension}"
             destination = map_dir / file_name
-            previous = get_track_map(course_key)
             image_hash = hashlib.sha256(response.content).hexdigest()
             existing_hash = hashlib.sha256(destination.read_bytes()).hexdigest() if destination.exists() else ""
             if existing_hash == image_hash:
@@ -250,6 +280,7 @@ def refresh_track_maps(settings: Settings | None = None) -> dict[str, object]:
         "downloaded": downloaded,
         "unchanged": unchanged,
         "failed": failed,
+        "errors": errors,
     }
 
 

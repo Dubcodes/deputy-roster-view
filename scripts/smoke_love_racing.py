@@ -45,8 +45,10 @@ def main() -> None:
         track_html,
         "https://loveracing.nz/RaceInfo/Clubs-And-Courses/34/35/Club.aspx",
     )
-    if "loveracing.nz/Common/Image.ashx" not in image_url or "w=1200" not in image_url:
+    if "loveracing.nz/OnHorseFiles/Racecourses/Tracks" not in image_url:
         raise AssertionError(f"Track-map image was not normalised: {image_url!r}")
+    if "Common/Image.ashx" in image_url:
+        raise AssertionError(f"Track-map URL still uses the server-blocked image proxy: {image_url!r}")
     if "Te-Aroha_new.jpg" not in image_url:
         raise AssertionError(f"Track-map source path was lost: {image_url!r}")
     aliases = {

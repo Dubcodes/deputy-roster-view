@@ -119,7 +119,7 @@ from .track_maps import refresh_track_maps, track_map_course_key
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.18.2"
+APP_BUILD = "2026.07.18.3"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -4920,6 +4920,9 @@ def admin_refresh_track_maps(request: Request) -> RedirectResponse:
         f"Track maps checked: {result['checked']}; downloaded {result['downloaded']}; "
         f"unchanged {result['unchanged']}; failed {result['failed']}."
     )
+    errors = list(result.get("errors") or [])
+    if errors:
+        message += f" First error: {errors[0]}"
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
