@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
+import struct
 from datetime import datetime, timedelta
 from html import unescape
 from html.parser import HTMLParser
@@ -120,14 +122,47 @@ COURSE_CATALOG = {
 class _TrackMapImageParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
-        self.image_src = ""
+        self.candidates: list[str] = []
+        self._links: list[str] = []
+
+    def _add(self, value: str) -> None:
+        clean = unescape(str(value or "").strip())
+        if clean and clean not in self.candidates:
+            self.candidates.append(clean)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() != "img" or self.image_src:
-            return
+        tag = tag.lower()
         values = {key.lower(): str(value or "") for key, value in attrs}
-        if values.get("alt", "").strip().lower() == "track - 2d":
-            self.image_src = unescape(values.get("src", "").strip())
+        if tag == "a":
+            self._links.append(values.get("href", ""))
+            return
+        if tag == "meta" and values.get("property", "").lower() == "og:image":
+            self._add(values.get("content", ""))
+            return
+        if tag != "img":
+            return
+        joined = " ".join(values.values()).lower()
+        credible = (
+            "track - 2d" in values.get("alt", "").lower()
+            or "racecourses/tracks" in joined
+            or "onhorsefiles" in joined and "track" in joined
+        )
+        if not credible:
+            return
+        for attribute in ("src", "data-src", "data-original"):
+            self._add(values.get(attribute, ""))
+        for srcset_attribute in ("srcset", "data-srcset"):
+            for item in values.get(srcset_attribute, "").split(","):
+                self._add(item.strip().split(" ", 1)[0])
+        if self._links:
+            self._add(self._links[-1])
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "a" and self._links:
+            self._links.pop()
 
 
 def track_map_course_key(track_label: object) -> str:
@@ -152,23 +187,105 @@ def _direct_image_url(value: str) -> str:
     if not image_path:
         return absolute
     return urlunsplit((parts.scheme, parts.netloc, quote(image_path, safe="/"), "", ""))
-def parse_track_map_image_url(html: str, course_url: str) -> str:
+
+
+def _official_image_url(value: str, course_url: str) -> str:
+    absolute = _direct_image_url(urljoin(course_url, value))
+    host = (urlsplit(absolute).hostname or "").lower()
+    if host != "loveracing.nz" and not host.endswith(".loveracing.nz"):
+        return ""
+    path = unquote(urlsplit(absolute).path).lower()
+    if not re.search(r"\.(?:jpe?g|png|webp)$", path):
+        return ""
+    return absolute
+
+
+def parse_track_map_image_candidates(html: str, course_url: str) -> list[str]:
     parser = _TrackMapImageParser()
     parser.feed(html)
-    if not parser.image_src:
-        return ""
-    return _direct_image_url(urljoin(course_url, parser.image_src))
+    candidates: list[str] = []
+    for raw_value in parser.candidates:
+        candidate = _official_image_url(raw_value, course_url)
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
 
 
-def _discover_image_url(session: requests.Session, course_url: str, fallback_path: str) -> str:
+def parse_track_map_image_url(html: str, course_url: str) -> str:
+    candidates = parse_track_map_image_candidates(html, course_url)
+    return candidates[0] if candidates else ""
+
+
+def _discover_image_candidates(session: requests.Session, course_url: str, fallback_path: str) -> list[str]:
+    fallback = _official_image_url(fallback_path, course_url)
     try:
         response = session.get(course_url, headers=PAGE_HEADERS, timeout=20, allow_redirects=True)
     except requests.RequestException:
-        return _direct_image_url(fallback_path)
+        return [fallback] if fallback else []
     if response.status_code != 200 or not response.text.strip():
-        return _direct_image_url(fallback_path)
-    discovered = parse_track_map_image_url(response.text, course_url)
-    return discovered or _direct_image_url(fallback_path)
+        return [fallback] if fallback else []
+    candidates = parse_track_map_image_candidates(response.text, course_url)
+    if fallback and fallback not in candidates:
+        candidates.append(fallback)
+    return candidates
+
+
+def image_dimensions(content: bytes, content_type: str = "") -> tuple[int, int]:
+    if content.startswith(b"\x89PNG\r\n\x1a\n") and len(content) >= 24:
+        return struct.unpack(">II", content[16:24])
+    if content[:2] == b"\xff\xd8":
+        offset = 2
+        while offset + 9 < len(content):
+            if content[offset] != 0xFF:
+                offset += 1
+                continue
+            marker = content[offset + 1]
+            offset += 2
+            if marker in {0xD8, 0xD9}:
+                continue
+            if offset + 2 > len(content):
+                break
+            length = int.from_bytes(content[offset:offset + 2], "big")
+            if length < 2 or offset + length > len(content):
+                break
+            if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}:
+                return (
+                    int.from_bytes(content[offset + 5:offset + 7], "big"),
+                    int.from_bytes(content[offset + 3:offset + 5], "big"),
+                )
+            offset += length
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP" and len(content) >= 30:
+        if content[12:16] == b"VP8X":
+            width = 1 + int.from_bytes(content[24:27], "little")
+            height = 1 + int.from_bytes(content[27:30], "little")
+            return width, height
+    return 0, 0
+
+
+def _candidate_matches_course(image_url: str, course: dict[str, object]) -> bool:
+    filename_key = calendar_location_key(Path(unquote(urlsplit(image_url).path)).stem)
+    expected = {
+        calendar_location_key(str(course.get("course_label") or "")),
+        calendar_location_key(str(course.get("label") or "")),
+        *(calendar_location_key(alias) for alias in course.get("aliases", ())),
+    }
+    expected.discard("")
+    return any(key in filename_key or filename_key in key for key in expected)
+
+
+def _previous_map_score(previous: object, map_dir: Path) -> tuple[int, int, int]:
+    if previous is None:
+        return (0, 0, 0)
+    width = int(previous["image_width"] or 0)
+    height = int(previous["image_height"] or 0)
+    byte_size = int(previous["byte_size"] or 0)
+    file_path = map_dir / Path(str(previous["file_name"] or "")).name
+    if file_path.is_file():
+        content = file_path.read_bytes()
+        if not width or not height:
+            width, height = image_dimensions(content, str(previous["content_type"] or ""))
+        byte_size = byte_size or len(content)
+    return width * height, min(width, height), byte_size
 
 
 def refresh_track_maps(settings: Settings | None = None) -> dict[str, object]:
@@ -187,74 +304,86 @@ def refresh_track_maps(settings: Settings | None = None) -> dict[str, object]:
     map_dir = Path(settings.data_dir) / "track_maps"
     map_dir.mkdir(parents=True, exist_ok=True)
     downloaded = 0
+    upgraded = 0
     unchanged = 0
+    unavailable = 0
     failed = 0
     errors: list[str] = []
+    results: list[dict[str, object]] = []
 
     with requests.Session() as session:
         for course_key, course in targets:
             course_url = urljoin(LOVE_RACING_ORIGIN, str(course["course_path"]))
-            image_url = _discover_image_url(session, course_url, str(course["image_path"]))
             previous = get_track_map(course_key)
+            image_urls = _discover_image_candidates(session, course_url, str(course["image_path"]))
             headers = dict(IMAGE_HEADERS)
             headers["Referer"] = course_url
-            try:
-                response = session.get(image_url, headers=headers, timeout=30, allow_redirects=True)
-                response.raise_for_status()
-            except requests.RequestException as exc:
-                failed += 1
-                reason = f"{type(exc).__name__}: {exc}"
+            candidates: list[dict[str, object]] = []
+            candidate_errors: list[str] = []
+            for image_url in image_urls:
+                try:
+                    response = session.get(image_url, headers=headers, timeout=30, allow_redirects=True)
+                    response.raise_for_status()
+                except requests.RequestException as exc:
+                    candidate_errors.append(f"{type(exc).__name__}: {exc}")
+                    continue
+                content_type = str(response.headers.get("content-type") or "").split(";", 1)[0].lower()
+                if content_type not in {"image/jpeg", "image/png", "image/webp"} or not response.content:
+                    candidate_errors.append(f"unexpected {content_type or 'content type'}")
+                    continue
+                width, height = image_dimensions(response.content, content_type)
+                if width < 200 or height < 200 or not _candidate_matches_course(image_url, course):
+                    candidate_errors.append(f"invalid {width}x{height} candidate")
+                    continue
+                candidates.append({
+                    "url": image_url, "content": response.content, "content_type": content_type,
+                    "width": width, "height": height, "byte_size": len(response.content),
+                    "hash": hashlib.sha256(response.content).hexdigest(),
+                })
+            if not candidates:
+                outcome = "failed" if candidate_errors else "unavailable"
+                failed += outcome == "failed"
+                unavailable += outcome == "unavailable"
+                reason = candidate_errors[0] if candidate_errors else "no official image candidate"
                 errors.append(f"{course['label']}: {reason}")
+                results.append({"track_key": course_key, "label": course["label"], "result": outcome})
                 if previous is None:
                     upsert_track_map(
-                        track_key=course_key,
-                        track_label=str(course["label"]),
-                        course_label=str(course["course_label"]),
-                        course_url=course_url,
-                        image_url=image_url,
-                        file_name="",
-                        content_type="",
-                        image_hash="",
-                        status="error",
-                        checked_at=checked_at,
-                        updated_at="",
+                        track_key=course_key, track_label=str(course["label"]),
+                        course_label=str(course["course_label"]), course_url=course_url,
+                        image_url=image_urls[0] if image_urls else "", file_name="", content_type="",
+                        image_hash="", status="error", checked_at=checked_at, updated_at="",
+                        candidate_count=len(image_urls), refresh_result=outcome,
                     )
                 continue
-            content_type = str(response.headers.get("content-type") or "").split(";", 1)[0].lower()
-            if content_type not in {"image/jpeg", "image/png", "image/webp"} or not response.content:
-                failed += 1
-                reason = f"unexpected content type {content_type or 'unknown'} ({len(response.content)} bytes)"
-                errors.append(f"{course['label']}: {reason}")
-                if previous is None:
-                    upsert_track_map(
-                        track_key=course_key,
-                        track_label=str(course["label"]),
-                        course_label=str(course["course_label"]),
-                        course_url=course_url,
-                        image_url=image_url,
-                        file_name="",
-                        content_type=content_type,
-                        image_hash="",
-                        status="error",
-                        checked_at=checked_at,
-                        updated_at="",
-                    )
-                continue
+            best = max(candidates, key=lambda item: (int(item["width"]) * int(item["height"]), min(int(item["width"]), int(item["height"])), int(item["byte_size"])))
+            image_url = str(best["url"])
+            content_type = str(best["content_type"])
             extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[content_type]
             file_name = f"{course_key}{extension}"
             destination = map_dir / file_name
-            image_hash = hashlib.sha256(response.content).hexdigest()
+            image_hash = str(best["hash"])
             existing_hash = hashlib.sha256(destination.read_bytes()).hexdigest() if destination.exists() else ""
+            previous_score = _previous_map_score(previous, map_dir)
+            best_score = (int(best["width"]) * int(best["height"]), min(int(best["width"]), int(best["height"])), int(best["byte_size"]))
+            if previous is not None and previous_score > best_score:
+                unchanged += 1
+                results.append({"track_key": course_key, "label": course["label"], "result": "unchanged", "width": previous_score[0]})
+                continue
             if existing_hash == image_hash:
                 unchanged += 1
-                updated_at = datetime.fromtimestamp(destination.stat().st_mtime, settings.timezone).isoformat(
-                    timespec="seconds"
-                )
+                updated_at = datetime.fromtimestamp(destination.stat().st_mtime, settings.timezone).isoformat(timespec="seconds")
+                outcome = "unchanged"
             else:
                 temporary = destination.with_suffix(destination.suffix + ".tmp")
-                temporary.write_bytes(response.content)
+                temporary.write_bytes(bytes(best["content"]))
                 os.replace(temporary, destination)
                 downloaded += 1
+                if previous is not None and best_score > previous_score:
+                    upgraded += 1
+                    outcome = "upgraded"
+                else:
+                    outcome = "downloaded"
                 updated_at = checked_at
             upsert_track_map(
                 track_key=course_key,
@@ -268,7 +397,15 @@ def refresh_track_maps(settings: Settings | None = None) -> dict[str, object]:
                 status="ok",
                 checked_at=checked_at,
                 updated_at=updated_at,
+                image_width=int(best["width"]), image_height=int(best["height"]),
+                byte_size=int(best["byte_size"]), selected_source_url=image_url,
+                candidate_count=len(image_urls), refresh_result=outcome,
             )
+            results.append({
+                "track_key": course_key, "label": course["label"], "result": outcome,
+                "width": int(best["width"]), "height": int(best["height"]),
+                "byte_size": int(best["byte_size"]), "source_url": image_url,
+            })
             previous_name = Path(str(previous["file_name"] or "")).name if previous is not None else ""
             if previous_name and previous_name != file_name:
                 previous_path = map_dir / previous_name
@@ -278,9 +415,12 @@ def refresh_track_maps(settings: Settings | None = None) -> dict[str, object]:
         "status": "ok" if downloaded or unchanged else "empty",
         "checked": len(targets),
         "downloaded": downloaded,
+        "upgraded": upgraded,
         "unchanged": unchanged,
+        "unavailable": unavailable,
         "failed": failed,
         "errors": errors,
+        "results": results,
     }
 
 

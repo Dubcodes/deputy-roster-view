@@ -32,6 +32,7 @@ class Settings:
     user_sync_batch_size: int
     own_roster_lookback_days: int
     own_roster_lookahead_days: int
+    holiday_region: str
     data_dir: str
     db_path: str
 
@@ -107,6 +108,7 @@ def get_settings() -> Settings:
         user_sync_batch_size=_int_env("USER_SYNC_BATCH_SIZE", 1),
         own_roster_lookback_days=_int_env("OWN_ROSTER_LOOKBACK_DAYS", 35),
         own_roster_lookahead_days=_int_env("OWN_ROSTER_LOOKAHEAD_DAYS", 56),
+        holiday_region=os.getenv("NZ_HOLIDAY_REGION", "").strip(),
         data_dir=data_dir,
         db_path=db_path,
     )

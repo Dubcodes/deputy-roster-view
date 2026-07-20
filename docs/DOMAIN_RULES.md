@@ -105,14 +105,18 @@ If Deputy has known schedule areas for the user's race-day location but no curre
 
 ## Overnight Travel
 
-Known but not fully solved. For now:
+Overnight and multi-day travel uses two directed legs: start origin to track, then track to finish destination.
 
 - Travel day may show `Travel then Overnighter`.
 - An explicit `Travel then Overnighter` shift immediately before a race day may teach the one-way `Office / Clow Place` to track travel time from that shift's duration.
 - The travel day and next race day usually involve the same crew.
 - If the travel day has no useful crew list, it can borrow the next day's crew list and label it as next-day crew.
 - Hotel-to-track travel must remain attached to a named hotel/base. Do not infer it until the actual stay is known, because crews may be split across several hotels or a nearby town.
-- Beachfront Motel accommodation for Ruakaka uses 30 minutes each way unless an admin travel default overrides it.
+- Beachfront Motel to Ruakaka is a known 30-minute outbound fallback unless an admin route overrides it. It must not be reused for a Ruakaka-to-office return.
+- Resolve each leg from day-specific roster-builder selection, a published user hotel, a parsed accommodation line, adjacent overnight context, then saved directed routes. Stop rather than guessing when no safe route exists.
+- A hotel origin does not imply the same hotel is the finish. The usual last day of a trip returns to `Office / Clow Place`; a following out-of-region day may instead resolve to the next published hotel.
+- Missing return travel leaves the last-race, clearance, and pack-up maths visible with `Return travel not configured`; it does not invent a finish or calculated total.
+- Common sequences such as `Office -> Track A -> Hotel` then `Hotel -> Track B -> Office` are data-driven and must not be hard-coded to Ruakaka.
 - If the roster note's on-track time is earlier than Deputy's shift start, retain and show both values. Timing maths follows the explicit on-track note and accommodation travel time, while Deputy remains the source for rostered hours; flag the discrepancy for review.
 - Manually planned travel days may assign different crew members to different named hotels. Hotel assignments are user-specific and should remain collapsible in the admin builder because they are occasional rather than part of every race day.
 
@@ -140,3 +144,12 @@ For Thoroughbred race days, the app may show Love Racing's official 2D course ma
 - Serve cached maps from the app; the day view should not link users out to Love Racing.
 - Refresh map files no more than about monthly unless an admin/developer explicitly forces a refresh.
 - If a course cannot be matched confidently or the image fetch fails, show no map rather than guessing.
+- Prefer the highest-resolution validated official candidate from the course page and catalog. Keep a working cached map when a replacement fails or is lower quality.
+- Render at or below natural width with preserved aspect ratio. Do not upscale a small original and call it an improvement.
+
+## Public Holidays
+
+- A holiday marker belongs to the date heading, not to each shift.
+- National New Zealand public holidays and observed days are calculated locally. Ordinary weekends are not holidays.
+- The marker may expose more than one holiday name on a date and must work by mouse, touch, and keyboard.
+- Holiday display does not alter rostered hours, calculated hours, or holiday-pay rules.

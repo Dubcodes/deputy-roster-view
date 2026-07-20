@@ -61,6 +61,7 @@ from .database import (
     get_next_upcoming_shift,
     get_recent_source_payloads,
     get_travel_time_default,
+    get_travel_route,
     get_track_map,
     get_recent_sync_logs,
     get_upcoming_shifts,
@@ -74,6 +75,10 @@ from .database import (
     list_roster_builder_location_labels,
     list_roster_days,
     list_travel_time_defaults,
+    list_travel_routes,
+    list_known_place_labels,
+    list_crew_people,
+    crew_identity_records,
     list_track_maps,
     list_trusted_devices_for_user,
     mark_user_sync_finished,
@@ -94,6 +99,9 @@ from .database import (
     upsert_travel_time_default,
     delete_travel_time_default,
     update_travel_time_default,
+    upsert_travel_route,
+    delete_travel_route,
+    update_crew_person,
     update_user_display_theme,
     update_user_pin_hash,
     user_has_deputy_credentials,
@@ -114,12 +122,13 @@ from .security import (
     verify_pin,
 )
 from .user_credentials import settings_for_user
-from .track_maps import refresh_track_maps, track_map_course_key
+from .track_maps import image_dimensions, refresh_track_maps, track_map_course_key
+from .public_holidays import holiday_for_date
 
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.18.4"
+APP_BUILD = "2026.07.20.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -358,11 +367,6 @@ VEHICLE_ROLE_LABELS = {
     "TENDER",
     "TRANSIT",
     "RAV91",
-}
-NOTE_NAME_ALIASES = {
-    "cambo": ("campbell",),
-    "gaz": ("gary",),
-    "josh": ("joshua",),
 }
 SCHEDULE_POSITION_ALIASES = {
     "side1": ("side1", "Side 1"),
@@ -752,6 +756,127 @@ def accommodation_default_for_shift(shift: dict[str, object]) -> dict[str, objec
             "source": "known accommodation",
         }
     return None
+
+
+def published_travel_context_for_shift(shift: dict[str, object]) -> dict[str, str]:
+    date_text = str(shift.get("date") or "")
+    user_id = safe_int(shift.get("owner_user_id"))
+    if not date_text or user_id is None:
+        return {}
+    try:
+        day_value = date.fromisoformat(date_text)
+    except ValueError:
+        return {}
+    target_key = travel_default_key(shift.get("track_label") or shift.get("source_code"))
+    result: dict[str, str] = {}
+    snapshots: dict[int, list[dict[str, object]]] = {-1: [], 0: [], 1: []}
+    for row in fetch_published_roster_days_between(
+        (day_value - timedelta(days=1)).isoformat(),
+        (day_value + timedelta(days=1)).isoformat(),
+    ):
+        snapshot = parse_roster_snapshot(row["published_snapshot"])
+        if not snapshot:
+            continue
+        try:
+            offset = (date.fromisoformat(str(row["roster_date"])) - day_value).days
+        except ValueError:
+            continue
+        if offset in snapshots:
+            snapshots[offset].append(snapshot)
+
+    current = next(
+        (item for item in snapshots[0] if travel_default_key(item.get("track_label")) == target_key),
+        None,
+    )
+    if current:
+        if str(current.get("start_origin") or "").strip():
+            result["start_origin"] = str(current["start_origin"]).strip()
+            result["start_evidence"] = "published roster travel selection"
+        if str(current.get("finish_destination") or "").strip():
+            result["finish_destination"] = str(current["finish_destination"]).strip()
+            result["finish_evidence"] = "published roster travel selection"
+
+    def hotel_for_user(items: list[dict[str, object]]) -> str:
+        for snapshot in items:
+            for hotel in snapshot.get("hotel_assignments", []):
+                if isinstance(hotel, dict) and safe_int(hotel.get("user_id")) == user_id:
+                    label = str(hotel.get("hotel_name") or "").strip()
+                    if label:
+                        return label
+        return ""
+
+    previous_hotel = hotel_for_user(snapshots[-1])
+    current_hotel = hotel_for_user([current] if current else [])
+    next_hotel = hotel_for_user(snapshots[1])
+    if (previous_hotel or current_hotel) and not result.get("start_origin"):
+        result["start_origin"] = previous_hotel or current_hotel
+        result["start_evidence"] = "published hotel assignment"
+    if next_hotel and not result.get("finish_destination"):
+        result["finish_destination"] = next_hotel
+        result["finish_evidence"] = "next published hotel assignment"
+    return result
+
+
+def adjacent_overnight_origin_for_shift(shift: dict[str, object]) -> str:
+    user_id = safe_int(shift.get("owner_user_id"))
+    try:
+        day_value = date.fromisoformat(str(shift.get("date") or ""))
+    except ValueError:
+        return ""
+    previous_rows = fetch_shifts_between(
+        (day_value - timedelta(days=1)).isoformat(),
+        (day_value - timedelta(days=1)).isoformat(),
+        owner_user_id=user_id,
+    )
+    for row in previous_rows:
+        values = dict(row)
+        title_and_note = f"{values.get('title', '')} {values.get('description', '')}".lower()
+        if "travel then overnighter" not in title_and_note:
+            continue
+        labels = accommodation_base_labels_for_shift(
+            {"description_lines": description_lines(str(values.get("description") or ""))}
+        )
+        if labels:
+            return labels[0]
+    return ""
+
+
+def resolved_travel_context(shift: dict[str, object], timings: dict[str, str]) -> dict[str, str]:
+    track = str(shift.get("track_label") or shift.get("location_label") or "").strip()
+    published = published_travel_context_for_shift(shift)
+    accommodation_labels = accommodation_base_labels_for_shift(shift)
+    explicit_origin = str(shift.get("travel_start_origin") or "").strip()
+    explicit_finish = str(shift.get("travel_finish_destination") or "").strip()
+    if explicit_origin:
+        origin, origin_evidence = explicit_origin, "day-specific travel selection"
+    elif published.get("start_origin"):
+        origin, origin_evidence = published["start_origin"], published.get("start_evidence", "published roster")
+    elif accommodation_labels:
+        origin, origin_evidence = accommodation_labels[0], "Deputy accommodation note"
+    else:
+        adjacent_origin = adjacent_overnight_origin_for_shift(shift)
+        if adjacent_origin:
+            origin, origin_evidence = adjacent_origin, "adjacent Travel then Overnighter day"
+        else:
+            origin = "Office / Clow Place"
+            origin_evidence = "roster base timing" if timings.get("office") or timings.get("clow place") else "saved route default"
+    if explicit_finish:
+        finish, finish_evidence = explicit_finish, "day-specific travel selection"
+    elif published.get("finish_destination"):
+        finish, finish_evidence = published["finish_destination"], published.get("finish_evidence", "published roster")
+    else:
+        finish, finish_evidence = "Office / Clow Place", "trip ends after this race day"
+    return {
+        "track": track,
+        "start_origin": canonical_travel_base_label(origin),
+        "finish_destination": canonical_travel_base_label(finish),
+        "start_evidence": origin_evidence,
+        "finish_evidence": finish_evidence,
+    }
+
+
+def public_holiday_context(day_value: date) -> dict[str, object]:
+    return holiday_for_date(day_value, get_settings().holiday_region)
 
 def clock_datetime_for_shift(shift: dict[str, object], clock_value: str, after: datetime | None = None) -> datetime | None:
     clock_value = clean_time_value(clock_value)
@@ -1338,20 +1463,19 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
         "lines": [],
         "formula": "",
     }
-    accommodation_labels = accommodation_base_labels_for_shift(shift)
-    default_row = None
-    if base_clock:
-        default_row = travel_default_for_shift(shift, base_label)
-    elif accommodation_labels:
-        default_row = accommodation_default_for_shift(shift)
-        if default_row:
-            base_label = str(default_row.get("base_label") or accommodation_labels[0])
+    context = resolved_travel_context(shift, timings)
+    start_origin = context["start_origin"]
+    finish_destination = context["finish_destination"]
+    track_label = context["track"]
+    outbound_route = get_travel_route(start_origin, track_label)
+    outbound_default = dict(outbound_route) if outbound_route else None
+    if outbound_default is None:
+        if accommodation_base_labels_for_shift(shift):
+            outbound_default = accommodation_default_for_shift(shift)
         else:
-            base_label = accommodation_labels[0]
-    else:
-        default_row = travel_default_for_shift(shift, base_label)
-    default_travel_minutes = int(default_row["travel_minutes"]) if default_row else 0
-    default_source = str(default_row["source"] or "default") if default_row else ""
+            outbound_default = travel_default_for_shift(shift, start_origin)
+    default_travel_minutes = int(outbound_default["travel_minutes"]) if outbound_default else 0
+    default_source = str(outbound_default.get("source") or "saved route") if outbound_default else ""
 
     roster_start_at = parse_iso_datetime(str(shift.get("start_at") or ""))
     start_at = clock_datetime_for_shift(shift, base_clock) if base_clock else None
@@ -1381,13 +1505,13 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
                 "hours": hours,
                 "hours_label": format_hours(hours),
                 "lines": [
-                    {"label": base_label, "value": start_at.strftime("%H:%M")},
+                    {"label": f"Start origin · {start_origin}", "value": start_at.strftime("%H:%M")},
                     {"label": "Finished/back", "value": finished_at.strftime("%H:%M")},
                     {"label": "Rounded end", "value": rounded_end.strftime("%H:%M")},
                     {"label": "Calculated total", "value": format_hours(hours)},
                 ],
                 "formula": (
-                    f"{base_label} {start_at.strftime('%H:%M')} to finished/back "
+                    f"{start_origin} {start_at.strftime('%H:%M')} to finished/back "
                     f"{finished_at.strftime('%H:%M')}, rounded to {rounded_end.strftime('%H:%M')}."
                 ),
             }
@@ -1407,11 +1531,13 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     if on_track_at is None or last_race_at is None:
         return result
 
-    travel_minutes = max(0, int(round((on_track_at - start_at).total_seconds() / 60)))
+    outbound_minutes = max(0, int(round((on_track_at - start_at).total_seconds() / 60)))
     race_clear_at = ceil_datetime_to_quarter(last_race_at + timedelta(minutes=RACE_RUN_MINUTES))
     packup_done_at = race_clear_at + timedelta(minutes=PACKUP_MINUTES)
-    calculated_end_at = packup_done_at + timedelta(minutes=travel_minutes)
-    hours = max(0.0, round((calculated_end_at - start_at).total_seconds() / 3600, 2))
+    return_route = get_travel_route(track_label, finish_destination)
+    return_minutes = int(return_route["travel_minutes"]) if return_route else None
+    calculated_end_at = packup_done_at + timedelta(minutes=return_minutes) if return_minutes is not None else None
+    hours = max(0.0, round((calculated_end_at - start_at).total_seconds() / 3600, 2)) if calculated_end_at else None
     roster_start_conflict = bool(
         inferred_start
         and roster_start_at
@@ -1419,9 +1545,10 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
         and roster_start_at >= on_track_at
     )
     calculation_lines = [
-        {"label": f"{base_label}{' inferred' if inferred_start else ''}", "value": start_at.strftime("%H:%M")},
+        {"label": f"Start origin · {start_origin}{' · inferred' if inferred_start else ''}", "value": start_at.strftime("%H:%M")},
+        {"label": "Start origin evidence", "value": context["start_evidence"]},
         {"label": f"On track{' inferred' if inferred_on_track else ''}", "value": on_track_at.strftime("%H:%M")},
-        {"label": "Travel each way", "value": format_minutes_duration(travel_minutes)},
+        {"label": "Outbound travel", "value": format_minutes_duration(outbound_minutes)},
     ]
     if roster_start_conflict and roster_start_at:
         calculation_lines.append({"label": "Deputy roster start", "value": roster_start_at.strftime("%H:%M")})
@@ -1430,13 +1557,26 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
             {"label": "Last race", "value": last_race_at.strftime("%H:%M")},
             {"label": "Race cleared", "value": race_clear_at.strftime("%H:%M")},
             {"label": "Pack-up done", "value": packup_done_at.strftime("%H:%M")},
-            {"label": "Back at base", "value": calculated_end_at.strftime("%H:%M")},
-            {"label": "Calculated total", "value": format_hours(hours)},
         ]
     )
+    if calculated_end_at is not None and return_minutes is not None:
+        calculation_lines.extend([
+            {"label": "Return travel", "value": format_minutes_duration(return_minutes)},
+            {"label": f"Finish destination · {finish_destination}", "value": calculated_end_at.strftime("%H:%M")},
+            {"label": "Finish destination evidence", "value": context["finish_evidence"]},
+            {"label": "Calculated total", "value": format_hours(hours)},
+        ])
+    else:
+        calculation_lines.extend([
+            {"label": "Return travel not configured", "value": "Incomplete"},
+            {"label": f"Finish destination · {finish_destination}", "value": "Not calculated"},
+            {"label": "Finish destination evidence", "value": context["finish_evidence"]},
+        ])
+    complete = calculated_end_at is not None
     result.update(
         {
             "available": True,
+            "complete": complete,
             "source": "race_day",
             "used_default_travel": bool(inferred_start or inferred_on_track),
             "default_travel_source": default_source,
@@ -1445,18 +1585,29 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
             "last_race_label": last_race_at.strftime("%H:%M"),
             "race_clear_label": race_clear_at.strftime("%H:%M"),
             "packup_done_label": packup_done_at.strftime("%H:%M"),
-            "end_label": calculated_end_at.strftime("%H:%M"),
-            "travel_label": format_minutes_duration(travel_minutes),
+            "end_label": calculated_end_at.strftime("%H:%M") if calculated_end_at else "",
+            "travel_label": format_minutes_duration(outbound_minutes),
+            "outbound_travel_label": format_minutes_duration(outbound_minutes),
+            "return_travel_label": format_minutes_duration(return_minutes) if return_minutes is not None else "Not configured",
+            "start_origin": start_origin,
+            "finish_destination": finish_destination,
+            "start_origin_evidence": context["start_evidence"],
+            "finish_destination_evidence": context["finish_evidence"],
+            "warning": "" if complete else "Return travel not configured",
             "hours": hours,
-            "hours_label": format_hours(hours),
+            "hours_label": format_hours(hours) if hours is not None else "Incomplete",
             "lines": calculation_lines,
             "roster_start_conflict": roster_start_conflict,
             "formula": (
-                f"{base_label} {start_at.strftime('%H:%M')} to on track {on_track_at.strftime('%H:%M')} "
-                f"= {format_minutes_duration(travel_minutes)} travel each way. Last race "
+                f"{start_origin} {start_at.strftime('%H:%M')} to {track_label} at {on_track_at.strftime('%H:%M')} "
+                f"uses {format_minutes_duration(outbound_minutes)} outbound travel. Last race "
                 f"{last_race_at.strftime('%H:%M')} + {RACE_RUN_MINUTES}m rounds to "
                 f"{race_clear_at.strftime('%H:%M')}; pack-up to {packup_done_at.strftime('%H:%M')}; "
-                f"return travel gives {calculated_end_at.strftime('%H:%M')}."
+                + (
+                    f"{format_minutes_duration(return_minutes)} return travel to {finish_destination} gives {calculated_end_at.strftime('%H:%M')}."
+                    if calculated_end_at is not None and return_minutes is not None
+                    else f"return travel from {track_label} to {finish_destination} is not configured, so the finish and total are incomplete."
+                )
             ),
         }
     )
@@ -1570,7 +1721,7 @@ def apply_timing_math(shift: dict[str, object]) -> None:
     else:
         formula = f"Paid: {shift.get('paid_label')}"
     race_day = build_race_day_calculation(shift)
-    if race_day.get("available"):
+    if race_day.get("available") and race_day.get("complete", True):
         shift["calculated_hours"] = race_day.get("hours")
         shift["calculated_label"] = race_day.get("hours_label")
         shift["display_hours"] = race_day.get("hours")
@@ -1972,6 +2123,8 @@ def roster_day_snapshot(roster_day: dict[str, object], assignments: list[dict[st
         "track_label": str(roster_day.get("track_label") or ""),
         "race_type": str(roster_day.get("race_type") or ""),
         "day_type": str(roster_day.get("day_type") or "race_day"),
+        "start_origin": str(roster_day.get("start_origin") or ""),
+        "finish_destination": str(roster_day.get("finish_destination") or ""),
         "office_start": str(roster_day.get("office_start") or ""),
         "on_track_time": str(roster_day.get("on_track_time") or ""),
         "first_race_time": str(roster_day.get("first_race_time") or ""),
@@ -2005,6 +2158,7 @@ def roster_day_change_review(current: dict[str, object], published: dict[str, ob
         return [], set(), set()
     labels = {
         "roster_date": "Date", "track_label": "Track", "race_type": "Race type", "day_type": "Day type",
+        "start_origin": "Start origin", "finish_destination": "Finish destination",
         "office_start": "Office start", "on_track_time": "On track",
         "first_race_time": "First race", "last_race_time": "Last race",
         "race_count": "Race count", "notes": "Important notes", "hotel_assignments": "Hotels",
@@ -2165,19 +2319,58 @@ def person_name_keys(value: str | None) -> set[str]:
 
 
 def note_person_keys(value: str | None) -> set[str]:
-    keys = person_name_keys(value)
-    expanded = set(keys)
-    for key in keys:
-        expanded.update(NOTE_NAME_ALIASES.get(key, ()))
-    return expanded
+    return person_name_keys(value)
 
 
 def schedule_person_alias_map(people: list[dict[str, object]]) -> dict[str, list[int]]:
     aliases: dict[str, list[int]] = {}
+    identities = crew_identity_records()
     for index, person in enumerate(people):
         for key in person_name_keys(str(person.get("employee_name") or "")):
             aliases.setdefault(key, []).append(index)
+        employee_id = safe_int(person.get("employee_id"))
+        name_key = role_display_key(str(person.get("deputy_employee_name") or person.get("employee_name") or ""))
+        matches = [
+            record for record in identities
+            if (employee_id is not None and safe_int(record.get("deputy_employee_id")) == employee_id)
+            or (
+                employee_id is None and name_key and name_key in {
+                    role_display_key(str(record.get("canonical_display_name") or "")),
+                    role_display_key(str(record.get("current_deputy_name") or "")),
+                }
+            )
+        ]
+        if len(matches) == 1:
+            for alias in matches[0].get("aliases", []):
+                key = role_display_key(str(alias or ""))
+                if key:
+                    aliases.setdefault(key, []).append(index)
     return aliases
+
+
+def apply_crew_directory_identity(people: list[dict[str, object]]) -> None:
+    identities = crew_identity_records()
+    for person in people:
+        if person.get("placeholder") or str(person.get("employee_name") or "") == "Open shift":
+            continue
+        employee_id = safe_int(person.get("employee_id"))
+        deputy_name = str(person.get("employee_name") or "").strip()
+        name_key = role_display_key(deputy_name)
+        matches = [
+            record for record in identities
+            if (employee_id is not None and safe_int(record.get("deputy_employee_id")) == employee_id)
+            or (
+                employee_id is None and name_key and name_key in {
+                    role_display_key(str(record.get("canonical_display_name") or "")),
+                    role_display_key(str(record.get("current_deputy_name") or "")),
+                }
+            )
+        ]
+        if len(matches) != 1:
+            continue
+        person["deputy_employee_name"] = deputy_name
+        person["canonical_person_id"] = matches[0]["id"]
+        person["employee_name"] = str(matches[0].get("canonical_display_name") or deputy_name)
 
 
 def roster_note_vehicle_allocations(shifts: list[dict[str, object]]) -> list[dict[str, str]]:
@@ -2530,6 +2723,7 @@ def schedule_people(
             key,
             {
                 "employee_name": employee_name,
+                "employee_id": item.get("employee_id"),
                 "position_parts": [],
                 "vehicle_parts": [],
                 "change_parts": [],
@@ -2567,6 +2761,7 @@ def schedule_people(
         people.append(
             {
                 "employee_name": person.get("employee_name") or "Open shift",
+                "employee_id": person.get("employee_id"),
                 "position_label": position_label,
                 "vehicle_label": vehicle_label,
                 "sort_order": sort_order,
@@ -2578,6 +2773,7 @@ def schedule_people(
         )
     people.extend(placeholders)
     people.extend(open_entries)
+    apply_crew_directory_identity(people)
     return sorted(
         people,
         key=lambda person: (
@@ -2709,6 +2905,16 @@ def track_maps_for_day(
         row = get_track_map(course_key)
         if row is None:
             continue
+        image_width = int(row["image_width"] or 0)
+        image_height = int(row["image_height"] or 0)
+        byte_size = int(row["byte_size"] or 0)
+        if not image_width or not image_height:
+            file_name = Path(str(row["file_name"] or "")).name
+            image_path = Path(get_settings().data_dir) / "track_maps" / file_name
+            if file_name and image_path.is_file():
+                content = image_path.read_bytes()
+                image_width, image_height = image_dimensions(content, str(row["content_type"] or ""))
+                byte_size = byte_size or len(content)
         seen.add(course_key)
         maps.append(
             {
@@ -2716,6 +2922,9 @@ def track_maps_for_day(
                 "track_label": track_label or str(row["track_label"] or row["course_label"] or "Track"),
                 "course_label": str(row["course_label"] or track_label or "Track"),
                 "image_url": f"/track-map/{course_key}",
+                "image_width": image_width,
+                "image_height": image_height,
+                "byte_size": byte_size,
             }
         )
     return maps
@@ -3293,6 +3502,7 @@ def build_timesheet_summary(submission_date: date, owner_user_id: int | None = N
             {
                 "date": day_item,
                 "date_label": day_item.strftime("%a %d %b"),
+                "holiday": public_holiday_context(day_item),
                 "iso": day_item.isoformat(),
                 "total": day_total,
                 "locations": ", ".join(locations) if locations else "-",
@@ -3979,6 +4189,8 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
         "track_label": "",
         "race_type": "thoroughbred",
         "day_type": "race_day",
+        "start_origin": "",
+        "finish_destination": "",
         "office_start": "",
         "on_track_time": "",
         "first_race_time": "",
@@ -4020,6 +4232,15 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
     current_snapshot = roster_day_snapshot(roster_day, assignments)
     published_snapshot = parse_roster_snapshot(roster_day.get("published_snapshot"))
     changes, changed_fields, changed_positions = roster_day_change_review(current_snapshot, published_snapshot)
+    directory_people = [person for person in list_crew_people() if int(person.get("is_active") or 0)]
+    crew_options = [
+        {
+            "value": str(person["app_user_id"]) if person.get("app_user_id") else f"person:{person['id']}",
+            "label": str(person.get("canonical_display_name") or "Crew"),
+            "user_id": person.get("app_user_id"),
+        }
+        for person in directory_people
+    ]
     return templates.TemplateResponse(
         "roster_day_builder.html",
         {
@@ -4033,7 +4254,9 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
             "positions": positions,
             "vehicles": roster_builder_vehicles(area_names),
             "users": [dict(item) for item in list_app_users() if int(item["is_active"] or 0)],
+            "crew_options": crew_options,
             "track_options": track_options,
+            "place_options": list_known_place_labels(),
             "race_types": ROSTER_RACE_TYPES,
             "changes": changes,
             "changed_fields": changed_fields,
@@ -4073,6 +4296,10 @@ def admin_view(request: Request, notice: str | None = None) -> object:
             "planning_locations": planning_locations,
             "location_rows": location_rows,
             "track_maps": [dict(row) for row in list_track_maps()],
+            "travel_routes": [dict(row) for row in list_travel_routes()],
+            "known_places": list_known_place_labels(),
+            "crew_people": list_crew_people(),
+            "app_users": [dict(item) for item in list_app_users()],
             "planning_location_enabled_count": sum(
                 1 for location in planning_locations if int(location.get("is_enabled") or 0)
             ),
@@ -4279,6 +4506,55 @@ async def admin_edit_travel_default(request: Request, default_id: int) -> Redire
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
+@app.post("/admin/travel-routes")
+async def admin_save_travel_route(request: Request) -> RedirectResponse:
+    require_admin_user(request)
+    form = await request.form()
+    origin = str(form.get("origin_label") or "").strip()
+    destination = str(form.get("destination_label") or "").strip()
+    try:
+        minutes = int(str(form.get("travel_minutes") or "0"))
+    except ValueError:
+        minutes = 0
+    saved = upsert_travel_route(
+        origin_label=origin,
+        destination_label=destination,
+        travel_minutes=minutes,
+        note=str(form.get("note") or "").strip(),
+        source="manual",
+        also_reverse=bool(form.get("also_reverse")),
+    )
+    message = "Directed travel route saved." if saved else "Origin, destination, and travel minutes are required."
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/travel-routes/{route_id}/delete")
+def admin_delete_travel_route(request: Request, route_id: int) -> RedirectResponse:
+    require_admin_user(request)
+    deleted = delete_travel_route(route_id)
+    return RedirectResponse(
+        url=notice_url("/admin", "Travel route deleted." if deleted else "Travel route not found."),
+        status_code=303,
+    )
+
+
+@app.post("/admin/crew/{person_id}")
+async def admin_update_crew_person(request: Request, person_id: int) -> RedirectResponse:
+    require_admin_user(request)
+    form = await request.form()
+    app_user_text = str(form.get("app_user_id") or "").strip()
+    aliases = re.split(r"[,;\n]+", str(form.get("aliases") or ""))
+    _saved, message = update_crew_person(
+        person_id,
+        canonical_display_name=str(form.get("canonical_display_name") or ""),
+        app_user_id=int(app_user_text) if app_user_text.isdigit() else None,
+        aliases=aliases,
+        is_active=bool(form.get("is_active")),
+        admin_note=str(form.get("admin_note") or ""),
+    )
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
 @app.post("/admin/overrides")
 async def admin_create_override(request: Request) -> RedirectResponse:
     user = require_admin_user(request)
@@ -4376,6 +4652,7 @@ def month_view(
                     "manual_rosters": day_manual_rosters,
                     "total": day_total,
                     "timesheet": timesheet,
+                    "holiday": public_holiday_context(day_item),
                 }
             )
             if day_item.month == month and (day_shifts or timesheet or day_open_shifts or day_love_racing or day_manual_rosters):
@@ -4389,6 +4666,7 @@ def month_view(
                         "manual_rosters": day_manual_rosters,
                         "total": day_total,
                         "timesheet": timesheet,
+                        "holiday": public_holiday_context(day_item),
                     }
                 )
         weeks.append({"days": days, "total": week_total})
@@ -4530,6 +4808,7 @@ def day_view(
                 "current_user": user,
                 "date_text": date_text,
                 "day_date": day_date,
+                "day_holiday": public_holiday_context(day_date),
                 "month_year": day_date.year,
                 "month_number": day_date.month,
                 "back_to_month_url": f"/month?year={day_date.year}&month={day_date.month}&scope=global",
@@ -4684,6 +4963,7 @@ def day_view(
             "current_user": user,
             "date_text": date_text,
             "day_date": day_date,
+            "day_holiday": public_holiday_context(day_date),
             "month_year": day_date.year,
             "month_number": day_date.month,
             "back_to_month_url": f"/month?year={day_date.year}&month={day_date.month}",
@@ -4741,6 +5021,7 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
     if race_count is not None and not 1 <= race_count <= 50:
         race_count = None
     active_users = {int(item["id"]): dict(item) for item in list_app_users() if int(item["is_active"] or 0)}
+    directory_people = {f"person:{person['id']}": person for person in list_crew_people() if int(person.get("is_active") or 0)}
     hotel_user_ids = list(form.getlist("hotel_user_id"))
     hotel_names = list(form.getlist("hotel_name"))
     hotel_assignments = []
@@ -4770,12 +5051,17 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
         if not position or not assignee:
             continue
         user_id = int(assignee) if assignee.isdigit() and int(assignee) in active_users else None
-        if assignee != "tbc" and user_id is None:
+        directory_person = directory_people.get(assignee)
+        if assignee != "tbc" and user_id is None and directory_person is None:
             continue
         assignments.append({
             "position_label": position,
             "user_id": user_id,
-            "assignee_label": "TBC" if assignee == "tbc" else str(active_users[user_id].get("display_name") or active_users[user_id].get("deputy_email") or "Crew"),
+            "assignee_label": (
+                "TBC" if assignee == "tbc"
+                else str(active_users[user_id].get("display_name") or active_users[user_id].get("deputy_email") or "Crew") if user_id is not None
+                else str(directory_person.get("canonical_display_name") or "Crew")
+            ),
             "vehicle_label": vehicle,
             "sort_order": index,
         })
@@ -4787,6 +5073,8 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
         track_label=clean_track_label,
         race_type=race_type,
         day_type=day_type,
+        start_origin=str(form.get("start_origin") or "").strip()[:200],
+        finish_destination=str(form.get("finish_destination") or "").strip()[:200],
         office_start=times["office_start"],
         on_track_time=times["on_track_time"],
         first_race_time=times["first_race_time"],
@@ -4990,8 +5278,9 @@ def admin_refresh_track_maps(request: Request) -> RedirectResponse:
     require_admin_user(request)
     result = refresh_track_maps()
     message = (
-        f"Track maps checked: {result['checked']}; downloaded {result['downloaded']}; "
-        f"unchanged {result['unchanged']}; failed {result['failed']}."
+        f"Track maps checked: {result['checked']}; upgraded {result.get('upgraded', 0)}; "
+        f"downloaded {result['downloaded']}; unchanged {result['unchanged']}; "
+        f"unavailable {result.get('unavailable', 0)}; failed {result['failed']}."
     )
     errors = list(result.get("errors") or [])
     if errors:

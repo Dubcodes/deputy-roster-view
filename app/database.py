@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import hashlib
+import json
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Iterable
@@ -247,6 +248,47 @@ def init_db(settings: Settings | None = None) -> None:
                 UNIQUE(track_key, base_label)
             );
 
+            CREATE TABLE IF NOT EXISTS travel_routes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                origin_key TEXT NOT NULL,
+                origin_label TEXT NOT NULL,
+                destination_key TEXT NOT NULL,
+                destination_label TEXT NOT NULL,
+                travel_minutes INTEGER NOT NULL,
+                note TEXT,
+                source TEXT DEFAULT 'manual',
+                sample_count INTEGER DEFAULT 0,
+                first_seen_at TEXT,
+                last_seen_at TEXT,
+                updated_at TEXT,
+                reverse_is_shared INTEGER DEFAULT 0,
+                UNIQUE(origin_key, destination_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS crew_people (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                canonical_display_name TEXT NOT NULL,
+                deputy_employee_id INTEGER UNIQUE,
+                current_deputy_name TEXT,
+                app_user_id INTEGER UNIQUE,
+                is_active INTEGER DEFAULT 1,
+                admin_note TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (app_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS crew_aliases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                person_id INTEGER NOT NULL,
+                alias TEXT NOT NULL,
+                normalized_alias TEXT NOT NULL,
+                created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(person_id, normalized_alias),
+                FOREIGN KEY (person_id) REFERENCES crew_people(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS deputy_schedule_areas (
                 area_id INTEGER PRIMARY KEY,
                 name TEXT,
@@ -402,6 +444,10 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_capture_coverage_date ON capture_coverage(date);
             CREATE INDEX IF NOT EXISTS idx_user_sync_state_next ON user_sync_state(next_sync_after, sync_in_progress);
             CREATE INDEX IF NOT EXISTS idx_travel_time_defaults_track ON travel_time_defaults(track_key, base_label);
+            CREATE INDEX IF NOT EXISTS idx_travel_routes_destination ON travel_routes(destination_key, origin_key);
+            CREATE INDEX IF NOT EXISTS idx_crew_people_name ON crew_people(canonical_display_name);
+            CREATE INDEX IF NOT EXISTS idx_crew_aliases_normalized ON crew_aliases(normalized_alias);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_crew_aliases_unique_normalized ON crew_aliases(normalized_alias);
             CREATE INDEX IF NOT EXISTS idx_love_racing_meetings_date ON love_racing_meetings(meeting_date, racecourse_key);
             CREATE INDEX IF NOT EXISTS idx_planning_location_preferences_enabled ON planning_location_preferences(is_enabled);
             CREATE INDEX IF NOT EXISTS idx_roster_days_date ON roster_days(roster_date, status);
@@ -440,6 +486,14 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "love_racing_meetings", "is_active", "INTEGER DEFAULT 1")
         _ensure_column(conn, "roster_days", "day_type", "TEXT DEFAULT 'race_day'")
         _ensure_column(conn, "roster_days", "hotel_assignments", "TEXT DEFAULT '[]'")
+        _ensure_column(conn, "roster_days", "start_origin", "TEXT")
+        _ensure_column(conn, "roster_days", "finish_destination", "TEXT")
+        _ensure_column(conn, "track_maps", "image_width", "INTEGER")
+        _ensure_column(conn, "track_maps", "image_height", "INTEGER")
+        _ensure_column(conn, "track_maps", "byte_size", "INTEGER")
+        _ensure_column(conn, "track_maps", "selected_source_url", "TEXT")
+        _ensure_column(conn, "track_maps", "candidate_count", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "track_maps", "refresh_result", "TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_location ON deputy_schedule_shifts(date, area_location_id)"
         )
@@ -458,6 +512,8 @@ def init_db(settings: Settings | None = None) -> None:
             """
         )
         _merge_equivalent_travel_bases(conn)
+        _migrate_travel_defaults_to_routes(conn)
+        _sync_crew_directory(conn)
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -501,6 +557,10 @@ def row_to_dict(row: sqlite3.Row | None) -> dict | None:
 
 
 def calendar_location_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def normalise_person_identity(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
 
 
@@ -578,6 +638,266 @@ def _merge_equivalent_travel_bases(conn: sqlite3.Connection) -> None:
                 last_seen,
                 int(winner["id"]),
             ),
+        )
+
+
+def _upsert_travel_route_conn(
+    conn: sqlite3.Connection,
+    *,
+    origin_label: object,
+    destination_label: object,
+    travel_minutes: int,
+    source: str,
+    note: str = "",
+    sample_count: int = 0,
+    first_seen_at: str = "",
+    last_seen_at: str = "",
+    reverse_is_shared: bool = False,
+) -> None:
+    origin = canonical_travel_base_label(origin_label)
+    destination = canonical_travel_base_label(destination_label)
+    origin_key = calendar_location_key(origin)
+    destination_key = calendar_location_key(destination)
+    if not origin_key or not destination_key or origin_key == destination_key or int(travel_minutes or 0) <= 0:
+        return
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    clean_source = "learned" if source == "learned" else "manual"
+    conn.execute(
+        """
+        INSERT INTO travel_routes (
+            origin_key, origin_label, destination_key, destination_label,
+            travel_minutes, note, source, sample_count, first_seen_at,
+            last_seen_at, updated_at, reverse_is_shared
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(origin_key, destination_key) DO UPDATE SET
+            origin_label = excluded.origin_label,
+            destination_label = excluded.destination_label,
+            travel_minutes = CASE
+                WHEN travel_routes.source = 'manual' AND excluded.source = 'learned'
+                THEN travel_routes.travel_minutes ELSE excluded.travel_minutes END,
+            note = CASE
+                WHEN travel_routes.source = 'manual' AND excluded.source = 'learned'
+                THEN travel_routes.note ELSE excluded.note END,
+            source = CASE
+                WHEN travel_routes.source = 'manual' AND excluded.source = 'learned'
+                THEN travel_routes.source ELSE excluded.source END,
+            sample_count = CASE
+                WHEN travel_routes.source = 'manual' AND excluded.source = 'learned'
+                THEN travel_routes.sample_count ELSE excluded.sample_count END,
+            first_seen_at = COALESCE(NULLIF(travel_routes.first_seen_at, ''), excluded.first_seen_at),
+            last_seen_at = excluded.last_seen_at,
+            updated_at = excluded.updated_at,
+            reverse_is_shared = CASE
+                WHEN travel_routes.source = 'manual' AND excluded.source = 'learned'
+                THEN travel_routes.reverse_is_shared ELSE excluded.reverse_is_shared END
+        """,
+        (
+            origin_key, origin, destination_key, destination, max(1, int(travel_minutes)),
+            note.strip(), clean_source, max(0, int(sample_count or 0)), first_seen_at,
+            last_seen_at, now, 1 if reverse_is_shared else 0,
+        ),
+    )
+
+
+def _delete_shared_travel_route_pair_conn(
+    conn: sqlite3.Connection,
+    *,
+    origin_label: object,
+    destination_label: object,
+) -> None:
+    """Remove only the paired routes still owned by a legacy travel default."""
+    origin_key = calendar_location_key(canonical_travel_base_label(origin_label))
+    destination_key = calendar_location_key(canonical_travel_base_label(destination_label))
+    if not origin_key or not destination_key or origin_key == destination_key:
+        return
+    conn.execute(
+        """
+        DELETE FROM travel_routes
+        WHERE reverse_is_shared = 1
+          AND (
+            (origin_key = ? AND destination_key = ?)
+            OR (origin_key = ? AND destination_key = ?)
+          )
+        """,
+        (origin_key, destination_key, destination_key, origin_key),
+    )
+
+
+def _migrate_travel_defaults_to_routes(conn: sqlite3.Connection) -> None:
+    """Preserve every legacy base-to-track default as a directed pair."""
+    migrated = conn.execute(
+        "SELECT value FROM app_settings WHERE key = 'travel_routes_migrated_v1'"
+    ).fetchone()
+    if migrated and str(migrated["value"] or "") == "1":
+        return
+    for row in conn.execute("SELECT * FROM travel_time_defaults").fetchall():
+        values = dict(row)
+        base = canonical_travel_base_label(values.get("base_label"))
+        _track_key, track = canonical_travel_track(values.get("track_key"), values.get("track_label"))
+        common = {
+            "travel_minutes": int(values.get("travel_minutes") or 0),
+            "source": str(values.get("source") or "manual"),
+            "note": str(values.get("note") or ""),
+            "sample_count": int(values.get("sample_count") or 0),
+            "first_seen_at": str(values.get("first_seen_at") or ""),
+            "last_seen_at": str(values.get("last_seen_at") or ""),
+            "reverse_is_shared": True,
+        }
+        _upsert_travel_route_conn(conn, origin_label=base, destination_label=track, **common)
+        _upsert_travel_route_conn(conn, origin_label=track, destination_label=base, **common)
+    now = datetime.now().isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO app_settings (key, value, updated_at)
+        VALUES ('travel_routes_migrated_v1', '1', ?)
+        ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = excluded.updated_at
+        """,
+        (now,),
+    )
+
+
+def _crew_person_candidates(conn: sqlite3.Connection, name: object) -> list[sqlite3.Row]:
+    key = normalise_person_identity(name)
+    if not key:
+        return []
+    return [
+        row for row in conn.execute("SELECT * FROM crew_people WHERE is_active = 1").fetchall()
+        if key in {
+            normalise_person_identity(row["canonical_display_name"]),
+            normalise_person_identity(row["current_deputy_name"]),
+        }
+    ]
+
+
+def _insert_observed_person(
+    conn: sqlite3.Connection,
+    name: object,
+    *,
+    employee_id: int | None = None,
+    app_user_id: int | None = None,
+) -> int | None:
+    display_name = re.sub(r"\s+", " ", str(name or "").strip())
+    if not display_name:
+        return None
+    now = datetime.now().isoformat(timespec="seconds")
+    if employee_id is not None:
+        existing = conn.execute(
+            "SELECT id FROM crew_people WHERE deputy_employee_id = ?", (employee_id,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE crew_people SET current_deputy_name = ?, updated_at = ? WHERE id = ?",
+                (display_name, now, int(existing["id"])),
+            )
+            return int(existing["id"])
+        cursor = conn.execute(
+            """
+            INSERT INTO crew_people (
+                canonical_display_name, deputy_employee_id, current_deputy_name,
+                app_user_id, is_active, admin_note, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 1, '', ?, ?)
+            """,
+            (display_name, employee_id, display_name, app_user_id, now, now),
+        )
+        return int(cursor.lastrowid)
+    if app_user_id is not None:
+        linked = conn.execute("SELECT id FROM crew_people WHERE app_user_id = ?", (app_user_id,)).fetchone()
+        if linked:
+            return int(linked["id"])
+    matches = _crew_person_candidates(conn, display_name)
+    if len(matches) == 1:
+        person_id = int(matches[0]["id"])
+        if app_user_id is not None and matches[0]["app_user_id"] is None:
+            conn.execute(
+                "UPDATE crew_people SET app_user_id = ?, updated_at = ? WHERE id = ?",
+                (app_user_id, now, person_id),
+            )
+        return person_id
+    cursor = conn.execute(
+        """
+        INSERT INTO crew_people (
+            canonical_display_name, deputy_employee_id, current_deputy_name,
+            app_user_id, is_active, admin_note, created_at, updated_at
+        ) VALUES (?, NULL, ?, ?, 1, '', ?, ?)
+        """,
+        (display_name, display_name, app_user_id, now, now),
+    )
+    return int(cursor.lastrowid)
+
+
+def _sync_crew_directory(conn: sqlite3.Connection) -> None:
+    observed_ids: set[int] = set()
+    for row in conn.execute(
+        """
+        SELECT employee_id, employee_name, MAX(captured_at) AS captured_at
+        FROM deputy_schedule_shifts
+        WHERE TRIM(COALESCE(employee_name, '')) != ''
+        GROUP BY employee_id, employee_name
+        ORDER BY captured_at
+        """
+    ).fetchall():
+        employee_id = int(row["employee_id"]) if row["employee_id"] is not None else None
+        person_id = _insert_observed_person(conn, row["employee_name"], employee_id=employee_id)
+        if person_id:
+            observed_ids.add(person_id)
+
+    for row in conn.execute(
+        "SELECT id, display_name, deputy_email FROM app_users ORDER BY id"
+    ).fetchall():
+        display_name = str(row["display_name"] or "").strip() or str(row["deputy_email"] or "").split("@", 1)[0]
+        person_id = _insert_observed_person(conn, display_name, app_user_id=int(row["id"]))
+        if person_id:
+            observed_ids.add(person_id)
+
+    manual_names: list[str] = [
+        str(row["assignee_label"] or "").strip()
+        for row in conn.execute("SELECT assignee_label FROM roster_day_assignments").fetchall()
+        if str(row["assignee_label"] or "").strip() and str(row["assignee_label"] or "").strip().lower() != "tbc"
+    ]
+    for row in conn.execute("SELECT published_snapshot FROM roster_days").fetchall():
+        try:
+            snapshot = json.loads(str(row["published_snapshot"] or ""))
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(snapshot, dict):
+            continue
+        for assignment in snapshot.get("assignments", []):
+            if not isinstance(assignment, dict):
+                continue
+            label = str(assignment.get("assignee_label") or "").strip()
+            if label and label.lower() != "tbc":
+                manual_names.append(label)
+    for name in manual_names:
+        person_id = _insert_observed_person(conn, name)
+        if person_id:
+            observed_ids.add(person_id)
+
+    # Seed only aliases that resolve to one full canonical person. Gary/Gaz is
+    # deliberately omitted because two Garys must be linked by an admin.
+    for alias, target_first_name in (("Cambo", "campbell"), ("Josh", "joshua")):
+        alias_key = normalise_person_identity(alias)
+        matches = [
+            row for row in conn.execute("SELECT * FROM crew_people WHERE is_active = 1").fetchall()
+            if normalise_person_identity(row["canonical_display_name"]).startswith(target_first_name)
+        ]
+        name_conflicts = [
+            row for row in conn.execute("SELECT * FROM crew_people WHERE is_active = 1").fetchall()
+            if int(row["id"]) != (int(matches[0]["id"]) if len(matches) == 1 else -1)
+            and alias_key in {
+                normalise_person_identity(row["canonical_display_name"]),
+                normalise_person_identity(row["current_deputy_name"]),
+            }
+        ]
+        if len(matches) != 1 or name_conflicts:
+            continue
+        now = datetime.now().isoformat(timespec="seconds")
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO crew_aliases (
+                person_id, alias, normalized_alias, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (int(matches[0]["id"]), alias, alias_key, now, now),
         )
 
 
@@ -1406,6 +1726,8 @@ def save_roster_day(
     track_label: str,
     race_type: str,
     day_type: str,
+    start_origin: str,
+    finish_destination: str,
     office_start: str,
     on_track_time: str,
     first_race_time: str,
@@ -1434,15 +1756,17 @@ def save_roster_day(
             cursor = conn.execute(
                 """
                 INSERT INTO roster_days (
-                    roster_date, track_key, track_label, race_type, day_type, office_start,
+                    roster_date, track_key, track_label, race_type, day_type,
+                    start_origin, finish_destination, office_start,
                     on_track_time, first_race_time, last_race_time, race_count,
                     notes, hotel_assignments, status, published_snapshot, created_by_user_id,
                     updated_by_user_id, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', '', ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', '', ?, ?, ?, ?)
                 """,
                 (
-                    roster_date, track_key, track_label, race_type, day_type, office_start,
+                    roster_date, track_key, track_label, race_type, day_type,
+                    start_origin, finish_destination, office_start,
                     on_track_time, first_race_time, last_race_time, race_count,
                     notes, hotel_assignments, updated_by_user_id, updated_by_user_id, now, now,
                 ),
@@ -1455,13 +1779,15 @@ def save_roster_day(
                 """
                 UPDATE roster_days
                 SET roster_date = ?, track_key = ?, track_label = ?, race_type = ?, day_type = ?,
-                    office_start = ?, on_track_time = ?, first_race_time = ?,
+                    start_origin = ?, finish_destination = ?, office_start = ?,
+                    on_track_time = ?, first_race_time = ?,
                     last_race_time = ?, race_count = ?, notes = ?, hotel_assignments = ?, status = ?,
                     updated_by_user_id = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
-                    roster_date, track_key, track_label, race_type, day_type, office_start,
+                    roster_date, track_key, track_label, race_type, day_type,
+                    start_origin, finish_destination, office_start,
                     on_track_time, first_race_time, last_race_time, race_count,
                     notes, hotel_assignments, status, updated_by_user_id, now, saved_id,
                 ),
@@ -1806,6 +2132,297 @@ def list_planning_locations() -> list[dict[str, object]]:
     return [dict(row) for row in rows]
 
 
+def list_travel_routes() -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT *
+            FROM travel_routes
+            ORDER BY LOWER(origin_label), LOWER(destination_label)
+            """
+        ).fetchall()
+
+
+def get_travel_route(origin_label: object, destination_label: object) -> sqlite3.Row | None:
+    origin_key = calendar_location_key(canonical_travel_base_label(origin_label))
+    destination_key = calendar_location_key(canonical_travel_base_label(destination_label))
+    if not origin_key or not destination_key:
+        return None
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT * FROM travel_routes
+            WHERE origin_key = ? AND destination_key = ?
+            LIMIT 1
+            """,
+            (origin_key, destination_key),
+        ).fetchone()
+
+
+def upsert_travel_route(
+    *,
+    origin_label: str,
+    destination_label: str,
+    travel_minutes: int,
+    note: str = "",
+    source: str = "manual",
+    also_reverse: bool = False,
+) -> bool:
+    if int(travel_minutes or 0) <= 0:
+        return False
+    with get_connection() as conn:
+        _upsert_travel_route_conn(
+            conn,
+            origin_label=origin_label,
+            destination_label=destination_label,
+            travel_minutes=travel_minutes,
+            note=note,
+            source=source,
+            reverse_is_shared=also_reverse,
+        )
+        if also_reverse:
+            _upsert_travel_route_conn(
+                conn,
+                origin_label=destination_label,
+                destination_label=origin_label,
+                travel_minutes=travel_minutes,
+                note=note,
+                source=source,
+                reverse_is_shared=True,
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE travel_routes SET reverse_is_shared = 0
+                WHERE origin_key = ? AND destination_key = ?
+                """,
+                (
+                    calendar_location_key(canonical_travel_base_label(destination_label)),
+                    calendar_location_key(canonical_travel_base_label(origin_label)),
+                ),
+            )
+    return True
+
+
+def delete_travel_route(route_id: int) -> int:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM travel_routes WHERE id = ?", (route_id,)).fetchone()
+        if row is None:
+            return 0
+        result = conn.execute("DELETE FROM travel_routes WHERE id = ?", (route_id,))
+        if int(row["reverse_is_shared"] or 0):
+            conn.execute(
+                """
+                UPDATE travel_routes SET reverse_is_shared = 0
+                WHERE origin_key = ? AND destination_key = ?
+                """,
+                (row["destination_key"], row["origin_key"]),
+            )
+    return result.rowcount
+
+
+def list_known_place_labels() -> list[str]:
+    values: dict[str, str] = {}
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT origin_label AS label FROM travel_routes
+            UNION SELECT destination_label AS label FROM travel_routes
+            UNION SELECT track_label AS label FROM travel_time_defaults
+            UNION SELECT base_label AS label FROM travel_time_defaults
+            UNION SELECT name AS label FROM deputy_schedule_locations
+            UNION SELECT display_name AS label FROM crew_known_locations
+            """
+        ).fetchall()
+    for row in rows:
+        label = canonical_travel_base_label(row["label"])
+        key = calendar_location_key(label)
+        if key:
+            values.setdefault(key, label)
+    values.setdefault("officeclowplace", "Office / Clow Place")
+    return sorted(values.values(), key=str.lower)
+
+
+def refresh_crew_directory() -> None:
+    with get_connection() as conn:
+        _sync_crew_directory(conn)
+
+
+def list_crew_people() -> list[dict[str, object]]:
+    refresh_crew_directory()
+    with get_connection() as conn:
+        people = [dict(row) for row in conn.execute(
+            """
+            SELECT p.*, u.display_name AS app_user_name, u.deputy_email AS app_user_email
+            FROM crew_people p
+            LEFT JOIN app_users u ON u.id = p.app_user_id
+            ORDER BY p.is_active DESC, LOWER(p.canonical_display_name), p.id
+            """
+        ).fetchall()]
+        aliases_by_person: dict[int, list[str]] = {}
+        for row in conn.execute(
+            "SELECT person_id, alias FROM crew_aliases ORDER BY LOWER(alias)"
+        ).fetchall():
+            aliases_by_person.setdefault(int(row["person_id"]), []).append(str(row["alias"]))
+        schedule_rows = conn.execute(
+            """
+            SELECT employee_id, employee_name, area_name
+            FROM deputy_schedule_shifts
+            WHERE TRIM(COALESCE(employee_name, '')) != ''
+              AND TRIM(COALESCE(area_name, '')) != ''
+            """
+        ).fetchall()
+        vehicles = conn.execute(
+            """
+            SELECT employee_id, employee_name, area_name
+            FROM deputy_schedule_shifts
+            WHERE TRIM(COALESCE(employee_name, '')) != ''
+              AND (
+                area_name GLOB '[0-9][0-9][0-9]'
+                OR UPPER(area_name) LIKE 'RAV%'
+                OR UPPER(area_name) IN ('OB', 'TENDER', 'TRANSIT')
+              )
+            """
+        ).fetchall()
+    for person in people:
+        person_id = int(person["id"])
+        person["aliases"] = aliases_by_person.get(person_id, [])
+        person["aliases_text"] = ", ".join(person["aliases"])
+        identity_id = person.get("deputy_employee_id")
+        names = {
+            normalise_person_identity(person.get("canonical_display_name")),
+            normalise_person_identity(person.get("current_deputy_name")),
+        }
+        observed_positions = {
+            str(row["area_name"] or "").strip()
+            for row in schedule_rows
+            if (
+                identity_id is not None and row["employee_id"] == identity_id
+            ) or (
+                identity_id is None and normalise_person_identity(row["employee_name"]) in names
+            )
+        }
+        observed_vehicles = {
+            str(row["area_name"] or "").strip()
+            for row in vehicles
+            if (
+                identity_id is not None and row["employee_id"] == identity_id
+            ) or (
+                identity_id is None and normalise_person_identity(row["employee_name"]) in names
+            )
+        }
+        person["observed_positions"] = sorted(observed_positions - observed_vehicles, key=str.lower)
+        person["observed_vehicles"] = sorted(observed_vehicles, key=str.lower)
+    return people
+
+
+def crew_identity_records() -> list[dict[str, object]]:
+    with get_connection() as conn:
+        _sync_crew_directory(conn)
+        people = [dict(row) for row in conn.execute(
+            "SELECT * FROM crew_people WHERE is_active = 1 ORDER BY id"
+        ).fetchall()]
+        aliases: dict[int, list[str]] = {}
+        for row in conn.execute("SELECT person_id, alias FROM crew_aliases").fetchall():
+            aliases.setdefault(int(row["person_id"]), []).append(str(row["alias"]))
+    for person in people:
+        person["aliases"] = aliases.get(int(person["id"]), [])
+    return people
+
+
+def update_crew_person(
+    person_id: int,
+    *,
+    canonical_display_name: str,
+    app_user_id: int | None,
+    aliases: list[str],
+    is_active: bool,
+    admin_note: str,
+) -> tuple[bool, str]:
+    display_name = re.sub(r"\s+", " ", canonical_display_name.strip())
+    if not display_name:
+        return False, "Canonical display name is required."
+    clean_aliases: dict[str, str] = {}
+    for alias in aliases:
+        label = re.sub(r"\s+", " ", str(alias or "").strip(" ,;\t\r\n"))
+        key = normalise_person_identity(label)
+        if key:
+            clean_aliases.setdefault(key, label)
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        person = conn.execute("SELECT * FROM crew_people WHERE id = ?", (person_id,)).fetchone()
+        if person is None:
+            return False, "Crew member was not found."
+        if app_user_id is not None:
+            conflict = conn.execute(
+                "SELECT id FROM crew_people WHERE app_user_id = ? AND id != ?",
+                (app_user_id, person_id),
+            ).fetchone()
+            if conflict:
+                return False, "That app user is already linked to another crew member."
+        canonical_key = normalise_person_identity(display_name)
+        canonical_alias_conflict = conn.execute(
+            """
+            SELECT p.canonical_display_name
+            FROM crew_aliases a
+            JOIN crew_people p ON p.id = a.person_id
+            WHERE a.normalized_alias = ? AND a.person_id != ? AND p.is_active = 1
+            LIMIT 1
+            """,
+            (canonical_key, person_id),
+        ).fetchone()
+        if canonical_alias_conflict and is_active:
+            return False, (
+                f"Display name {display_name!r} conflicts with an alias for "
+                f"{canonical_alias_conflict['canonical_display_name']}."
+            )
+        for key, label in clean_aliases.items():
+            alias_conflicts = conn.execute(
+                """
+                SELECT p.canonical_display_name
+                FROM crew_aliases a
+                JOIN crew_people p ON p.id = a.person_id
+                WHERE a.normalized_alias = ? AND a.person_id != ?
+                """,
+                (key, person_id),
+            ).fetchall()
+            name_conflicts = [
+                row for row in conn.execute(
+                    "SELECT * FROM crew_people WHERE id != ? AND is_active = 1",
+                    (person_id,),
+                ).fetchall()
+                if key in {
+                    normalise_person_identity(row["canonical_display_name"]),
+                    normalise_person_identity(row["current_deputy_name"]),
+                }
+            ]
+            if alias_conflicts or name_conflicts:
+                names = sorted({
+                    str(row["canonical_display_name"])
+                    for row in [*alias_conflicts, *name_conflicts]
+                })
+                return False, f"Alias {label!r} is already assigned to or used by {', '.join(names)}."
+        conn.execute(
+            """
+            UPDATE crew_people SET canonical_display_name = ?, app_user_id = ?,
+                is_active = ?, admin_note = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (display_name, app_user_id, 1 if is_active else 0, admin_note.strip(), now, person_id),
+        )
+        conn.execute("DELETE FROM crew_aliases WHERE person_id = ?", (person_id,))
+        for key, label in clean_aliases.items():
+            conn.execute(
+                """
+                INSERT INTO crew_aliases (
+                    person_id, alias, normalized_alias, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (person_id, label, key, now, now),
+            )
+    return True, "Crew member saved."
+
+
 def set_planning_location_enabled(location_key: str, enabled: bool) -> bool:
     key = calendar_location_key(location_key)
     if not key:
@@ -1926,14 +2543,29 @@ def upsert_travel_time_default(
                 note.strip(),
             ),
         )
+        route_values = dict(
+            travel_minutes=max(1, int(travel_minutes)), source=clean_source,
+            sample_count=max(0, int(sample_count or 0)), first_seen_at=first_seen_at,
+            last_seen_at=last_seen_at, note=note, reverse_is_shared=True,
+        )
+        _upsert_travel_route_conn(conn, origin_label=clean_base, destination_label=clean_label, **route_values)
+        _upsert_travel_route_conn(conn, origin_label=clean_label, destination_label=clean_base, **route_values)
 
 
 def delete_travel_time_default(default_id: int) -> int:
     with get_connection() as conn:
+        row = conn.execute("SELECT * FROM travel_time_defaults WHERE id = ?", (default_id,)).fetchone()
         result = conn.execute(
             "DELETE FROM travel_time_defaults WHERE id = ?",
             (default_id,),
         )
+        if row is not None:
+            _track_key, track_label = canonical_travel_track(row["track_key"], row["track_label"])
+            _delete_shared_travel_route_pair_conn(
+                conn,
+                origin_label=row["base_label"],
+                destination_label=track_label,
+            )
     return result.rowcount
 
 
@@ -1952,9 +2584,15 @@ def update_travel_time_default(
         return 0
     now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
     with get_connection() as conn:
+        original = conn.execute(
+            "SELECT * FROM travel_time_defaults WHERE id = ?",
+            (default_id,),
+        ).fetchone()
+        if original is None:
+            return 0
         conflict = conn.execute(
             """
-            SELECT id
+            SELECT *
             FROM travel_time_defaults
             WHERE track_key = ? AND LOWER(base_label) = LOWER(?) AND id != ?
             LIMIT 1
@@ -1963,6 +2601,14 @@ def update_travel_time_default(
         ).fetchone()
         if conflict is not None:
             conn.execute("DELETE FROM travel_time_defaults WHERE id = ?", (int(conflict["id"]),))
+            _conflict_key, conflict_track = canonical_travel_track(
+                conflict["track_key"], conflict["track_label"]
+            )
+            _delete_shared_travel_route_pair_conn(
+                conn,
+                origin_label=conflict["base_label"],
+                destination_label=conflict_track,
+            )
         result = conn.execute(
             """
             UPDATE travel_time_defaults
@@ -1985,6 +2631,29 @@ def update_travel_time_default(
                 default_id,
             ),
         )
+        _original_key, original_track = canonical_travel_track(
+            original["track_key"], original["track_label"]
+        )
+        original_pair = {
+            calendar_location_key(canonical_travel_base_label(original["base_label"])),
+            calendar_location_key(canonical_travel_base_label(original_track)),
+        }
+        updated_pair = {
+            calendar_location_key(clean_base),
+            calendar_location_key(clean_label),
+        }
+        if original_pair != updated_pair:
+            _delete_shared_travel_route_pair_conn(
+                conn,
+                origin_label=original["base_label"],
+                destination_label=original_track,
+            )
+        route_values = dict(
+            travel_minutes=max(1, int(travel_minutes)), source="manual",
+            note=note, reverse_is_shared=True,
+        )
+        _upsert_travel_route_conn(conn, origin_label=clean_base, destination_label=clean_label, **route_values)
+        _upsert_travel_route_conn(conn, origin_label=clean_label, destination_label=clean_base, **route_values)
     return result.rowcount
 
 
@@ -3069,14 +3738,22 @@ def upsert_track_map(
     status: str,
     checked_at: str,
     updated_at: str,
+    image_width: int = 0,
+    image_height: int = 0,
+    byte_size: int = 0,
+    selected_source_url: str = "",
+    candidate_count: int = 0,
+    refresh_result: str = "",
 ) -> None:
     with get_connection() as conn:
         conn.execute(
             """
             INSERT INTO track_maps (
                 track_key, track_label, course_label, course_url, image_url,
-                file_name, content_type, image_hash, status, checked_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                file_name, content_type, image_hash, status, checked_at, updated_at,
+                image_width, image_height, byte_size, selected_source_url,
+                candidate_count, refresh_result
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(track_key) DO UPDATE SET
                 track_label = excluded.track_label,
                 course_label = excluded.course_label,
@@ -3087,7 +3764,13 @@ def upsert_track_map(
                 image_hash = excluded.image_hash,
                 status = excluded.status,
                 checked_at = excluded.checked_at,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                image_width = excluded.image_width,
+                image_height = excluded.image_height,
+                byte_size = excluded.byte_size,
+                selected_source_url = excluded.selected_source_url,
+                candidate_count = excluded.candidate_count,
+                refresh_result = excluded.refresh_result
             """,
             (
                 track_key,
@@ -3101,6 +3784,12 @@ def upsert_track_map(
                 status,
                 checked_at,
                 updated_at,
+                max(0, int(image_width or 0)),
+                max(0, int(image_height or 0)),
+                max(0, int(byte_size or 0)),
+                selected_source_url or image_url,
+                max(0, int(candidate_count or 0)),
+                refresh_result,
             ),
         )
 

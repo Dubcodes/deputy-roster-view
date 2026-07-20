@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_holiday_marker.html" import holiday_marker %}
 
 {% block title %}{{ month_name }} - Deputy Roster View{% endblock %}
 
@@ -25,6 +26,7 @@
             <strong>{{ day.date.strftime("%a") }}</strong>
             <span>{{ day.date.day }}</span>
           </a>
+          {{ holiday_marker(day.holiday) }}
           <div class="list-day-shifts">
             {% for roster in day.manual_rosters %}
               <a class="list-shift published-roster-marker" href="/day/{{ day.iso }}">
@@ -119,6 +121,7 @@
               <span>{{ day.date.strftime("%a") }}</span>
               <strong>{{ day.day_number }}</strong>
             </a>
+            {{ holiday_marker(day.holiday) }}
 
             <div class="shift-list">
               {% for roster in day.manual_rosters %}

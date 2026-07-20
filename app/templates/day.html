@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_holiday_marker.html" import holiday_marker %}
 
 {% block title %}{{ day_date.strftime("%A %d %B %Y") }} - Deputy Roster View{% endblock %}
 
@@ -6,7 +7,7 @@
   <section class="page-heading compact-heading">
     <div>
       <p class="eyebrow">Day</p>
-      <h1>{{ day_date.strftime("%A %d %B %Y") }}</h1>
+      <div class="date-heading"><h1>{{ day_date.strftime("%A %d %B %Y") }}</h1>{{ holiday_marker(day_holiday) }}</div>
     </div>
     <div class="heading-actions">
       <a class="button button-secondary" href="{{ back_to_month_url or '/month?year=' ~ month_year ~ '&month=' ~ month_number }}">Back to month</a>
@@ -278,8 +279,10 @@
 
         <details class="maths-panel maths-panel-compact">
           <summary>
-            {% if shift.timing_math.race_day.available %}
+            {% if shift.timing_math.race_day.available and shift.timing_math.race_day.complete %}
               Start {{ shift.timing_math.race_day.start_label }}, finish {{ shift.timing_math.race_day.end_label }} = {{ shift.timing_math.race_day.hours_label }}
+            {% elif shift.timing_math.race_day.available %}
+              Partial race-day calculation · {{ shift.timing_math.race_day.warning }}
             {% else %}
               Start {{ shift.timing_math.start_label }}, finish {{ shift.timing_math.end_label }} = {{ shift.timing_math.raw_label }}
             {% endif %}
@@ -361,7 +364,10 @@
           alt="{{ track_map.course_label }} racecourse 2D track map"
           loading="lazy"
           decoding="async"
+          {% if track_map.image_width and track_map.image_height %}width="{{ track_map.image_width }}" height="{{ track_map.image_height }}"{% endif %}
+          style="--track-map-natural-width: {{ track_map.image_width or 720 }}px"
         >
+        <a class="track-map-natural-link" href="{{ track_map.image_url }}" target="_blank" rel="noopener">View cached map at natural size</a>
       {% endfor %}
     </section>
   {% endif %}

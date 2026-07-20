@@ -94,6 +94,18 @@ The same roster note can be captured under several users. Travel learning counts
 
 Planning visibility and travel defaults share one Admin Locations list for clarity. The Active switch still affects only public planning hints, and deleting a travel row does not delete a public calendar location.
 
+Legacy defaults are retained because they are useful learned evidence, but calculations now consume a directed `travel_routes` matrix. Migration creates both directions with a shared-value marker so ordinary existing days keep working. A later manual route in one direction can differ from its reverse. Outbound and return routes always display separately, and incomplete return data remains visibly incomplete.
+
+## Crew Identity Directory
+
+Crew identity is broader than app accounts. Canonical people are gathered from Deputy rows, app users, published assignments, and manual labels. Deputy employee ID prevents same-name people from merging. Aliases are normalized for case, punctuation, and spacing, belong to one canonical person, and cannot be active for two people. In particular, `Gaz`/`Gazz` is not seeded against the first Gary; an admin must select the correct Gary.
+
+Aliases enrich missing note context such as vehicle allocation. They never replace a Deputy employee assignment or force a match when more than one person remains possible.
+
+## Public Holiday Markers
+
+Holiday rules run locally on every rendered date, with a cached per-year calculation and no request-time API. National rules include observed days and the statutory Matariki schedule. Regional anniversary support is opt-in through `NZ_HOLIDAY_REGION`. One reusable template macro renders the accessible date-level marker; it has no pay-calculation effect.
+
 ## Public Racing Calendars
 
 Love Racing's public RaceInfo/calendar pages expose meeting date, club/meeting, and racecourse information in the page content, but not dependable Trackside start/finish/crew data. The app stores matching future rows in `love_racing_meetings` only for locations already known from collected roster data.
@@ -107,6 +119,8 @@ Selecting a planning marker stays inside the app and opens that date's day view.
 The live Love Racing calendar endpoint may return HTTP 403 to server-side requests. Refresh therefore falls back to NZTR's official final calendar PDF, using its positioned weekly columns and thoroughbred club codes. Static aliases may identify a known location, but must not introduce locations the collected roster data has never seen. Refresh runs weekly and replaces the prior snapshot so schedule corrections remove stale markers without retaining downloaded files.
 
 Official 2D course maps are a separate, slower-changing cache. The app keeps a verified course-to-image catalog, downloads maps only for roster-known Thoroughbred locations, and checks them roughly monthly. Cached images are served internally on day pages; uncertain matches, Harness/Greyhound meetings, and failed downloads produce no map rather than an incorrect one.
+
+Course-page discovery evaluates all credible official image attributes and downloads candidates before choosing by decoded resolution. The chosen source and natural dimensions are persisted. Refresh reports upgraded, unchanged, unavailable, or failed and preserves the previous file on any failed/lower-quality replacement.
 
 ## Manual Roster Publishing Trial
 

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_holiday_marker.html" import holiday_marker %}
 
 {% block title %}Timesheet {{ summary["period_label"] }} - Deputy Roster View{% endblock %}
 
@@ -26,6 +27,7 @@
               <span>{{ day["locations"] }}</span>
             {% endif %}
           </a>
+          {{ holiday_marker(day.holiday) }}
           {% for note in day["notes"] %}
             <p class="timesheet-note">{{ note }}</p>
           {% endfor %}
@@ -37,7 +39,7 @@
                 <section class="timesheet-calculation">
                   <strong>{{ shift.track_label }}</strong>
                   {% if calculation.available %}
-                    <p>Start {{ calculation.start_label }}, finish {{ calculation.end_label }} = {{ calculation.hours_label }}</p>
+                    {% if calculation.complete %}<p>Start {{ calculation.start_label }}, finish {{ calculation.end_label }} = {{ calculation.hours_label }}</p>{% else %}<p class="calculation-warning">{{ calculation.warning }}. Finish and total remain incomplete.</p>{% endif %}
                     <dl class="timeline-list maths-segments">
                       {% for line in calculation.lines %}
                         <div><dt>{{ line.value }}</dt><dd>{{ line.label }}</dd></div>

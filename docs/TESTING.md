@@ -5,7 +5,7 @@
 Run before committing:
 
 ```powershell
-python -m py_compile app\main.py app\database.py app\deputy_web.py app\scheduler.py app\sync_ics.py app\config.py app\auth.py app\security.py app\user_credentials.py app\track_maps.py
+python -m py_compile app\main.py app\database.py app\deputy_web.py app\scheduler.py app\sync_ics.py app\config.py app\auth.py app\security.py app\user_credentials.py app\track_maps.py app\public_holidays.py
 git -C \\192.168.0.238\storage\projects\deputy-recalender diff --check
 ```
 
@@ -32,6 +32,7 @@ Run this after changing account, settings, admin, or form-handling code. It crea
 ```powershell
 python scripts\smoke_route_flows.py
 python scripts\smoke_love_racing.py
+python scripts\smoke_extended_features.py
 ```
 
 ## Manual App Checks
@@ -58,6 +59,10 @@ After Portainer redeploy:
 - In Settings, expand Your roster stats and confirm weekday cards show rostered hours and shift counts, today is excluded from completed totals, and the location-hours summary remains readable.
 - In the crew calendar, open two locations on the same date and confirm each day shows only that location's crew. Confirm Back to month and the calendar icon both retain crew view.
 - In Admin, confirm Locations starts collapsed and that each location can save separate office and hotel travel times.
+- Expand Travel-route matrix and confirm opposite directions can keep different values. On an overnight race day, confirm the morning hotel route and evening office route are labelled separately.
+- Expand Crew directory, confirm Deputy-only people appear, and confirm an alias cannot be active for both Gary records.
+- On Waitangi Day or another national holiday, confirm one keyboard-focusable star appears beside the date in personal month, shared month, list, day, and timesheet views.
+- Refresh Track Maps and inspect the recorded dimensions/result. At phone width, confirm the map remains inside the page, keeps its aspect ratio, and is not enlarged beyond its natural width.
 - Confirm each user shows next planned sync and last sync status.
 - If using the temporary tunnel stack, confirm its `cloudflared` container logs show a `trycloudflare.com` URL.
 
@@ -67,4 +72,4 @@ The route smoke also verifies that Office/Clow Place travel defaults collapse to
 
 - No automated unit tests yet.
 - Deputy web capture is hard to test without live credentials.
-- Hotel selection and hotel-to-track travel remain manual until real stay details are known.
+- Live Deputy capture remains difficult to reproduce without credentials; parsing and database behavior are covered with sanitized fixtures.

@@ -42,6 +42,8 @@ The effective schedule interpretation pass also resolves context-dependent area 
 
 All users currently belong to one shared crew pool, `Northern Crew`. When a user's rostered shift syncs with a usable location, the app records that location in `crew_known_locations` for the shared crew. This does not filter open shifts or change the UI yet; it only leaves a clean data shape for future location, crew, or region tagging.
 
+`crew_people` and `crew_aliases` form the canonical identity directory. It is refreshed from Deputy employee rows, registered users, roster-builder assignments, and published snapshots. Deputy employee ID is the strongest key; name-only observations are merged only on a unique normalized full-name match. Aliases belong to one person and are rejected when they would be ambiguous across active people. Schedule assignments remain authoritative; directory aliases only fill missing note/vehicle context and canonicalize display names.
+
 ### Love Racing Planning Calendar
 
 `app/love_racing.py` first reads Love Racing's public calendar endpoint. If that endpoint is blocked, it falls back to NZTR's official final racing-calendar PDF and extracts the positioned thoroughbred meeting rows. Only racecourses already known from collected roster/location data are retained. Saved rows live in `love_racing_meetings` and are rendered as planning hints on `/month`.
@@ -55,6 +57,16 @@ Admins can include or ignore individual saved planning locations. The preference
 ### Love Racing Track Maps
 
 `app/track_maps.py` maintains a small verified catalog of northern Thoroughbred course pages and their official 2D map images. A monthly scheduler job checks only courses already known from roster data, downloads changed image bytes into `data/track_maps`, and stores metadata in `track_maps`. Day views serve the local file through `/track-map/{track_key}` so users do not leave the app and slow/blocked Love Racing page requests do not affect normal page loads.
+
+Discovery considers the track image's `src`, `srcset`, `data-src`, `data-original`, parent link, Open Graph image, and verified catalog fallback. Love Racing's `Common/Image.ashx` proxy is converted to its direct `OnHorseFiles` source. Candidates must be supported images, have sensible decoded dimensions, and match the expected course; the largest valid official candidate wins. Width, height, byte size, candidate count, selected source URL, and refresh result are stored. A failed or lower-quality replacement never removes a working cache.
+
+### Travel Routes And Holidays
+
+`travel_time_defaults` remains the learning/compatibility layer. `travel_routes` stores the directed origin/destination matrix. The migration copies each legacy base-to-track default into an outbound and reverse row marked as sharing the same legacy value. Later edits can make either direction explicit.
+
+Race-day calculation resolves start origin and finish destination separately using day-specific/published selections, user hotel assignments, parsed accommodation notes, adjacent overnight travel context, then saved routes. Return travel is never copied from an unrelated outbound leg. Missing return data produces a partial calculation and warning rather than a false finish.
+
+`app/public_holidays.py` calculates national holidays locally, including observed-day, Easter, and legislated Matariki rules. `NZ_HOLIDAY_REGION` optionally enables supported regional anniversary rules. Templates receive one date-level holiday object and use the shared accessible marker macro.
 
 ### Multi-User Sync Queue
 
@@ -94,6 +106,8 @@ Admins should prefer deactivating a user over hard deletion when someone leaves.
 Deactivated accounts and revoked trusted devices are purged after 30 days. Users can deactivate themselves from Settings; admins can deactivate/reactivate users and can manually run the cleanup or purge an already deactivated user. Active users are not purged by this cleanup.
 
 Track travel defaults live in `travel_time_defaults`. Admin-entered defaults are `manual`; learned defaults are inferred from previous saved roster notes that had both base and on-track times. An explicit preceding `Travel then Overnighter` shift can also teach the office-to-track journey for the next day's race location. `Office` and `Clow Place` are stored as one canonical base, while named hotels remain separate bases. Race-day maths uses these only when a note is missing either base or on-track timing.
+
+Directed copies live in `travel_routes`. A race day can therefore use `Beachfront Motel -> Ruakaka` for its morning leg and `Ruakaka -> Office / Clow Place` for its return. Published roster days may save explicit `start_origin` and `finish_destination` values without changing the user's account schema.
 
 Learning collapses duplicate user copies into one sample per track/date. Generic schedule context is excluded, and the legacy `G Cambridge` label is canonicalized to `Cambridge Greyhound` without merging it into the logically separate Harness location.
 

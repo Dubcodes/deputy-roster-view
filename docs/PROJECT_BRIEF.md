@@ -31,6 +31,10 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 - Let users change their own PIN, update their saved Deputy login details, and submit an error report with recent redacted diagnostics.
 - Let users deactivate their own account, with deactivated account/device data purged after a 30-day cooling-off period.
 - Let admins manage default track travel times used when Deputy roster notes are missing base/on-track timing.
+- Let admins manage directed travel routes so outbound and return destinations can differ across overnight and multi-day trips.
+- Keep a canonical crew directory for Deputy-only crew, app users, published assignees, and unambiguous aliases.
+- Mark New Zealand public holidays consistently on calendar, day, and timesheet dates without changing pay or roster hours.
+- Cache the best validated official Love Racing track-map candidate with its natural dimensions and source diagnostics.
 - Let admins build race-day roster drafts, review changes against the last published version, and publish assignments to the selected crew as an early test of replacing Deputy.
 - Keep personal roster views scoped to the signed-in user's own shifts. Shared crew context is only shown as race-day schedule context.
 - Stagger background syncs across users so Deputy is not hit by every account at once.
@@ -41,7 +45,7 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 - Applying for shifts.
 - Writing back to Deputy.
 - Official Deputy API integration unless the user later gets API access.
-- Full overnight/travel-day calculations beyond simple display and next-day crew fallback.
+- Full user-specific home-origin management for Auckland-based or other future bases. The route model can accept those origins later.
 - Timesheet submission and leave/time-off workflows.
 - Treating public racing calendars as confirmed work. They may become a faint planning overlay later, but Deputy remains the source of truth for rostered work.
 - Spreadsheet roster import until a real source spreadsheet is available to map and test.

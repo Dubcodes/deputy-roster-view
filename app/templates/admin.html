@@ -82,10 +82,55 @@
     <p class="muted">Maps are cached only for thoroughbred tracks already known from crew rosters.</p>
     {% if track_maps %}
       <p>{{ track_maps|selectattr("status", "equalto", "ok")|list|length }} maps ready · {{ track_maps|length }} checked</p>
+      <div class="track-map-diagnostics">
+        {% for map in track_maps %}
+          <div>
+            <strong>{{ map.track_label }}</strong>
+            <span>{% if map.image_width and map.image_height %}{{ map.image_width }}×{{ map.image_height }} · {{ map.byte_size }} bytes{% else %}Dimensions not recorded yet{% endif %}</span>
+            <small>{{ map.refresh_result or map.status }}{% if map.candidate_count %} · {{ map.candidate_count }} candidate{% if map.candidate_count != 1 %}s{% endif %}{% endif %}</small>
+          </div>
+        {% endfor %}
+      </div>
     {% else %}
       <p class="muted">No track maps have been checked yet.</p>
     {% endif %}
   </section>
+
+  <details class="table-panel travel-route-panel">
+    <summary class="management-panel-summary">
+      <span><strong>Travel-route matrix</strong><small>{{ travel_routes|length }} directed routes</small></span>
+      <span>Manage outbound and return legs</span>
+    </summary>
+    <div class="management-panel-body">
+      <p class="muted">Each direction is stored independently. “Also use for reverse” creates the reverse route with the same value; editing one direction later makes it explicit.</p>
+      <form class="settings-form travel-route-form" action="/admin/travel-routes" method="post">
+        <div class="form-grid-two">
+          <label class="form-row"><span>Origin</span><input name="origin_label" list="known-places" placeholder="Beachfront Motel" required></label>
+          <label class="form-row"><span>Destination</span><input name="destination_label" list="known-places" placeholder="Ruakaka" required></label>
+        </div>
+        <datalist id="known-places">{% for place in known_places %}<option value="{{ place }}">{% endfor %}</datalist>
+        <div class="form-grid-two">
+          <label class="form-row"><span>Travel minutes</span><input type="number" name="travel_minutes" min="1" max="720" required></label>
+          <label class="form-row"><span>Optional note</span><input name="note" placeholder="Road, stay, or route detail"></label>
+        </div>
+        <label class="builder-travel-toggle"><input type="checkbox" name="also_reverse" value="1"><span>Also use this value for the reverse route</span></label>
+        <button class="button button-secondary" type="submit">Save directed route</button>
+      </form>
+      <div class="travel-route-list" role="table" aria-label="Directed travel routes">
+        {% for route in travel_routes %}
+          <article class="travel-route-row" role="row">
+            <span><strong>{{ route.origin_label }}</strong> → <strong>{{ route.destination_label }}</strong></span>
+            <span>{{ route.travel_minutes }} min</span>
+            <span><span class="badge">{{ route.source }}</span>{% if route.reverse_is_shared %}<span class="badge">same value used in reverse</span>{% endif %}</span>
+            <span>{{ route.updated_at|datetime if route.updated_at else "Unknown" }}{% if route.note %}<small>{{ route.note }}</small>{% endif %}</span>
+            <form action="/admin/travel-routes/{{ route.id }}/delete" method="post"><button class="button button-compact button-secondary" type="submit">Delete</button></form>
+          </article>
+        {% else %}
+          <div class="empty-state">No directed routes saved.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </details>
 
   <section class="table-panel love-racing-panel">
     <div class="section-heading">
@@ -285,6 +330,38 @@
         {% endfor %}
       </div>
     {% endif %}
+    </div>
+  </details>
+
+  <details class="table-panel crew-directory-panel">
+    <summary class="management-panel-summary">
+      <span><strong>Crew directory</strong><small>{{ crew_people|length }} known people</small></span>
+      <span>Names, Deputy IDs, aliases, and app links</span>
+    </summary>
+    <div class="management-panel-body">
+      <p class="muted">Deputy employee IDs keep people separate. Aliases are case/punctuation insensitive and are rejected when already active for someone else.</p>
+      <div class="crew-directory-list">
+        {% for person in crew_people %}
+          <details class="crew-directory-row{% if not person.is_active %} is-inactive{% endif %}">
+            <summary>
+              <span><strong>{{ person.canonical_display_name }}</strong><small>{{ person.current_deputy_name or "No Deputy name" }}{% if person.deputy_employee_id %} · Deputy #{{ person.deputy_employee_id }}{% endif %}</small></span>
+              <span>{% if person.aliases %}{{ person.aliases|join(", ") }}{% else %}No aliases{% endif %}</span>
+              <span class="badge">{{ "Active" if person.is_active else "Inactive" }}</span>
+            </summary>
+            <form class="settings-form crew-person-form" action="/admin/crew/{{ person.id }}" method="post">
+              <div class="form-grid-two">
+                <label class="form-row"><span>Canonical display name</span><input name="canonical_display_name" value="{{ person.canonical_display_name }}" required></label>
+                <label class="form-row"><span>Linked app user</span><select name="app_user_id"><option value="">Not linked</option>{% for app_user in app_users %}<option value="{{ app_user.id }}"{% if person.app_user_id == app_user.id %} selected{% endif %}>{{ app_user.display_name or app_user.deputy_email }}</option>{% endfor %}</select></label>
+              </div>
+              <label class="form-row"><span>Aliases (comma or line separated)</span><textarea name="aliases" rows="2" placeholder="Gaz, Gazz">{{ person.aliases_text }}</textarea></label>
+              <label class="form-row"><span>Admin note</span><textarea name="admin_note" rows="2">{{ person.admin_note or '' }}</textarea></label>
+              <label class="builder-travel-toggle"><input type="checkbox" name="is_active" value="1"{% if person.is_active %} checked{% endif %}><span>Active crew identity</span></label>
+              {% if person.observed_positions or person.observed_vehicles %}<p class="muted">Observed only: {{ person.observed_positions|join(", ") or "no positions" }}{% if person.observed_vehicles %} · Vehicles {{ person.observed_vehicles|join(", ") }}{% endif %}</p>{% endif %}
+              <button class="button button-compact" type="submit">Save person</button>
+            </form>
+          </details>
+        {% endfor %}
+      </div>
     </div>
   </details>
 

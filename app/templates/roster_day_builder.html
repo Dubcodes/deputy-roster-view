@@ -75,6 +75,18 @@
     <details class="table-panel builder-travel-panel"{% if roster_day.day_type == 'travel_day' %} open{% endif %}>
       <summary>Travel day and hotels <span>Optional · expand when needed</span></summary>
       <div class="builder-travel-body">
+        <div class="form-grid-two">
+          <label class="form-row{% if 'start_origin' in changed_fields %} is-changed{% endif %}">
+            <span>Race-day start origin</span>
+            <input type="text" name="start_origin" list="known-place-options" value="{{ roster_day.start_origin or '' }}" placeholder="Office / Clow Place or hotel">
+          </label>
+          <label class="form-row{% if 'finish_destination' in changed_fields %} is-changed{% endif %}">
+            <span>Race-day finish destination</span>
+            <input type="text" name="finish_destination" list="known-place-options" value="{{ roster_day.finish_destination or '' }}" placeholder="Office / Clow Place or hotel">
+          </label>
+        </div>
+        <datalist id="known-place-options">{% for place in place_options %}<option value="{{ place }}">{% endfor %}</datalist>
+        <p class="muted">These directed selections override inferred hotel/office context for this published race day.</p>
         <label class="builder-travel-toggle">
           <input type="checkbox" name="is_travel_day" value="1"{% if roster_day.day_type == 'travel_day' %} checked{% endif %}>
           <span>This is a travel day</span>
@@ -128,8 +140,8 @@
             <select name="assignee" aria-label="Person working {{ position }}">
               <option value="">Not assigned</option>
               <option value="tbc"{% if assignment.assignee_label == 'TBC' and not assignment.user_id %} selected{% endif %}>TBC</option>
-              {% for user in users %}
-                <option value="{{ user.id }}"{% if assignment.user_id == user.id %} selected{% endif %}>{{ user.display_name or user.deputy_email }}</option>
+              {% for person in crew_options %}
+                <option value="{{ person.value }}"{% if assignment.user_id and assignment.user_id == person.user_id %} selected{% elif not assignment.user_id and assignment.assignee_label == person.label %} selected{% endif %}>{{ person.label }}</option>
               {% endfor %}
             </select>
             <select name="vehicle_label" aria-label="Vehicle for {{ position }}">

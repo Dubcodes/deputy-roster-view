@@ -69,6 +69,7 @@ def main() -> None:
         init_db,
         list_planning_locations,
         list_travel_time_defaults,
+        list_travel_routes,
         save_love_racing_meetings,
         save_deputy_web_capture_diagnostic,
         save_deputy_web_schedule,
@@ -214,6 +215,12 @@ def main() -> None:
         raise AssertionError(f"Expected legacy Office/Clow Place rows to merge, got {migrated_legacy!r}")
     if migrated_legacy[0]["base_label"] != "Office / Clow Place" or migrated_legacy[0]["travel_minutes"] != 75:
         raise AssertionError(f"Expected latest manual legacy value to win migration, got {migrated_legacy!r}")
+    migrated_routes = [
+        dict(row) for row in list_travel_routes()
+        if "Legacy Venue" in {row["origin_label"], row["destination_label"]}
+    ]
+    if len(migrated_routes) != 2 or not all(int(row["reverse_is_shared"] or 0) for row in migrated_routes):
+        raise AssertionError(f"Expected legacy default to migrate into a shared directed pair, got {migrated_routes!r}")
     migrated_greyhound = [
         dict(row) for row in list_travel_time_defaults() if row["track_key"] == "cambridgegreyhound"
     ]

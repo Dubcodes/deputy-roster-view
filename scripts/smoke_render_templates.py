@@ -68,6 +68,7 @@ def render_day_template() -> None:
         current_user=None,
         date_text="2026-06-13",
         day_date=date(2026, 6, 13),
+        day_holiday={"is_public_holiday": True, "names": ["Waitangi Day"], "name": "Waitangi Day", "aria_label": "Public holiday: Waitangi Day"},
         month_year=2026,
         month_number=6,
         deputy_schedule_changed=False,
@@ -78,6 +79,8 @@ def render_day_template() -> None:
                 "track_label": "Te Rapa",
                 "course_label": "Te Rapa",
                 "image_url": "/track-map/terapa",
+                "image_width": 1200,
+                "image_height": 800,
             }
         ],
         shifts=[
@@ -121,6 +124,7 @@ def render_day_template() -> None:
                     "raw_label": "9h 15m",
                     "race_day": {
                         "available": True,
+                        "complete": True,
                         "lines": [
                             {"label": "Clow Place", "value": "08:30"},
                             {"label": "Back at base", "value": "17:45"},
@@ -141,6 +145,8 @@ def render_day_template() -> None:
         raise AssertionError("Day template did not render per-shift location colour style.")
     if 'src="/track-map/terapa"' not in html or 'alt="Te Rapa racecourse 2D track map"' not in html:
         raise AssertionError("Day template did not render the cached track map.")
+    if 'aria-label="Public holiday: Waitangi Day"' not in html:
+        raise AssertionError("Day template did not render an accessible public-holiday marker.")
 
 
 def render_month_template() -> None:
@@ -176,6 +182,7 @@ def render_month_template() -> None:
         "in_month": True,
         "is_today": False,
         "shifts": [shift],
+        "holiday": {"is_public_holiday": True, "names": ["Waitangi Day"], "name": "Waitangi Day", "aria_label": "Public holiday: Waitangi Day"},
         "open_shifts": [],
         "timesheet": None,
     }
@@ -200,9 +207,41 @@ def render_month_template() -> None:
         raise AssertionError("Month template did not render a calendar shift card.")
     if "--shift-location-colour: var(--location-colour-8)" not in html:
         raise AssertionError("Month template did not render per-shift location colour style.")
+    if html.count('aria-label="Public holiday: Waitangi Day"') != 1:
+        raise AssertionError("Month date should render exactly one holiday marker regardless of shift count.")
+
+    list_html = template.render(
+        request=SimpleNamespace(url=SimpleNamespace(path="/month", query="scope=global"), cookies={}),
+        notice=None, current_user=None, view="list", global_view=True,
+        active_days=[day], weeks=[], upcoming_shifts=[], today=date(2026, 6, 14),
+        month_name="June 2026", header_prev_url="#", header_next_url="#",
+        month_view_url="#", list_view_url="#",
+    )
+    if 'aria-label="Public holiday: Waitangi Day"' not in list_html:
+        raise AssertionError("Shared/global month list did not render the holiday marker.")
+
+
+def render_timesheet_template() -> None:
+    env = Environment(loader=FileSystemLoader(ROOT / "app" / "templates"))
+    env.filters.update(datetime=datetime_filter, time=str, day_short=str, hours=str, urlencode=quote_plus)
+    env.globals["theme_values"] = THEME_VALUES
+    html = env.get_template("timesheet.html").render(
+        request={}, notice=None, current_user=None, month_year=2026, month_number=2,
+        summary={
+            "period_label": "24 Jan-06 Feb 2026", "total": 0,
+            "days": [{
+                "iso": "2026-02-06", "date_label": "Fri 06 Feb", "total": 0,
+                "locations": "-", "shifts": [], "notes": [],
+                "holiday": {"is_public_holiday": True, "names": ["Waitangi Day"], "name": "Waitangi Day", "aria_label": "Public holiday: Waitangi Day"},
+            }],
+        },
+    )
+    if 'aria-label="Public holiday: Waitangi Day"' not in html:
+        raise AssertionError("Timesheet row did not render the holiday marker.")
 
 
 if __name__ == "__main__":
     render_day_template()
     render_month_template()
+    render_timesheet_template()
     print("template smoke render ok")
