@@ -54,6 +54,7 @@ The UI should highlight changes, but avoid noisy false positives:
 
 - Own shift timing/note/title changes should flag the shift as changed.
 - Crew row badges should only show assignment changes, not timing-only changes.
+- Connected crew changes are reconstructed from authoritative before/after event snapshots, not inferred solely from row IDs at render time. Persist complete grouped summaries, keep crew-table messages short, and retain the legacy assignment-history table for existing records.
 
 ## Raw Data Belongs In Diagnostics
 
@@ -106,6 +107,8 @@ Aliases enrich missing note context such as vehicle allocation. They never repla
 
 Holiday rules run locally on every rendered date, with a cached per-year calculation and no request-time API. National rules include observed days and the statutory Matariki schedule. Regional anniversary support is opt-in through `NZ_HOLIDAY_REGION`. One reusable template macro renders the accessible date-level marker; it has no pay-calculation effect.
 
+Calendar, list, day, and timesheet headings reserve normal-flow space for the marker. The visible star stays small while its focusable target and constrained popover provide touch and keyboard usability at narrow phone widths.
+
 ## Public Racing Calendars
 
 Love Racing's public RaceInfo/calendar pages expose meeting date, club/meeting, and racecourse information in the page content, but not dependable Trackside start/finish/crew data. The app stores matching future rows in `love_racing_meetings` only for locations already known from collected roster data.
@@ -130,7 +133,7 @@ Known Deputy areas seed the position list, active app users seed the crew list, 
 
 Future personal calendar feeds should use a separate random revocable token per user because calendar clients cannot complete the normal PIN/cookie login. Store only a token hash. The feed must include only that user's published assignments, use a stable UID per roster day/user, and increment `SEQUENCE` when a roster version is published. Initially expose office start, track, position, vehicle, and essential notes; do not invent an end time when it is unknown.
 
-`SVT` is interpreted from the complete event crew rather than expanded unconditionally. A distinct overlapping `VT` assignment for another employee at the same date and Deputy location proves that the `SVT` employee is handling Sound only. Without that evidence the combined `Sound VT` label is preserved.
+`SVT` is interpreted from the complete event crew rather than expanded unconditionally. A distinct overlapping `VT` assignment for another employee at the same date and Deputy location proves that the `SVT` employee is handling Sound only. Without that evidence the combined `Sound/VT` label is preserved.
 
 Spreadsheet paste must populate a draft preview and must never publish directly. Build the column adapter only after a real spreadsheet sample is available.
 

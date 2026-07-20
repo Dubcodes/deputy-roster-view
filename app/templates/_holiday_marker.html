@@ -1,6 +1,6 @@
-{% macro holiday_marker(holiday) -%}
+{% macro holiday_marker(holiday, align="end") -%}
   {% if holiday and holiday.is_public_holiday %}
-    <details class="holiday-marker">
+    <details class="holiday-marker holiday-marker-{{ align }}">
       <summary aria-label="{{ holiday.aria_label }}" title="{{ holiday.name }}">★</summary>
       <span class="holiday-popover" role="status">{% for name in holiday.names %}<span>{{ name }}</span>{% endfor %}</span>
     </details>

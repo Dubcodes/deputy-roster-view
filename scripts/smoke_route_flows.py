@@ -61,8 +61,10 @@ def main() -> None:
     from fastapi.testclient import TestClient
 
     from app.database import (
+        _compare_event_assignments,
         create_app_user,
         fetch_deputy_assignment_history_for_date,
+        fetch_deputy_event_changes_for_date,
         fetch_love_racing_meetings_between,
         get_connection,
         get_app_user_by_email,
@@ -202,6 +204,104 @@ def main() -> None:
     assignment_history = fetch_deputy_assignment_history_for_date("2026-07-18", [88])
     if not assignment_history or assignment_history[0]["old_employee_name"] != "Previous Operator" or assignment_history[0]["new_employee_name"] != "Current Operator":
         raise AssertionError(f"Expected durable crew assignment history, got {assignment_history!r}")
+
+    event_coverage = [{
+        "start_date": "2026-07-18", "end_date": "2026-07-18",
+        "mode": "selected", "location_ids": [188],
+    }]
+    before_event_rows = [
+        (11001, "Side 2", 51, "Previous Person"),
+        (11002, "SVT", 52, "Grant Woolston"),
+        (11003, "VT", 53, "Gary McClure"),
+        (11004, "CCU2", 54, "Laine Baldwin"),
+    ]
+    save_deputy_web_schedule({
+        "captured_at": "2026-07-18T20:00:00+12:00", "areas": [],
+        "locations": [{"id": 188, "name": "T-Ruakaka", "address": ""}],
+        "extracted_shifts": [], "schedule_coverage": event_coverage,
+        "extracted_schedule_shifts": [{
+            "id": shift_id, "area": shift_id, "areaName": position,
+            "areaLocationId": 188, "employee": employee_id, "employeeName": employee_name,
+            "start": "2026-07-18T09:00:00+12:00", "end": "2026-07-18T18:00:00+12:00",
+            "duration": 9, "isPublished": True,
+        } for shift_id, position, employee_id, employee_name in before_event_rows],
+    })
+    after_event_rows = [
+        (12001, "Side 2", 54, "Laine Baldwin"),
+        (12002, "SVT", 52, "Grant Woolston"),
+        (12003, "CCU2", 53, "Gary McClure"),
+    ]
+    event_result = save_deputy_web_schedule({
+        "captured_at": "2026-07-18T21:26:00+12:00", "areas": [],
+        "locations": [{"id": 188, "name": "T-Ruakaka", "address": ""}],
+        "extracted_shifts": [], "schedule_coverage": event_coverage,
+        "extracted_schedule_shifts": [{
+            "id": shift_id, "area": shift_id, "areaName": position,
+            "areaLocationId": 188, "employee": employee_id, "employeeName": employee_name,
+            "start": "2026-07-18T09:00:00+12:00", "end": "2026-07-18T18:00:00+12:00",
+            "duration": 9, "isPublished": True,
+        } for shift_id, position, employee_id, employee_name in after_event_rows],
+    })
+    event_history = [dict(row) for row in fetch_deputy_event_changes_for_date("2026-07-18", [188])]
+    event_summaries = {str(row["display_summary"]) for row in event_history}
+    expected_event_summaries = {
+        "Crew move: Laine Baldwin — CCU2 → Side 2",
+        "Crew move: Gary McClure — VT → CCU2",
+        "Crew roles combined: Sound Grant Woolston + VT Gary McClure → Sound/VT Grant Woolston",
+        "Crew: Side 2 — Previous Person → Laine Baldwin",
+    }
+    if event_result["event_changes_saved"] != 4 or event_summaries != expected_event_summaries:
+        raise AssertionError(f"Connected crew changes were not reconstructed: {event_history!r}")
+    repeated_result = save_deputy_web_schedule({
+        "captured_at": "2026-07-18T21:30:00+12:00", "areas": [],
+        "locations": [{"id": 188, "name": "T-Ruakaka", "address": ""}],
+        "extracted_shifts": [], "schedule_coverage": event_coverage,
+        "extracted_schedule_shifts": [{
+            "id": shift_id, "area": shift_id, "areaName": position,
+            "areaLocationId": 188, "employee": employee_id, "employeeName": employee_name,
+            "start": "2026-07-18T09:00:00+12:00", "end": "2026-07-18T18:00:00+12:00",
+            "duration": 9, "isPublished": True,
+        } for shift_id, position, employee_id, employee_name in after_event_rows],
+    })
+    if repeated_result["event_changes_saved"] != 0 or len(fetch_deputy_event_changes_for_date("2026-07-18", [188])) != 4:
+        raise AssertionError("An unchanged repeated capture duplicated event-level crew history.")
+
+    def event_item(position_key: str, position_label: str, identity: str, name: str) -> dict[str, object]:
+        return {
+            "position_key": position_key,
+            "position_label": position_label,
+            "identity": identity,
+            "employee_id": None,
+            "employee_name": name,
+            "is_open": identity == "open",
+            "start_at": "2026-07-18T09:00:00+12:00",
+            "end_at": "2026-07-18T18:00:00+12:00",
+        }
+
+    transition_checks = {
+        "replacement": _compare_event_assignments(
+            [event_item("side1", "Side 1", "employee:1", "First Operator")],
+            [event_item("side1", "Side 1", "employee:2", "Second Operator")],
+        ),
+        "opened": _compare_event_assignments(
+            [event_item("headon", "Head On", "employee:3", "Camera Operator")],
+            [],
+        ),
+        "filled": _compare_event_assignments(
+            [],
+            [event_item("turn", "Turn", "employee:4", "Turn Operator")],
+        ),
+        "split": _compare_event_assignments(
+            [event_item("soundvt", "Sound/VT", "employee:5", "Sound Operator")],
+            [
+                event_item("sound", "Sound", "employee:5", "Sound Operator"),
+                event_item("vt", "VT", "employee:6", "VT Operator"),
+            ],
+        ),
+    }
+    for expected_type, changes in transition_checks.items():
+        if len(changes) != 1 or changes[0]["change_type"] != expected_type:
+            raise AssertionError(f"Expected one {expected_type} event transition, got {changes!r}")
     with get_connection() as conn:
         remaining_stale = conn.execute(
             "SELECT COUNT(*) FROM deputy_schedule_shifts WHERE source_shift_id IN (9001, 9002)"
@@ -1056,8 +1156,8 @@ def main() -> None:
             },
         ]
     )
-    if len(stale_role_people) != 1 or stale_role_people[0]["position_label"] != "Sound VT":
-        raise AssertionError(f"Expected newer Sound VT assignment to suppress stale CCU2, got {stale_role_people!r}")
+    if len(stale_role_people) != 1 or stale_role_people[0]["position_label"] != "Sound/VT":
+        raise AssertionError(f"Expected newer Sound/VT assignment to suppress stale CCU2, got {stale_role_people!r}")
 
     same_capture_people = schedule_people(
         [
@@ -1087,7 +1187,7 @@ def main() -> None:
             },
         ]
     )
-    if len(same_capture_people) != 1 or "CCU2" not in same_capture_people[0]["position_label"] or "Sound VT" not in same_capture_people[0]["position_label"]:
+    if len(same_capture_people) != 1 or "CCU2" not in same_capture_people[0]["position_label"] or "Sound/VT" not in same_capture_people[0]["position_label"]:
         raise AssertionError(f"Expected same-capture dual roles to remain visible, got {same_capture_people!r}")
 
     split_sound_vt_rows = [
@@ -1132,26 +1232,26 @@ def main() -> None:
         "schedule_location_id": 69,
         "schedule_location_ids": [69],
         "role_label": "SVT",
-        "role_full_label": "Sound VT",
+        "role_full_label": "Sound/VT",
         "display_title": "SVT at Te Aroha",
         "role_segments": [
-            {"role": "Sound VT", "role_short": "SVT", "kind": "role"},
+            {"role": "Sound/VT", "role_short": "SVT", "kind": "role"},
         ],
-        "role_chain_label": "Sound VT",
+        "role_chain_label": "Sound/VT",
     }
     apply_schedule_role_context([own_sound_shift], split_sound_vt_rows)
     if own_sound_shift["role_full_label"] != "Sound" or own_sound_shift["role_chain_label"] != "Sound":
         raise AssertionError(f"Expected the user's SVT shift to display as Sound, got {own_sound_shift!r}")
 
     combined_sound_people = schedule_people(split_sound_vt_rows[:1])
-    if len(combined_sound_people) != 1 or combined_sound_people[0]["position_label"] != "Sound VT":
+    if len(combined_sound_people) != 1 or combined_sound_people[0]["position_label"] != "Sound/VT":
         raise AssertionError(f"Expected SVT to stay combined without a separate VT assignment, got {combined_sound_people!r}")
 
     same_employee_split_rows = [dict(row) for row in split_sound_vt_rows]
     same_employee_split_rows[1]["employee_id"] = 17
     same_employee_split_rows[1]["employee_name"] = "Jayden-lee"
     same_employee_people = schedule_people(same_employee_split_rows)
-    if len(same_employee_people) != 1 or same_employee_people[0]["position_label"] != "Sound VT, VT":
+    if len(same_employee_people) != 1 or same_employee_people[0]["position_label"] != "Sound/VT, VT":
         raise AssertionError(f"Expected one person's explicit dual assignment to remain visible, got {same_employee_people!r}")
 
     unknown_location_rows = [dict(row) for row in split_sound_vt_rows]
@@ -1159,7 +1259,7 @@ def main() -> None:
         row["area_location_id"] = None
     unknown_location_people = schedule_people(unknown_location_rows)
     unknown_positions = {str(person["position_label"]) for person in unknown_location_people}
-    if unknown_positions != {"Sound VT", "VT"}:
+    if unknown_positions != {"Sound/VT", "VT"}:
         raise AssertionError(f"Expected unknown-location rows not to infer a split, got {unknown_location_people!r}")
 
     print("route smoke flows ok")

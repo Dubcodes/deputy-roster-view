@@ -4587,10 +4587,51 @@ th {
   margin: 0;
 }
 
+.calendar-date-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.calendar-date-heading .day-link {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.list-day-heading {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 3px;
+  min-width: 0;
+  border-right: 1px solid var(--line);
+}
+
+.list-day-heading .list-day-date {
+  width: 100%;
+  border-right: 0;
+}
+
+.timesheet-date-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding-right: 10px;
+}
+
+.timesheet-date-heading .timesheet-row {
+  min-width: 0;
+}
+
 .holiday-marker {
   position: relative;
   z-index: 5;
   display: inline-block;
+  flex: 0 0 auto;
+  align-self: start;
 }
 
 .holiday-marker summary {
@@ -4604,7 +4645,7 @@ th {
   background: var(--panel);
   color: var(--warning, #b5791e);
   cursor: pointer;
-  font-size: 0.94rem;
+  font-size: 0.78rem;
   line-height: 1;
   list-style: none;
 }
@@ -4626,7 +4667,7 @@ th {
   display: grid;
   gap: 3px;
   width: max-content;
-  max-width: min(260px, 80vw);
+  max-width: min(240px, calc(100vw - 24px));
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -4637,18 +4678,18 @@ th {
   white-space: normal;
 }
 
-.day-cell,
-.list-day,
-.timesheet-day {
-  position: relative;
+.holiday-marker-start .holiday-popover {
+  right: auto;
+  left: 0;
 }
 
-.day-cell > .holiday-marker,
-.list-day > .holiday-marker,
-.timesheet-day > .holiday-marker {
-  position: absolute;
-  top: 5px;
-  right: 5px;
+.holiday-marker-end .holiday-popover {
+  right: 0;
+  left: auto;
+}
+
+.holiday-marker[open] {
+  z-index: 50;
 }
 
 .travel-route-form,
@@ -4726,9 +4767,18 @@ th {
     align-items: flex-start;
   }
 
-  .list-day > .holiday-marker,
-  .timesheet-day > .holiday-marker {
-    top: 4px;
-    right: 4px;
+  .calendar-date-heading {
+    gap: 2px;
+    margin-bottom: 3px;
+  }
+
+  .holiday-marker summary {
+    width: 24px;
+    height: 24px;
+  }
+
+  .timesheet-date-heading {
+    gap: 4px;
+    padding-right: 6px;
   }
 }

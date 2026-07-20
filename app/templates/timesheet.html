@@ -18,16 +18,18 @@
     <div class="timesheet-list">
       {% for day in summary["days"] %}
         <article class="timesheet-day{% if day['total'] == 0 %} timesheet-row-empty{% endif %}">
-          <a class="timesheet-row" href="/day/{{ day['iso'] }}">
-            <span>{{ day["date_label"] }}</span>
-            {% if day["total"] == 0 %}
-              <small>Not worked</small>
-            {% else %}
-              <strong>{{ day["total"]|hours }}</strong>
-              <span>{{ day["locations"] }}</span>
-            {% endif %}
-          </a>
-          {{ holiday_marker(day.holiday) }}
+          <div class="timesheet-date-heading">
+            <a class="timesheet-row" href="/day/{{ day['iso'] }}">
+              <span>{{ day["date_label"] }}</span>
+              {% if day["total"] == 0 %}
+                <small>Not worked</small>
+              {% else %}
+                <strong>{{ day["total"]|hours }}</strong>
+                <span>{{ day["locations"] }}</span>
+              {% endif %}
+            </a>
+            {{ holiday_marker(day.holiday) }}
+          </div>
           {% for note in day["notes"] %}
             <p class="timesheet-note">{{ note }}</p>
           {% endfor %}

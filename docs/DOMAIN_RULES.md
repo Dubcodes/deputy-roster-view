@@ -89,6 +89,8 @@ Crew change text should be position-centred but person-focused, for example `Sid
 
 Persist assignment changes separately from the current schedule row. A later sync must not erase the previous person's name from `old person -> new person` history.
 
+Authoritative crew captures are compared as complete event snapshots by date, Deputy location, and overlapping production window. Use employee ID first, then the canonical crew directory or a unique normalized name. This comparison must preserve connected moves, replacements, open/filled positions, and Sound/VT merge or split changes even when Deputy recreates rows with different shift IDs. Repeating the same effective snapshot must not create another history event.
+
 Generic schedule labels such as `Vehicle` or `Vehicles` are context, not vehicle names. If a specific allocation such as `684`, `Rav91`, or `OB` is known, show only that specific vehicle.
 
 Opening a changed badge or the Change History section must not automatically clear the changed flag. The app should only clear change flags through explicit clear actions, otherwise phone taps can make important changes disappear before the user has read them.
@@ -153,3 +155,4 @@ For Thoroughbred race days, the app may show Love Racing's official 2D course ma
 - National New Zealand public holidays and observed days are calculated locally. Ordinary weekends are not holidays.
 - The marker may expose more than one holiday name on a date and must work by mouse, touch, and keyboard.
 - Holiday display does not alter rostered hours, calculated hours, or holiday-pay rules.
+- Keep the small star in reserved normal-flow date-heading space. Its touch target may be larger than the glyph, but it must not overlap the date number, weekday, shifts, or neighbouring cells at narrow phone widths.

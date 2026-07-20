@@ -37,6 +37,7 @@ from .database import (
     fetch_published_roster_days_between,
     fetch_deputy_schedule_between,
     fetch_deputy_assignment_history_for_date,
+    fetch_deputy_event_changes_for_date,
     fetch_love_racing_meetings_between,
     fetch_deputy_schedule_for_date,
     fetch_deputy_schedule_areas_for_locations,
@@ -128,7 +129,7 @@ from .public_holidays import holiday_for_date
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.20.1"
+APP_BUILD = "2026.07.20.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -263,7 +264,7 @@ KNOWN_SHIFT_CONTEXT_FALLBACKS = (
             ("brendan", "Engineer"),
             ("gary", "CCU1"),
             ("lans", "CCU2"),
-            ("grant", "Sound VT"),
+            ("grant", "Sound/VT"),
             ("sharne", "Floor Manager"),
         ),
     },
@@ -301,7 +302,7 @@ RACE_TYPES = {
 ROLE_NAMES = {
     "DIR": "Director",
     "SOUND": "Sound",
-    "SVT": "Sound VT",
+    "SVT": "Sound/VT",
 }
 DEFAULT_RACE_TYPE_BY_CODE = {
     "CAM": "H",
@@ -433,8 +434,8 @@ SCHEDULE_POSITION_ALIASES = {
     "dir": ("director", "Director"),
     "northern": ("northern", "Northern"),
     "sound": ("sound", "Sound"),
-    "soundvt": ("soundvt", "Sound VT"),
-    "svt": ("soundvt", "Sound VT"),
+    "soundvt": ("soundvt", "Sound/VT"),
+    "svt": ("soundvt", "Sound/VT"),
     "vt": ("vt", "VT"),
     "ccu1": ("ccu1", "CCU1"),
     "ccuone": ("ccu1", "CCU1"),
@@ -2783,6 +2784,70 @@ def schedule_people(
         ),
     )
 
+
+def decorate_event_changes(rows: list[object]) -> list[dict[str, object]]:
+    changes = []
+    for row in rows:
+        item = dict(row)
+        for field_name in ("old_positions", "new_positions"):
+            try:
+                values = json.loads(str(item.get(field_name) or "[]"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                values = []
+            item[field_name] = [str(value) for value in values if str(value).strip()]
+        item["changed_at_label"] = format_datetime(str(item.get("changed_at") or ""), "%d %b %H:%M")
+        changes.append(item)
+    return changes
+
+
+def apply_event_changes_to_schedule_people(
+    people: list[dict[str, object]],
+    changes: list[dict[str, object]],
+) -> None:
+    for change in changes:
+        if not bool(int(change.get("changed_since_viewed") or 0)):
+            continue
+        new_employee_id = safe_int(change.get("new_employee_id"))
+        new_name_key = schedule_label_key(str(change.get("new_employee_name") or ""))
+        new_positions = {
+            schedule_label_key(position)
+            for position in list(change.get("new_positions") or [])
+            if position
+        }
+        change_type = str(change.get("change_type") or "")
+        for person in people:
+            person_positions = {
+                schedule_label_key(position)
+                for position in str(person.get("position_label") or "").split(",")
+                if position.strip()
+            }
+            same_person = (
+                new_employee_id is not None
+                and safe_int(person.get("employee_id")) == new_employee_id
+            ) or (
+                new_employee_id is None
+                and new_name_key
+                and schedule_label_key(str(person.get("employee_name") or "")) == new_name_key
+            )
+            if change_type == "opened":
+                matches = bool(person_positions & new_positions) and (
+                    bool(person.get("placeholder"))
+                    or schedule_label_key(str(person.get("employee_name") or "")) in {"tbc", "openshift"}
+                )
+            else:
+                matches = same_person and (not new_positions or bool(person_positions & new_positions))
+            if not matches:
+                continue
+            person["changed"] = True
+            summaries = [part.strip() for part in str(person.get("change_summary") or "").split(";") if part.strip()]
+            append_unique(summaries, str(change.get("inline_summary") or change.get("display_summary") or "Changed"))
+            person["change_summary"] = "; ".join(summaries)
+            person["change_time_label"] = format_datetime(
+                latest_iso_datetime(person.get("last_changed_at"), change.get("changed_at")),
+                "%d %b %H:%M",
+            )
+            break
+
 def shifts_are_vehicle_travel_context(shifts: list[dict[str, object]]) -> bool:
     visible_shifts = [shift for shift in shifts if not int(shift.get("deleted_from_source") or 0)]
     if not visible_shifts:
@@ -4827,6 +4892,7 @@ def day_view(
                 ),
                 "deputy_schedule_changed": False,
                 "deputy_schedule_changes": [],
+                "deputy_event_changes": [],
                 "deputy_assignment_history": [],
                 "day_total": 0,
                 "has_changed": False,
@@ -4917,6 +4983,14 @@ def day_view(
         apply_roster_note_vehicles(deputy_schedule_people, next_day_shifts)
         if deputy_schedule_people:
             deputy_schedule_label = deputy_schedule_label_for_shifts("Deputy Schedule - Next Day Crew", next_day_shifts)
+    deputy_event_changes = decorate_event_changes(
+        fetch_deputy_event_changes_for_date(
+            date_text,
+            location_ids=schedule_location_ids or None,
+        )
+    )
+    if deputy_schedule_rows:
+        apply_event_changes_to_schedule_people(deputy_schedule_people, deputy_event_changes)
     for shift in shifts:
         if str(shift.get("header_vehicle_label") or "").strip():
             continue
@@ -4936,16 +5010,29 @@ def day_view(
             location_ids=schedule_location_ids or None,
         )
     ]
-    historical_assignments = {
-        (item["position_label"].lower(), item["new_employee_name"].lower())
-        for item in deputy_assignment_history
+    event_assignments = {
+        (schedule_label_key(position), schedule_label_key(str(item.get("new_employee_name") or "TBC")))
+        for item in deputy_event_changes
+        for position in list(item.get("new_positions") or [])
     }
+    deputy_assignment_history = [
+        item
+        for item in deputy_assignment_history
+        if (
+            schedule_label_key(item["position_label"]),
+            schedule_label_key(item["new_employee_name"]),
+        ) not in event_assignments
+    ]
+    historical_assignments = {
+        (schedule_label_key(item["position_label"]), schedule_label_key(item["new_employee_name"]))
+        for item in deputy_assignment_history
+    } | event_assignments
     deputy_schedule_changes = [
         person
         for person in deputy_schedule_changes
         if (
-            str(person.get("position_label") or "").lower(),
-            str(person.get("employee_name") or "").lower(),
+            schedule_label_key(str(person.get("position_label") or "")),
+            schedule_label_key(str(person.get("employee_name") or "")),
         )
         not in historical_assignments
     ]
@@ -4980,6 +5067,7 @@ def day_view(
             "deputy_schedule_label": deputy_schedule_label,
             "deputy_schedule_changed": deputy_schedule_changed,
             "deputy_schedule_changes": deputy_schedule_changes,
+            "deputy_event_changes": deputy_event_changes,
             "deputy_assignment_history": deputy_assignment_history,
             "day_total": day_total,
             "has_changed": has_changed,

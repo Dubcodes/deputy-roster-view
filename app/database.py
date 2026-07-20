@@ -338,6 +338,30 @@ def init_db(settings: Settings | None = None) -> None:
                 UNIQUE(source_shift_id, position_label, old_employee_name, new_employee_name, changed_at)
             );
 
+            CREATE TABLE IF NOT EXISTS deputy_schedule_event_changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id TEXT NOT NULL,
+                change_key TEXT NOT NULL,
+                change_type TEXT NOT NULL,
+                date TEXT NOT NULL,
+                area_location_id INTEGER,
+                event_start_at TEXT,
+                event_end_at TEXT,
+                old_positions TEXT DEFAULT '[]',
+                new_positions TEXT DEFAULT '[]',
+                old_employee_id INTEGER,
+                old_employee_name TEXT,
+                new_employee_id INTEGER,
+                new_employee_name TEXT,
+                changed_at TEXT NOT NULL,
+                display_summary TEXT NOT NULL,
+                inline_summary TEXT,
+                before_hash TEXT,
+                after_hash TEXT,
+                changed_since_viewed INTEGER DEFAULT 1,
+                UNIQUE(group_id, change_key)
+            );
+
             CREATE TABLE IF NOT EXISTS love_racing_meetings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 meeting_date TEXT,
@@ -494,11 +518,15 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "track_maps", "selected_source_url", "TEXT")
         _ensure_column(conn, "track_maps", "candidate_count", "INTEGER DEFAULT 0")
         _ensure_column(conn, "track_maps", "refresh_result", "TEXT")
+        _ensure_column(conn, "deputy_schedule_event_changes", "changed_since_viewed", "INTEGER DEFAULT 1")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_location ON deputy_schedule_shifts(date, area_location_id)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_schedule_assignment_history_day ON deputy_schedule_assignment_history(date, area_location_id, changed_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_schedule_event_changes_day ON deputy_schedule_event_changes(date, area_location_id, changed_at DESC)"
         )
         conn.execute(
             """
@@ -2815,6 +2843,11 @@ def clear_changed_for_date(date_text: str, owner_user_id: int | None = None, inc
                 (date_text,),
             )
             schedule_result_count = schedule_result.rowcount
+            event_result = conn.execute(
+                "UPDATE deputy_schedule_event_changes SET changed_since_viewed = 0 WHERE date = ? AND changed_since_viewed = 1",
+                (date_text,),
+            )
+            schedule_result_count += event_result.rowcount
         return shift_result.rowcount + schedule_result_count
 
 
@@ -2940,6 +2973,30 @@ def fetch_deputy_assignment_history_for_date(
             f"""
             SELECT *
             FROM deputy_schedule_assignment_history
+            WHERE date = ?
+              {location_sql}
+            ORDER BY changed_at DESC, id DESC
+            """,
+            params,
+        ).fetchall()
+
+
+def fetch_deputy_event_changes_for_date(
+    date_text: str,
+    location_ids: list[int] | tuple[int, ...] | set[int] | None = None,
+) -> list[sqlite3.Row]:
+    location_ids = _normalise_int_list(location_ids)
+    location_sql = ""
+    params: list[object] = [date_text]
+    if location_ids:
+        placeholders = ", ".join("?" for _ in location_ids)
+        location_sql = f"AND area_location_id IN ({placeholders})"
+        params.extend(location_ids)
+    with get_connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT *
+            FROM deputy_schedule_event_changes
             WHERE date = ?
               {location_sql}
             ORDER BY changed_at DESC, id DESC
@@ -3423,6 +3480,446 @@ def _display_change_value(value: object) -> str:
     return str(value)
 
 
+EVENT_POSITION_ALIASES = {
+    "side1": ("side1", "Side 1"),
+    "sideone": ("side1", "Side 1"),
+    "sideonecam": ("side1", "Side 1"),
+    "side2": ("side2", "Side 2"),
+    "sidetwo": ("side2", "Side 2"),
+    "sidetwocam": ("side2", "Side 2"),
+    "start": ("start", "Start"),
+    "headon": ("headon", "Head On"),
+    "back": ("back", "Back"),
+    "back2": ("back2", "Back2"),
+    "turn": ("turn", "Turn"),
+    "rts": ("rts", "RTS"),
+    "iv": ("iv", "IV"),
+    "iv1": ("iv", "IV"),
+    "steadi": ("steadi", "Steadi"),
+    "steadiassist": ("steadiassist", "Steadi Assist"),
+    "dir": ("director", "Director"),
+    "director": ("director", "Director"),
+    "sound": ("sound", "Sound"),
+    "svt": ("soundvt", "Sound/VT"),
+    "soundvt": ("soundvt", "Sound/VT"),
+    "vt": ("vt", "VT"),
+    "vt2": ("vt2", "VT 2"),
+    "ccu1": ("ccu1", "CCU1"),
+    "ccu2": ("ccu2", "CCU2"),
+    "eng": ("eng", "ENG"),
+    "engineer": ("eng", "ENG"),
+    "fm": ("fm", "FM"),
+    "floormanager": ("fm", "FM"),
+    "gimbal": ("gimbal", "Gimbal"),
+    "drone": ("drone", "Drone"),
+    "editor": ("editor", "Editor"),
+}
+
+EVENT_NON_POSITION_KEYS = {
+    "vehicle", "vehicles", "travel", "travelthenovernighter", "outofregion",
+    "manager", "northern", "northernopscontractors", "accommodation", "web",
+    "shift", "maintenance", "training", "mewptraining", "office", "clowplace",
+    "rav91", "tender", "transit", "ob",
+}
+
+
+def _event_position(value: object) -> tuple[str, str] | None:
+    raw = _clean_role_name(value)
+    key = re.sub(r"[^a-z0-9]+", "", raw.lower())
+    if not key or key in EVENT_NON_POSITION_KEYS or key.isdigit():
+        return None
+    if key in EVENT_POSITION_ALIASES:
+        return EVENT_POSITION_ALIASES[key]
+    return key, raw or "Position"
+
+
+def _event_rows_overlap(left: dict[str, object], right: dict[str, object]) -> bool:
+    left_start = str(left.get("start_at") or "")
+    left_end = str(left.get("end_at") or "")
+    right_start = str(right.get("start_at") or "")
+    right_end = str(right.get("end_at") or "")
+    if not all((left_start, left_end, right_start, right_end)):
+        return True
+    return left_start < right_end and right_start < left_end
+
+
+def _event_person_identity(
+    conn: sqlite3.Connection,
+    employee_id: object,
+    employee_name: object,
+) -> tuple[str, int | None, str]:
+    numeric_id = _optional_int(employee_id)
+    clean_name = str(employee_name or "").strip()
+    if numeric_id is not None:
+        person = conn.execute(
+            "SELECT canonical_display_name FROM crew_people WHERE deputy_employee_id = ? LIMIT 1",
+            (numeric_id,),
+        ).fetchone()
+        canonical_name = str(person["canonical_display_name"] or "").strip() if person is not None else ""
+        return f"employee:{numeric_id}", numeric_id, canonical_name or clean_name
+    name_key = normalise_person_identity(clean_name)
+    if name_key:
+        people = conn.execute(
+            """
+            SELECT DISTINCT p.id, p.canonical_display_name
+            FROM crew_people p
+            LEFT JOIN crew_aliases a ON a.crew_person_id = p.id AND a.is_active = 1
+            WHERE p.is_active = 1
+              AND (p.normalized_name = ? OR a.normalized_alias = ?)
+            """,
+            (name_key, name_key),
+        ).fetchall()
+        if len(people) == 1:
+            return f"crew:{int(people[0]['id'])}", None, str(people[0]["canonical_display_name"] or clean_name)
+    return (f"name:{name_key}" if name_key else "open"), None, clean_name
+
+
+def _authoritative_schedule_coverage(payload: dict[str, object]) -> list[dict[str, object]]:
+    result = []
+    for coverage in payload.get("schedule_coverage") or []:
+        if not isinstance(coverage, dict):
+            continue
+        start_date = str(coverage.get("start_date") or "")[:10]
+        end_date = str(coverage.get("end_date") or "")[:10]
+        mode = str(coverage.get("mode") or "").strip().lower()
+        location_ids = {
+            value
+            for value in (_optional_int(item) for item in coverage.get("location_ids") or [])
+            if value is not None
+        }
+        if (
+            not re.fullmatch(r"\d{4}-\d{2}-\d{2}", start_date)
+            or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", end_date)
+            or mode not in {"all", "selected"}
+            or (mode == "selected" and not location_ids)
+        ):
+            continue
+        result.append({"start_date": start_date, "end_date": end_date, "mode": mode, "location_ids": location_ids})
+    return result
+
+
+def _authoritative_schedule_rows(
+    conn: sqlite3.Connection,
+    coverage_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    rows_by_id: dict[int, dict[str, object]] = {}
+    for coverage in coverage_rows:
+        params: list[object] = [coverage["start_date"], coverage["end_date"]]
+        location_sql = ""
+        location_ids = sorted(coverage["location_ids"])
+        if coverage["mode"] == "selected":
+            placeholders = ", ".join("?" for _ in location_ids)
+            location_sql = f"AND COALESCE(s.area_location_id, a.location_id) IN ({placeholders})"
+            params.extend(location_ids)
+        for row in conn.execute(
+            f"""
+            SELECT s.*, COALESCE(s.area_location_id, a.location_id) AS schedule_location_id
+            FROM deputy_schedule_shifts s
+            LEFT JOIN deputy_schedule_areas a ON a.area_id = s.area_id
+            WHERE s.date BETWEEN ? AND ? {location_sql}
+            """,
+            params,
+        ).fetchall():
+            rows_by_id[int(row["source_shift_id"])] = dict(row)
+    return list(rows_by_id.values())
+
+
+def _effective_event_snapshots(
+    conn: sqlite3.Connection,
+    rows: list[dict[str, object]],
+) -> dict[tuple[str, int], list[dict[str, object]]]:
+    scopes: dict[tuple[str, int], list[dict[str, object]]] = {}
+    for row in rows:
+        location_id = _optional_int(row.get("schedule_location_id") or row.get("area_location_id"))
+        date_text = str(row.get("date") or "")[:10]
+        position = _event_position(row.get("area_name"))
+        if location_id is None or not date_text or position is None:
+            continue
+        identity, employee_id, employee_name = _event_person_identity(
+            conn, row.get("employee_id"), row.get("employee_name")
+        )
+        item = {
+            "position_key": position[0],
+            "position_label": position[1],
+            "identity": identity,
+            "employee_id": employee_id,
+            "employee_name": employee_name,
+            "is_open": bool(int(row.get("is_open") or 0)) or not employee_name,
+            "start_at": str(row.get("start_at") or ""),
+            "end_at": str(row.get("end_at") or ""),
+            "captured_at": str(row.get("captured_at") or ""),
+            "source_shift_id": int(row.get("source_shift_id") or 0),
+        }
+        scopes.setdefault((date_text, location_id), []).append(item)
+
+    for scope, items in list(scopes.items()):
+        sound_vt_items = [item for item in items if item["position_key"] == "soundvt"]
+        vt_items = [item for item in items if item["position_key"] == "vt"]
+        for sound_vt in sound_vt_items:
+            if any(
+                vt["identity"] != sound_vt["identity"]
+                and vt["identity"] != "open"
+                and sound_vt["identity"] != "open"
+                and _event_rows_overlap(sound_vt, vt)
+                for vt in vt_items
+            ):
+                sound_vt["position_key"] = "sound"
+                sound_vt["position_label"] = "Sound"
+
+        visible = []
+        for item in items:
+            if item["identity"] != "open" and any(
+                other["identity"] == item["identity"]
+                and other["position_key"] != item["position_key"]
+                and other["captured_at"] > item["captured_at"]
+                and _event_rows_overlap(item, other)
+                for other in items
+            ):
+                continue
+            visible.append(item)
+
+        deduped: list[dict[str, object]] = []
+        for item in sorted(visible, key=lambda value: (value["captured_at"], value["source_shift_id"])):
+            match = next((
+                existing for existing in deduped
+                if existing["position_key"] == item["position_key"] and _event_rows_overlap(existing, item)
+            ), None)
+            if match is None:
+                deduped.append(item)
+            elif (item["captured_at"], item["source_shift_id"]) >= (match["captured_at"], match["source_shift_id"]):
+                deduped[deduped.index(match)] = item
+        scopes[scope] = sorted(deduped, key=lambda item: (item["position_key"], item["identity"]))
+    return scopes
+
+
+def _snapshot_hash(items: list[dict[str, object]]) -> str:
+    values = [
+        {
+            "position": item["position_key"],
+            "identity": item["identity"],
+            "open": item["is_open"],
+            "start": item["start_at"],
+            "end": item["end_at"],
+        }
+        for item in items
+    ]
+    return hashlib.sha256(json_dumps(values).encode("utf-8")).hexdigest()
+
+
+def _event_overlap_components(
+    before: list[dict[str, object]],
+    after: list[dict[str, object]],
+) -> list[tuple[list[dict[str, object]], list[dict[str, object]]]]:
+    tagged = [("before", item) for item in before] + [("after", item) for item in after]
+    components: list[list[tuple[str, dict[str, object]]]] = []
+    for tagged_item in tagged:
+        matching_indexes = [
+            index
+            for index, component in enumerate(components)
+            if any(_event_rows_overlap(tagged_item[1], existing[1]) for existing in component)
+        ]
+        if not matching_indexes:
+            components.append([tagged_item])
+            continue
+        first_index = matching_indexes[0]
+        components[first_index].append(tagged_item)
+        for index in reversed(matching_indexes[1:]):
+            components[first_index].extend(components.pop(index))
+    return [
+        (
+            [item for origin, item in component if origin == "before"],
+            [item for origin, item in component if origin == "after"],
+        )
+        for component in components
+    ]
+
+
+def _event_change_record(
+    *,
+    change_type: str,
+    old_positions: list[str],
+    new_positions: list[str],
+    old_person: dict[str, object] | None,
+    new_person: dict[str, object] | None,
+    display_summary: str,
+    inline_summary: str,
+) -> dict[str, object]:
+    return {
+        "change_type": change_type,
+        "old_positions": old_positions,
+        "new_positions": new_positions,
+        "old_employee_id": (old_person or {}).get("employee_id"),
+        "old_employee_name": str((old_person or {}).get("employee_name") or ""),
+        "new_employee_id": (new_person or {}).get("employee_id"),
+        "new_employee_name": str((new_person or {}).get("employee_name") or ""),
+        "display_summary": display_summary,
+        "inline_summary": inline_summary,
+    }
+
+
+def _compare_event_assignments(
+    before: list[dict[str, object]],
+    after: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    before_by_position = {str(item["position_key"]): item for item in before}
+    after_by_position = {str(item["position_key"]): item for item in after}
+    before_by_person: dict[str, list[dict[str, object]]] = {}
+    after_by_person: dict[str, list[dict[str, object]]] = {}
+    for item in before:
+        if item["identity"] != "open":
+            before_by_person.setdefault(str(item["identity"]), []).append(item)
+    for item in after:
+        if item["identity"] != "open":
+            after_by_person.setdefault(str(item["identity"]), []).append(item)
+
+    changes: list[dict[str, object]] = []
+    before_sound = before_by_position.get("sound")
+    before_vt = before_by_position.get("vt")
+    after_combined = after_by_position.get("soundvt")
+    before_combined = before_by_position.get("soundvt")
+    after_sound = after_by_position.get("sound")
+    after_vt = after_by_position.get("vt")
+    roles_merged = bool(before_sound and before_vt and after_combined)
+    roles_split = bool(before_combined and after_sound and after_vt)
+    moved_identities: set[str] = set()
+    for identity in sorted(set(before_by_person) & set(after_by_person)):
+        old_positions = {str(item["position_key"]): item for item in before_by_person[identity]}
+        new_positions = {str(item["position_key"]): item for item in after_by_person[identity]}
+        old_only = [old_positions[key] for key in sorted(set(old_positions) - set(new_positions))]
+        new_only = [new_positions[key] for key in sorted(set(new_positions) - set(old_positions))]
+        for old_item, new_item in zip(old_only, new_only):
+            if not _event_rows_overlap(old_item, new_item):
+                continue
+            if (roles_merged or roles_split) and {
+                str(old_item["position_key"]), str(new_item["position_key"])
+            } <= {"sound", "vt", "soundvt"}:
+                continue
+            moved_identities.add(identity)
+            name = str(new_item["employee_name"] or old_item["employee_name"] or "Crew member")
+            changes.append(_event_change_record(
+                change_type="move",
+                old_positions=[str(old_item["position_label"])],
+                new_positions=[str(new_item["position_label"])],
+                old_person=old_item,
+                new_person=new_item,
+                display_summary=f"Crew move: {name} — {old_item['position_label']} → {new_item['position_label']}",
+                inline_summary=f"{name} moved from {old_item['position_label']}",
+            ))
+
+    merge_positions: set[str] = set()
+    if roles_merged:
+        merge_positions = {"sound", "vt", "soundvt"}
+        changes.append(_event_change_record(
+            change_type="merge",
+            old_positions=["Sound", "VT"],
+            new_positions=["Sound/VT"],
+            old_person=before_vt,
+            new_person=after_combined,
+            display_summary=(
+                f"Crew roles combined: Sound {before_sound['employee_name'] or 'TBC'} + "
+                f"VT {before_vt['employee_name'] or 'TBC'} → Sound/VT {after_combined['employee_name'] or 'TBC'}"
+            ),
+            inline_summary="Sound and VT combined",
+        ))
+
+    if roles_split:
+        merge_positions = {"sound", "vt", "soundvt"}
+        changes.append(_event_change_record(
+            change_type="split",
+            old_positions=["Sound/VT"],
+            new_positions=["Sound", "VT"],
+            old_person=before_combined,
+            new_person=after_vt,
+            display_summary=(
+                f"Crew roles split: Sound/VT {before_combined['employee_name'] or 'TBC'} → "
+                f"Sound {after_sound['employee_name'] or 'TBC'} + VT {after_vt['employee_name'] or 'TBC'}"
+            ),
+            inline_summary="Sound/VT split into Sound and VT",
+        ))
+
+    for position_key in sorted(set(before_by_position) | set(after_by_position)):
+        if position_key in merge_positions:
+            continue
+        old_item = before_by_position.get(position_key)
+        new_item = after_by_position.get(position_key)
+        old_identity = str((old_item or {}).get("identity") or "open")
+        new_identity = str((new_item or {}).get("identity") or "open")
+        if old_identity == new_identity:
+            continue
+        position_label = str((new_item or old_item or {}).get("position_label") or "Position")
+        old_name = str((old_item or {}).get("employee_name") or "TBC")
+        new_name = str((new_item or {}).get("employee_name") or "TBC")
+        if old_identity != "open" and new_identity != "open":
+            if old_identity in moved_identities and new_identity in moved_identities:
+                continue
+            change_type = "replacement"
+        elif old_identity != "open":
+            change_type = "opened"
+        else:
+            change_type = "filled"
+        changes.append(_event_change_record(
+            change_type=change_type,
+            old_positions=[position_label],
+            new_positions=[position_label],
+            old_person=old_item,
+            new_person=new_item,
+            display_summary=f"Crew: {position_label} — {old_name} → {new_name}",
+            inline_summary=f"{old_name} → {new_name}",
+        ))
+    return changes
+
+
+def _record_authoritative_event_changes(
+    conn: sqlite3.Connection,
+    before_snapshots: dict[tuple[str, int], list[dict[str, object]]],
+    after_snapshots: dict[tuple[str, int], list[dict[str, object]]],
+    captured_at: str,
+) -> int:
+    saved = 0
+    for scope in sorted(set(before_snapshots) | set(after_snapshots)):
+        before = before_snapshots.get(scope, [])
+        after = after_snapshots.get(scope, [])
+        if not before:
+            continue
+        before_hash = _snapshot_hash(before)
+        after_hash = _snapshot_hash(after)
+        if before_hash == after_hash:
+            continue
+        date_text, location_id = scope
+        for event_before, event_after in _event_overlap_components(before, after):
+            event_before_hash = _snapshot_hash(event_before)
+            event_after_hash = _snapshot_hash(event_after)
+            if event_before_hash == event_after_hash:
+                continue
+            group_id = hashlib.sha256(
+                f"{date_text}|{location_id}|{event_before_hash}|{event_after_hash}|{captured_at}".encode("utf-8")
+            ).hexdigest()
+            starts = [str(item["start_at"]) for item in event_before + event_after if item.get("start_at")]
+            ends = [str(item["end_at"]) for item in event_before + event_after if item.get("end_at")]
+            for change in _compare_event_assignments(event_before, event_after):
+                change_key = hashlib.sha256(json_dumps(change).encode("utf-8")).hexdigest()
+                result = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO deputy_schedule_event_changes (
+                        group_id, change_key, change_type, date, area_location_id,
+                        event_start_at, event_end_at, old_positions, new_positions,
+                        old_employee_id, old_employee_name, new_employee_id, new_employee_name,
+                        changed_at, display_summary, inline_summary, before_hash, after_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        group_id, change_key, change["change_type"], date_text, location_id,
+                        min(starts) if starts else "", max(ends) if ends else "",
+                        json_dumps(change["old_positions"]), json_dumps(change["new_positions"]),
+                        change["old_employee_id"], change["old_employee_name"],
+                        change["new_employee_id"], change["new_employee_name"], captured_at,
+                        change["display_summary"], change["inline_summary"], before_hash, after_hash,
+                    ),
+                )
+                saved += max(0, int(result.rowcount or 0))
+    return saved
+
+
 def _prune_missing_deputy_schedule_rows(
     conn: sqlite3.Connection,
     payload: dict[str, object],
@@ -3491,6 +3988,11 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
     }
 
     with get_connection() as conn:
+        authoritative_coverage = _authoritative_schedule_coverage(payload)
+        before_event_snapshots = _effective_event_snapshots(
+            conn,
+            _authoritative_schedule_rows(conn, authoritative_coverage),
+        )
         for row in conn.execute("SELECT * FROM deputy_schedule_locations").fetchall():
             location_id = _optional_int(row["location_id"])
             if location_id is None:
@@ -3716,12 +4218,22 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                 if str(shift_id).isdigit()
             },
         )
+        event_changes_saved = _record_authoritative_event_changes(
+            conn,
+            before_event_snapshots,
+            _effective_event_snapshots(
+                conn,
+                _authoritative_schedule_rows(conn, authoritative_coverage),
+            ),
+            captured_at,
+        )
     return {
         "own_seen": own_counts["seen"],
         "own_created": own_counts["created"],
         "own_updated": own_counts["updated"],
         "schedule_saved": saved,
         "schedule_removed": removed,
+        "event_changes_saved": event_changes_saved,
     }
 
 
@@ -4187,7 +4699,10 @@ def clear_all_changed_flags() -> int:
             WHERE changed_since_viewed = 1
             """
         )
-        return shift_result.rowcount + schedule_result.rowcount
+        event_result = conn.execute(
+            "UPDATE deputy_schedule_event_changes SET changed_since_viewed = 0 WHERE changed_since_viewed = 1"
+        )
+        return shift_result.rowcount + schedule_result.rowcount + event_result.rowcount
 
 
 def get_last_successful_sync() -> sqlite3.Row | None:

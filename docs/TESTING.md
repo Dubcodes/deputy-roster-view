@@ -44,7 +44,8 @@ After Portainer redeploy:
 - Confirm Race Day strip includes start/on-track/first race/last race where present.
 - Confirm Deputy Schedule excludes Out of Region noise.
 - Confirm timing-only crew changes do not badge every row.
-- Confirm `SVT` displays as `Sound VT` when it is the only audio/replay assignment, and as `Sound` when another employee has an overlapping `VT` assignment at the same location.
+- Capture an authoritative crew roster, then replace it with the Ruakaka-style Side 2/CCU2/VT/Sound change chain. Confirm Change History records both moves, the Sound/VT merge, and any evidenced same-position replacement exactly once.
+- Confirm `SVT` displays as `Sound/VT` when it is the only audio/replay assignment, and as `Sound` when another employee has an overlapping `VT` assignment at the same location.
 - Confirm a removed Deputy schedule assignment disappears after the next successful complete schedule-window sync, while a failed/partial capture retains the previous crew list.
 - Confirm empty RTS/FM areas do not create TBC rows, while assigned RTS/FM people still appear.
 - On a known Thoroughbred track, confirm the cached 2D map appears at the bottom of the day page without an outbound link. Confirm Harness/Greyhound days do not borrow the Cambridge Thoroughbred map.
@@ -62,6 +63,7 @@ After Portainer redeploy:
 - Expand Travel-route matrix and confirm opposite directions can keep different values. On an overnight race day, confirm the morning hotel route and evening office route are labelled separately.
 - Expand Crew directory, confirm Deputy-only people appear, and confirm an alias cannot be active for both Gary records.
 - On Waitangi Day or another national holiday, confirm one keyboard-focusable star appears beside the date in personal month, shared month, list, day, and timesheet views.
+- At approximately 320px and 375px width, confirm the holiday star has reserved heading space and its popover stays inside the viewport without covering the date, weekday, shifts, or a neighbouring cell.
 - Refresh Track Maps and inspect the recorded dimensions/result. At phone width, confirm the map remains inside the page, keeps its aspect ratio, and is not enlarged beyond its natural width.
 - Confirm each user shows next planned sync and last sync status.
 - If using the temporary tunnel stack, confirm its `cloudflared` container logs show a `trycloudflare.com` URL.

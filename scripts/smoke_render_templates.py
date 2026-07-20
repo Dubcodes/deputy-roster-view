@@ -73,6 +73,9 @@ def render_day_template() -> None:
         month_number=6,
         deputy_schedule_changed=False,
         deputy_schedule_people=[],
+        deputy_schedule_changes=[],
+        deputy_event_changes=[],
+        deputy_assignment_history=[],
         deputy_schedule_label="Deputy Schedule",
         track_maps=[
             {
@@ -89,8 +92,8 @@ def render_day_template() -> None:
                 "deleted_from_source": 0,
                 "colour_style": "--shift-location-colour: var(--location-colour-8); --location-colour: var(--location-colour-8);",
                 "time_range": "08:30-17:45",
-                "role_chain_label": "Sound VT",
-                "role_full_label": "Sound VT",
+                "role_chain_label": "Sound/VT",
+                "role_full_label": "Sound/VT",
                 "role_label": "SVT",
                 "title": "[TRAP-T] SVT",
                 "track_label": "Te Rapa",
@@ -167,7 +170,7 @@ def render_month_template() -> None:
         "changed_since_viewed": 0,
         "colour_style": "--shift-location-colour: var(--location-colour-8); --location-colour: var(--location-colour-8);",
         "track_label": "Te Rapa",
-        "role_chain_label": "Sound VT",
+        "role_chain_label": "Sound/VT",
         "role_label": "SVT",
         "title": "[TRAP-T] SVT",
         "start_label": "08:30",
@@ -209,6 +212,8 @@ def render_month_template() -> None:
         raise AssertionError("Month template did not render per-shift location colour style.")
     if html.count('aria-label="Public holiday: Waitangi Day"') != 1:
         raise AssertionError("Month date should render exactly one holiday marker regardless of shift count.")
+    if 'class="calendar-date-heading"' not in html:
+        raise AssertionError("Month holiday marker is not in reserved date-heading layout space.")
 
     list_html = template.render(
         request=SimpleNamespace(url=SimpleNamespace(path="/month", query="scope=global"), cookies={}),
@@ -219,6 +224,8 @@ def render_month_template() -> None:
     )
     if 'aria-label="Public holiday: Waitangi Day"' not in list_html:
         raise AssertionError("Shared/global month list did not render the holiday marker.")
+    if 'class="list-day-heading"' not in list_html:
+        raise AssertionError("List holiday marker is not in reserved date-heading layout space.")
 
 
 def render_timesheet_template() -> None:
@@ -238,10 +245,21 @@ def render_timesheet_template() -> None:
     )
     if 'aria-label="Public holiday: Waitangi Day"' not in html:
         raise AssertionError("Timesheet row did not render the holiday marker.")
+    if 'class="timesheet-date-heading"' not in html:
+        raise AssertionError("Timesheet holiday marker is not in reserved date-heading layout space.")
+
+
+def check_holiday_marker_css() -> None:
+    css = (ROOT / "app" / "static" / "style.css").read_text(encoding="utf-8")
+    if ".calendar-date-heading" not in css or "calc(100vw - 24px)" not in css:
+        raise AssertionError("Holiday marker layout or narrow-viewport popover constraint is missing.")
+    if ".day-cell > .holiday-marker" in css or ".timesheet-day > .holiday-marker" in css:
+        raise AssertionError("Holiday markers must not be absolutely positioned over date headings.")
 
 
 if __name__ == "__main__":
     render_day_template()
     render_month_template()
     render_timesheet_template()
+    check_holiday_marker_css()
     print("template smoke render ok")

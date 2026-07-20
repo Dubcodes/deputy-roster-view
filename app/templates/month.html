@@ -22,11 +22,13 @@
       {% for day in active_days %}
         <article class="list-day{% if day.date == today %} today-list-day{% endif %}">
           {% set timesheet = day["timesheet"] %}
-          <a class="list-day-date" href="{% if global_view and day.shifts %}/day/{{ day.iso }}?scope=global&amp;location_id={{ day.shifts[0].schedule_location_id }}{% elif timesheet and not day.shifts %}{{ timesheet.url }}{% else %}/day/{{ day.iso }}{% endif %}">
-            <strong>{{ day.date.strftime("%a") }}</strong>
-            <span>{{ day.date.day }}</span>
-          </a>
-          {{ holiday_marker(day.holiday) }}
+          <div class="list-day-heading">
+            <a class="list-day-date" href="{% if global_view and day.shifts %}/day/{{ day.iso }}?scope=global&amp;location_id={{ day.shifts[0].schedule_location_id }}{% elif timesheet and not day.shifts %}{{ timesheet.url }}{% else %}/day/{{ day.iso }}{% endif %}">
+              <strong>{{ day.date.strftime("%a") }}</strong>
+              <span>{{ day.date.day }}</span>
+            </a>
+            {{ holiday_marker(day.holiday, "start") }}
+          </div>
           <div class="list-day-shifts">
             {% for roster in day.manual_rosters %}
               <a class="list-shift published-roster-marker" href="/day/{{ day.iso }}">
@@ -117,11 +119,13 @@
         {% for day in week.days %}
           <article class="day-cell{% if not day.in_month %} outside-month{% endif %}{% if day.is_today %} today{% endif %}">
             {% set timesheet = day["timesheet"] %}
-            <a class="day-link" href="/day/{{ day.iso }}{% if global_view and day.shifts %}?scope=global&amp;location_id={{ day.shifts[0].schedule_location_id }}{% endif %}">
-              <span>{{ day.date.strftime("%a") }}</span>
-              <strong>{{ day.day_number }}</strong>
-            </a>
-            {{ holiday_marker(day.holiday) }}
+            <div class="calendar-date-heading">
+              <a class="day-link" href="/day/{{ day.iso }}{% if global_view and day.shifts %}?scope=global&amp;location_id={{ day.shifts[0].schedule_location_id }}{% endif %}">
+                <span>{{ day.date.strftime("%a") }}</span>
+                <strong>{{ day.day_number }}</strong>
+              </a>
+              {{ holiday_marker(day.holiday, "start" if loop.index0 < 3 else "end") }}
+            </div>
 
             <div class="shift-list">
               {% for roster in day.manual_rosters %}

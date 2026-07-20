@@ -123,6 +123,8 @@ Settings roster insights use completed roster days only, excluding today and fut
 
 Own shift changes are stored in `shift_changes`. Schedule row changes are summarized on `deputy_schedule_shifts.change_summary`.
 
+Durable connected crew changes are stored in `deputy_schedule_event_changes`. A successful authoritative schedule window captures the effective crew snapshot before updating/pruning rows, rebuilds the effective snapshot afterwards, and compares assignments by date, Deputy location, and overlapping event period. The resulting grouped records describe replacements, moves, Sound/VT merges/splits, and open/filled positions without depending on stable Deputy shift IDs. Existing `deputy_schedule_assignment_history` rows remain available for older changes.
+
 Crew visible change badges should only appear for assignment changes:
 
 - person changed
