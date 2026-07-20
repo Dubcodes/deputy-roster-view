@@ -37,6 +37,9 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 - Cache the best validated official Love Racing track-map candidate with its natural dimensions and source diagnostics.
 - Let admins build race-day roster drafts, review changes against the last published version, and publish assignments to the selected crew as an early test of replacing Deputy.
 - Keep personal roster views scoped to the signed-in user's own shifts. Shared crew context is only shown as race-day schedule context.
+- Reconcile each registered user's confirmed personal assignment into missing shared crew positions without hiding source conflicts.
+- Treat incomplete Deputy responses conservatively, delay future-shift removal until two complete absences, and permanently lock completed workdays.
+- Keep operational change alerts separate from technical import enrichment and normalization.
 - Stagger background syncs across users so Deputy is not hit by every account at once.
 - Run with Docker Compose / Portainer.
 

@@ -55,13 +55,16 @@
                 {% if shift.description_lines %}
                   <span class="list-shift-note">{{ shift.description_lines[0] }}</span>
                 {% endif %}
-                {% if shift.deleted_from_source or shift.changed_since_viewed %}
+                {% if shift.deleted_from_source or shift.changed_since_viewed or shift.capture_status == "possibly_missing" %}
                   <span class="badge-row">
                     {% if shift.deleted_from_source %}
                       <span class="badge badge-danger">Cancelled</span>
                     {% endif %}
                     {% if shift.changed_since_viewed %}
                       <span class="badge badge-warn">{{ shift.change_badge_label or "Changed" }}</span>
+                    {% endif %}
+                    {% if shift.capture_status == "possibly_missing" %}
+                      <span class="badge badge-warn">Possibly missing</span>
                     {% endif %}
                   </span>
                 {% endif %}
@@ -144,13 +147,16 @@
                   {% if day.shifts|length == 1 %}
                     <span class="shift-meta">{{ shift.display_hours_label }}</span>
                   {% endif %}
-                  {% if shift.deleted_from_source or shift.changed_since_viewed %}
+                  {% if shift.deleted_from_source or shift.changed_since_viewed or shift.capture_status == "possibly_missing" %}
                     <span class="badge-row">
                       {% if shift.deleted_from_source %}
                         <span class="badge badge-danger">Cancelled</span>
                       {% endif %}
                       {% if shift.changed_since_viewed %}
                         <span class="badge badge-warn">{{ shift.change_badge_label or "Changed" }}</span>
+                      {% endif %}
+                      {% if shift.capture_status == "possibly_missing" %}
+                        <span class="badge badge-warn">Possibly missing</span>
                       {% endif %}
                     </span>
                   {% endif %}

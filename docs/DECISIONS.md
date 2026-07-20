@@ -140,3 +140,15 @@ Spreadsheet paste must populate a draft preview and must never publish directly.
 Travel days are a separate day type rather than a fake crew position. Their hotel section stays collapsed by default and supports a different named hotel for each user. Observed Deputy context areas such as FCR variants, `H-Cambridge`, and `Travel then Overnighter` do not belong in the manual production-position list.
 
 Roster statistics describe rostered hours, not confirmed timesheet hours. Only completed dates contribute to historical totals. Weekday charts must label both hours and shift counts, and a recent-days list must show the source rows so the user can verify every aggregate.
+
+## Personal Evidence And Historical Integrity
+
+Own-roster and shared-schedule endpoints are independent Deputy evidence and either may be incomplete. The app therefore keeps personal assignment evidence separately instead of manufacturing shared schedule IDs. Effective crew display prefers a real named shared assignment, then confirmed personal evidence, then TBC. Source disagreement is a diagnostic conflict, not an automatic assignment move.
+
+HTTP success is insufficient proof that a crew event is complete. Upcoming event confidence combines expected production areas, prior populated rows, and personal evidence. An exact selected-location retry is the only destructive-confidence fallback; unresolved partial events retain prior data.
+
+Future personal removal uses two complete independent absences because Deputy's own-roster endpoint has omitted valid shifts in practice. Explicit cancellation remains immediate. Completed events are immutable operational history after latest finish plus six hours, with a next-morning fallback. Late nonblank conflicts are stored but do not rewrite the day.
+
+Historical repair is a one-time additive replay from retained successful diagnostics. It restores only archived rows carrying stable Deputy shift, date, location, and production-position identities. Existing populated data wins, conflicts are counted, and missing archive evidence is never guessed.
+
+Change alerts describe meaningful work changes, not improvements in imported context. Enrichment, normalization, derived duplicates, and parser reinterpretation remain technical records with `user_visible = 0`. Locking a completed event clears active badges while preserving genuine visible history.

@@ -38,6 +38,7 @@ from .database import (
     fetch_deputy_schedule_between,
     fetch_deputy_assignment_history_for_date,
     fetch_deputy_event_changes_for_date,
+    fetch_personal_assignment_evidence_for_date,
     fetch_love_racing_meetings_between,
     fetch_deputy_schedule_for_date,
     fetch_deputy_schedule_areas_for_locations,
@@ -61,6 +62,7 @@ from .database import (
     get_last_successful_sync,
     get_next_upcoming_shift,
     get_recent_source_payloads,
+    get_roster_integrity_diagnostics,
     get_travel_time_default,
     get_travel_route,
     get_track_map,
@@ -129,7 +131,7 @@ from .public_holidays import holiday_for_date
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.20.2"
+APP_BUILD = "2026.07.21.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -322,6 +324,8 @@ CHANGE_FIELD_LABELS = {
     "source_link": "Deputy link",
     "source_status": "Status",
     "deleted_from_source": "Cancelled",
+    "track": "Location",
+    "role": "Role",
 }
 HIDDEN_CHANGE_FIELDS = {"break_minutes", "paid_hours"}
 TIMING_LINE_PATTERNS = (
@@ -1430,7 +1434,7 @@ def build_shift_change_summary(changes: list[dict[str, object]]) -> str:
         elif len(old_value) > 48 or len(new_value) > 48:
             parts.append(f"{label} changed")
         else:
-            parts.append(f"{label}: {old_value} -> {new_value}")
+            parts.append(f"{label}: {old_value} → {new_value}")
     if len(changes) > 4:
         parts.append(f"+{len(changes) - 4} more")
     return "; ".join(parts)
@@ -2783,6 +2787,88 @@ def schedule_people(
             str(person.get("employee_name") or ""),
         ),
     )
+
+
+def reconcile_personal_assignment_evidence(
+    people: list[dict[str, object]],
+    evidence_rows: list[object],
+    *,
+    event_start_at: object = None,
+    event_end_at: object = None,
+) -> None:
+    for raw_evidence in evidence_rows:
+        evidence = dict(raw_evidence)
+        if event_start_at and event_end_at:
+            try:
+                event_start = datetime.fromisoformat(str(event_start_at))
+                event_end = datetime.fromisoformat(str(event_end_at))
+                evidence_start = datetime.fromisoformat(str(evidence.get("start_at") or ""))
+                evidence_end = datetime.fromisoformat(str(evidence.get("end_at") or ""))
+            except ValueError:
+                pass
+            else:
+                if evidence_end <= event_start or evidence_start >= event_end:
+                    continue
+        position_key = schedule_label_key(str(evidence.get("position_label") or ""))
+        employee_name = str(evidence.get("employee_name") or evidence.get("display_name") or "Crew member").strip()
+        evidence_employee_id = safe_int(evidence.get("deputy_employee_id"))
+        matching_rows = [
+            person for person in people
+            if position_key in {
+                schedule_label_key(part)
+                for part in str(person.get("position_label") or "").split(",")
+                if part.strip()
+            }
+        ]
+        if not matching_rows:
+            people.append({
+                "employee_name": employee_name,
+                "employee_id": evidence_employee_id,
+                "position_label": str(evidence.get("position_label") or "Position"),
+                "vehicle_label": "",
+                "sort_order": schedule_display_sort(str(evidence.get("position_label") or "")),
+                "changed": False,
+                "change_summary": "",
+                "change_time_label": "",
+                "placeholder": False,
+                "personal_evidence": True,
+                "provenance_label": "Confirmed from personal roster",
+                "possibly_missing": str(evidence.get("status") or "") == "possibly_missing",
+            })
+            continue
+        shared = matching_rows[0]
+        if shared.get("placeholder") or schedule_label_key(str(shared.get("employee_name") or "")) in {"tbc", "openshift"}:
+            shared.update({
+                "employee_name": employee_name,
+                "employee_id": evidence_employee_id,
+                "placeholder": False,
+                "personal_evidence": True,
+                "provenance_label": "Confirmed from personal roster",
+                "possibly_missing": str(evidence.get("status") or "") == "possibly_missing",
+            })
+            continue
+        same_person = (
+            evidence_employee_id is not None
+            and safe_int(shared.get("employee_id")) == evidence_employee_id
+        ) or (
+            evidence.get("canonical_person_id") is not None
+            and schedule_label_key(str(shared.get("employee_name") or ""))
+            == schedule_label_key(employee_name)
+        )
+        if same_person:
+            shared["personal_evidence"] = True
+            continue
+        shared["assignment_conflict"] = True
+        shared["conflict_warning"] = (
+            f"Assignment conflict: personal roster says {evidence.get('position_label')} "
+            f"for {employee_name}; crew schedule says {shared.get('employee_name')}."
+        )
+        shared["personal_evidence_name"] = employee_name
+    people.sort(key=lambda person: (
+        schedule_sort_value(person.get("sort_order")),
+        str(person.get("position_label") or ""),
+        str(person.get("employee_name") or ""),
+    ))
 
 
 def decorate_event_changes(rows: list[object]) -> list[dict[str, object]]:
@@ -4368,6 +4454,7 @@ def admin_view(request: Request, notice: str | None = None) -> object:
             "planning_location_enabled_count": sum(
                 1 for location in planning_locations if int(location.get("is_enabled") or 0)
             ),
+            "integrity": get_roster_integrity_diagnostics(),
         },
     )
 
@@ -4863,6 +4950,14 @@ def day_view(
                 else []
             ),
         )
+        reconcile_personal_assignment_evidence(
+            global_schedule_people,
+            fetch_personal_assignment_evidence_for_date(
+                date_text, [selected_location_id] if selected_location_id else None
+            ),
+            event_start_at=selected_event.get("start_at") if selected_event else None,
+            event_end_at=selected_event.get("end_at") if selected_event else None,
+        )
         for person in global_schedule_people:
             person["changed"] = False
         return templates.TemplateResponse(
@@ -4949,6 +5044,12 @@ def day_view(
         include_vehicle_only=travel_schedule_context,
         include_placeholders=not travel_schedule_context,
     )
+    reconcile_personal_assignment_evidence(
+        deputy_schedule_people,
+        fetch_personal_assignment_evidence_for_date(
+            date_text, schedule_location_ids or None
+        ),
+    )
     apply_schedule_role_context(shifts, deputy_schedule_rows)
     apply_roster_note_vehicles(deputy_schedule_people, shifts)
     if travel_schedule_context:
@@ -4979,6 +5080,12 @@ def day_view(
                 location_ids=next_day_location_ids or None,
             ),
             expected_areas=next_day_expected_areas,
+        )
+        reconcile_personal_assignment_evidence(
+            deputy_schedule_people,
+            fetch_personal_assignment_evidence_for_date(
+                next_day_text, next_day_location_ids or None
+            ),
         )
         apply_roster_note_vehicles(deputy_schedule_people, next_day_shifts)
         if deputy_schedule_people:

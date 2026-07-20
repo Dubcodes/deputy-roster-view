@@ -96,7 +96,7 @@ def main() -> None:
 
     init_db()
     stale_schedule_payload = {
-        "captured_at": "2026-07-05T05:00:00+12:00",
+        "captured_at": "2030-07-05T05:00:00+12:00",
         "areas": [],
         "locations": [],
         "extracted_shifts": [],
@@ -108,8 +108,8 @@ def main() -> None:
                 "areaLocationId": 69,
                 "employee": 18,
                 "employeeName": "Gary McClure",
-                "start": "2026-07-05T10:00:00+12:00",
-                "end": "2026-07-05T18:00:00+12:00",
+                "start": "2030-07-05T10:00:00+12:00",
+                "end": "2030-07-05T18:00:00+12:00",
                 "duration": 8,
                 "isPublished": True,
             },
@@ -120,8 +120,8 @@ def main() -> None:
                 "areaLocationId": 58,
                 "employee": 20,
                 "employeeName": "Other Location",
-                "start": "2026-07-05T10:00:00+12:00",
-                "end": "2026-07-05T18:00:00+12:00",
+                "start": "2030-07-05T10:00:00+12:00",
+                "end": "2030-07-05T18:00:00+12:00",
                 "duration": 8,
                 "isPublished": True,
             },
@@ -130,7 +130,7 @@ def main() -> None:
     save_deputy_web_schedule(stale_schedule_payload)
     partial_result = save_deputy_web_schedule(
         {
-            "captured_at": "2026-07-05T06:00:00+12:00",
+            "captured_at": "2030-07-05T06:00:00+12:00",
             "areas": [],
             "locations": [],
             "extracted_shifts": [],
@@ -145,15 +145,15 @@ def main() -> None:
         raise AssertionError("A partial Deputy capture must not remove missing schedule rows.")
     selected_result = save_deputy_web_schedule(
         {
-            "captured_at": "2026-07-05T07:00:00+12:00",
+            "captured_at": "2030-07-05T07:00:00+12:00",
             "areas": [],
             "locations": [],
             "extracted_shifts": [],
             "extracted_schedule_shifts": [],
             "schedule_coverage": [
                 {
-                    "start_date": "2026-07-01",
-                    "end_date": "2026-07-07",
+                    "start_date": "2030-07-05",
+                    "end_date": "2030-07-05",
                     "mode": "selected",
                     "location_ids": [69],
                 }
@@ -165,48 +165,51 @@ def main() -> None:
             "SELECT source_shift_id FROM deputy_schedule_shifts WHERE source_shift_id IN (9001, 9002)"
         ).fetchall()
     if [row[0] for row in selected_remaining] != [9002] or selected_result["schedule_removed"] != 1:
-        raise AssertionError("Selected Deputy coverage should remove rows only at selected locations.")
+        raise AssertionError("An exact selected-location retry should confirm removal only in its location.")
     authoritative_result = save_deputy_web_schedule(
         {
-            "captured_at": "2026-07-05T08:00:00+12:00",
+            "captured_at": "2030-07-05T08:00:00+12:00",
             "areas": [],
             "locations": [],
             "extracted_shifts": [],
             "extracted_schedule_shifts": [],
             "schedule_coverage": [
                 {
-                    "start_date": "2026-07-01",
-                    "end_date": "2026-07-07",
+                    "start_date": "2030-07-01",
+                    "end_date": "2030-07-07",
                     "mode": "all",
                     "location_ids": [],
                 }
             ],
+            "event_retry_coverage": [
+                {"date": "2030-07-05", "location_id": 58, "status": "complete"}
+            ],
         }
     )
     assignment_payload = {
-        "captured_at": "2026-07-18T08:00:00+12:00",
+        "captured_at": "2030-07-18T08:00:00+12:00",
         "areas": [],
         "locations": [{"id": 88, "name": "T-Ruakaka", "address": ""}],
         "extracted_shifts": [],
         "extracted_schedule_shifts": [{
             "id": 9901, "area": 501, "areaName": "Side 2", "areaLocationId": 88,
             "employee": 41, "employeeName": "Previous Operator",
-            "start": "2026-07-18T09:00:00+12:00", "end": "2026-07-18T18:00:00+12:00",
+            "start": "2030-07-18T09:00:00+12:00", "end": "2030-07-18T18:00:00+12:00",
             "duration": 9, "isPublished": True,
         }],
     }
     save_deputy_web_schedule(assignment_payload)
-    assignment_payload["captured_at"] = "2026-07-18T09:00:00+12:00"
+    assignment_payload["captured_at"] = "2030-07-18T09:00:00+12:00"
     assignment_payload["extracted_schedule_shifts"][0].update(
         employee=42, employeeName="Current Operator"
     )
     save_deputy_web_schedule(assignment_payload)
-    assignment_history = fetch_deputy_assignment_history_for_date("2026-07-18", [88])
+    assignment_history = fetch_deputy_assignment_history_for_date("2030-07-18", [88])
     if not assignment_history or assignment_history[0]["old_employee_name"] != "Previous Operator" or assignment_history[0]["new_employee_name"] != "Current Operator":
         raise AssertionError(f"Expected durable crew assignment history, got {assignment_history!r}")
 
     event_coverage = [{
-        "start_date": "2026-07-18", "end_date": "2026-07-18",
+        "start_date": "2030-07-18", "end_date": "2030-07-18",
         "mode": "selected", "location_ids": [188],
     }]
     before_event_rows = [
@@ -216,13 +219,13 @@ def main() -> None:
         (11004, "CCU2", 54, "Laine Baldwin"),
     ]
     save_deputy_web_schedule({
-        "captured_at": "2026-07-18T20:00:00+12:00", "areas": [],
+        "captured_at": "2030-07-18T20:00:00+12:00", "areas": [],
         "locations": [{"id": 188, "name": "T-Ruakaka", "address": ""}],
         "extracted_shifts": [], "schedule_coverage": event_coverage,
         "extracted_schedule_shifts": [{
             "id": shift_id, "area": shift_id, "areaName": position,
             "areaLocationId": 188, "employee": employee_id, "employeeName": employee_name,
-            "start": "2026-07-18T09:00:00+12:00", "end": "2026-07-18T18:00:00+12:00",
+            "start": "2030-07-18T09:00:00+12:00", "end": "2030-07-18T18:00:00+12:00",
             "duration": 9, "isPublished": True,
         } for shift_id, position, employee_id, employee_name in before_event_rows],
     })
@@ -232,17 +235,17 @@ def main() -> None:
         (12003, "CCU2", 53, "Gary McClure"),
     ]
     event_result = save_deputy_web_schedule({
-        "captured_at": "2026-07-18T21:26:00+12:00", "areas": [],
+        "captured_at": "2030-07-18T21:26:00+12:00", "areas": [],
         "locations": [{"id": 188, "name": "T-Ruakaka", "address": ""}],
         "extracted_shifts": [], "schedule_coverage": event_coverage,
         "extracted_schedule_shifts": [{
             "id": shift_id, "area": shift_id, "areaName": position,
             "areaLocationId": 188, "employee": employee_id, "employeeName": employee_name,
-            "start": "2026-07-18T09:00:00+12:00", "end": "2026-07-18T18:00:00+12:00",
+            "start": "2030-07-18T09:00:00+12:00", "end": "2030-07-18T18:00:00+12:00",
             "duration": 9, "isPublished": True,
         } for shift_id, position, employee_id, employee_name in after_event_rows],
     })
-    event_history = [dict(row) for row in fetch_deputy_event_changes_for_date("2026-07-18", [188])]
+    event_history = [dict(row) for row in fetch_deputy_event_changes_for_date("2030-07-18", [188])]
     event_summaries = {str(row["display_summary"]) for row in event_history}
     expected_event_summaries = {
         "Crew move: Laine Baldwin — CCU2 → Side 2",
@@ -253,17 +256,17 @@ def main() -> None:
     if event_result["event_changes_saved"] != 4 or event_summaries != expected_event_summaries:
         raise AssertionError(f"Connected crew changes were not reconstructed: {event_history!r}")
     repeated_result = save_deputy_web_schedule({
-        "captured_at": "2026-07-18T21:30:00+12:00", "areas": [],
+        "captured_at": "2030-07-18T21:30:00+12:00", "areas": [],
         "locations": [{"id": 188, "name": "T-Ruakaka", "address": ""}],
         "extracted_shifts": [], "schedule_coverage": event_coverage,
         "extracted_schedule_shifts": [{
             "id": shift_id, "area": shift_id, "areaName": position,
             "areaLocationId": 188, "employee": employee_id, "employeeName": employee_name,
-            "start": "2026-07-18T09:00:00+12:00", "end": "2026-07-18T18:00:00+12:00",
+            "start": "2030-07-18T09:00:00+12:00", "end": "2030-07-18T18:00:00+12:00",
             "duration": 9, "isPublished": True,
         } for shift_id, position, employee_id, employee_name in after_event_rows],
     })
-    if repeated_result["event_changes_saved"] != 0 or len(fetch_deputy_event_changes_for_date("2026-07-18", [188])) != 4:
+    if repeated_result["event_changes_saved"] != 0 or len(fetch_deputy_event_changes_for_date("2030-07-18", [188])) != 4:
         raise AssertionError("An unchanged repeated capture duplicated event-level crew history.")
 
     def event_item(position_key: str, position_label: str, identity: str, name: str) -> dict[str, object]:
@@ -307,7 +310,7 @@ def main() -> None:
             "SELECT COUNT(*) FROM deputy_schedule_shifts WHERE source_shift_id IN (9001, 9002)"
         ).fetchone()[0]
     if remaining_stale != 0 or authoritative_result["schedule_removed"] != 1:
-        raise AssertionError("A complete Deputy window should remove rows Deputy no longer returns.")
+        raise AssertionError("A complete selected retry should confirm a future row removal.")
     migrated_legacy = [
         dict(row) for row in list_travel_time_defaults() if row["track_key"] == "legacyvenue"
     ]
@@ -470,17 +473,17 @@ def main() -> None:
     published_month = client.get("/month?year=2026&month=7")
     if "published-roster-marker" not in published_month.text or "Test Park" not in published_month.text:
         raise AssertionError("Expected published roster marker on the assigned user's month view.")
-    global_month = client.get("/month?year=2026&month=7&scope=global")
+    global_month = client.get("/month?year=2030&month=7&scope=global")
     if global_month.status_code != 200 or "Shared crew schedule" not in global_month.text:
         raise AssertionError("Expected the global crew calendar to render.")
     if "aria-label=\"Personal roster\"" not in global_month.text:
         raise AssertionError("Expected a personal-roster return control in global view.")
-    if "/day/2026-07-18?scope=global&amp;location_id=88" not in global_month.text:
+    if "/day/2030-07-18?scope=global&amp;location_id=88" not in global_month.text:
         raise AssertionError("Expected global calendar markers to carry their exact Deputy location.")
-    global_day = client.get("/day/2026-07-18?scope=global&location_id=88")
+    global_day = client.get("/day/2030-07-18?scope=global&location_id=88")
     if global_day.status_code != 200 or "Current Operator" not in global_day.text or "Ruakaka" not in global_day.text:
         raise AssertionError("Expected the global day to render the selected location's crew data.")
-    global_back_url = "/month?year=2026&amp;month=7&amp;scope=global"
+    global_back_url = "/month?year=2030&amp;month=7&amp;scope=global"
     if global_back_url not in global_day.text:
         raise AssertionError("Expected global day calendar controls to return to the global month.")
     timesheet_page = client.get("/timesheet/2026-07-04")

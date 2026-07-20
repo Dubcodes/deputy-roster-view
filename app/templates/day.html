@@ -37,7 +37,12 @@
             {% for person in deputy_schedule_people %}
               <div class="crew-roster-row{% if person.placeholder %} is-placeholder{% endif %}" role="row">
                 <span role="cell">{{ person.position_label }}</span>
-                <strong class="crew-name" role="cell">{{ person.employee_name }}</strong>
+                <strong class="crew-name" role="cell">
+                  <span>{{ person.employee_name }}</span>
+                  {% if person.provenance_label %}<small>{{ person.provenance_label }}</small>{% endif %}
+                  {% if person.possibly_missing %}<small class="warning-text">Possibly missing from latest capture</small>{% endif %}
+                  {% if person.conflict_warning %}<small class="warning-text">{{ person.conflict_warning }}</small>{% endif %}
+                </strong>
                 <span role="cell">{{ person.vehicle_label or "-" }}</span>
               </div>
             {% endfor %}
@@ -161,6 +166,9 @@
             {% if shift.source_status %}
               <span class="badge">{{ shift.source_status }}</span>
             {% endif %}
+            {% if shift.capture_status == "possibly_missing" %}
+              <span class="badge badge-warn">Possibly missing from latest capture</span>
+            {% endif %}
             {% if shift.race_type_label %}
               <span class="badge">{{ shift.race_type_label }}</span>
             {% endif %}
@@ -222,6 +230,9 @@
                   <span role="cell">{{ person.position_label }}</span>
                   <strong class="crew-name" role="cell">
                     <span>{{ person.employee_name }}</span>
+                    {% if person.provenance_label %}<small>{{ person.provenance_label }}</small>{% endif %}
+                    {% if person.possibly_missing %}<small class="warning-text">Possibly missing from latest capture</small>{% endif %}
+                    {% if person.conflict_warning %}<small class="warning-text">{{ person.conflict_warning }}</small>{% endif %}
                     {% if person.changed %}
                       <details class="crew-change-details">
                         <summary class="badge badge-warn crew-change-badge">Changed{% if person.change_time_label %} · {{ person.change_time_label }}{% endif %}</summary>

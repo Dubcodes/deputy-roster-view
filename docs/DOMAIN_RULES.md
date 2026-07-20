@@ -101,6 +101,16 @@ The same stale-row problem can leave one person with two overlapping production 
 
 A successful complete Deputy schedule-search window is authoritative for that window. Rows that were previously saved in the same date/location scope but are absent from the latest complete result should be removed. Failed, partial, or ordinary page captures must never prune saved crew rows. This is how a removed roster assignment, such as someone no longer working that day, disappears without guessing from roles or notes.
 
+Completeness is judged per upcoming date and Deputy location, not only by HTTP success. Compare known production areas, the previous populated event, and registered users' personal roster assignments. Missing production evidence requires an exact-date selected-location retry using `locationIds`, never `areaIds`. If evidence is still absent, retain the previous rows, mark the event partial, and show any safe personal evidence.
+
+A registered user's personal Deputy roster is valid evidence for that person's assignment. Named shared assignments take precedence, matching personal evidence is merged, confirmed personal evidence replaces only a TBC/open placeholder, and TBC remains last. If shared and personal sources name different people for one position, show a compact conflict and retain both sources. Match by Deputy employee ID first; never merge people on a common first name alone.
+
+One complete own-roster capture that omits a future shift marks it possibly missing. A second independent complete omission may retire it. Failed, partial, empty, or truncated captures do not count. Reappearance resets the count, while an explicit Deputy cancellation applies immediately. Local user notes and timing marks survive every state.
+
+Completed events lock after the latest known finish plus six hours in Pacific/Auckland, or early the following morning when no finish is known. A locked day keeps its personal shifts, people, vehicles, notes, calculations, and history. Later blank fields may be enriched, but missing rows cannot prune it and conflicting nonblank data becomes a historical discrepancy rather than rewriting the snapshot. Locking clears active alert badges, not stored history.
+
+Visible changes are operational facts: substantive track, role, start, finish, assignment, cancellation, existing-note, or confirmed vehicle changes. Initial enrichment, Web-to-real context, spelling/presentation normalization, parser reinterpretation, and duplicate derived-hours changes remain technical audit only.
+
 If Deputy has known schedule areas for the user's race-day location but no current employee row for one of the normal production positions, show a muted `TBC` placeholder row. This makes likely contractor/unknown slots visible without pretending the person is known. Keep this inferred from Deputy's area list for now; do not add a heavy manual region/default-position UI yet.
 
 `RTS` and `FM` are assigned-only positions. Show either position when Deputy supplies a person, but do not create a `TBC` placeholder merely because the area exists. Their presence varies with the production and they commonly appear together, but the app must not infer one from the other.

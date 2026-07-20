@@ -567,6 +567,8 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     extracted_shifts_by_id: dict[str, dict[str, Any]] = {}
     extracted_schedule_shifts_by_id: dict[str, dict[str, Any]] = {}
     schedule_coverage: list[dict[str, Any]] = []
+    own_roster_coverage: list[dict[str, Any]] = []
+    event_retry_coverage: list[dict[str, Any]] = []
     area_refs_by_id: dict[str, dict[str, Any]] = {}
     location_refs_by_id: dict[str, dict[str, Any]] = {}
     captured_employee_id = ""
@@ -935,6 +937,15 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             result = await fetch_shift_window(window_start, window_end)
                         except Exception as exc:
                             failed_requests += 1
+                            own_roster_coverage.append({
+                                "start_date": window_start.date().isoformat(),
+                                "end_date": window_end.date().isoformat(),
+                                "status": "failed",
+                                "records_returned": 0,
+                                "pagination_complete": False,
+                                "known_shift_ids_checked": False,
+                                "note": "Request failed.",
+                            })
                             events.append(
                                 "Extended own-roster capture failed for "
                                 f"{window_start.date().isoformat()} to {window_end.date().isoformat()}: "
@@ -953,6 +964,15 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         status = int(result.get("status") or 0) if isinstance(result, dict) else 0
                         if not isinstance(result, dict) or not result.get("ok"):
                             failed_requests += 1
+                            own_roster_coverage.append({
+                                "start_date": window_start.date().isoformat(),
+                                "end_date": window_end.date().isoformat(),
+                                "status": "failed",
+                                "records_returned": 0,
+                                "pagination_complete": False,
+                                "known_shift_ids_checked": False,
+                                "note": f"HTTP {status or 'unknown'}.",
+                            })
                             events.append(
                                 "Extended own-roster capture returned "
                                 f"HTTP {status or 'unknown'} for "
@@ -968,8 +988,18 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
 
                         shifts = _extract_management_shifts(body)
                         rows_seen += len(shifts)
-                        if isinstance(body, dict) and body.get("nextCursor"):
+                        has_cursor = bool(isinstance(body, dict) and body.get("nextCursor"))
+                        if has_cursor:
                             paged_windows += 1
+                        own_roster_coverage.append({
+                            "start_date": window_start.date().isoformat(),
+                            "end_date": window_end.date().isoformat(),
+                            "status": "partial" if has_cursor else "complete",
+                            "records_returned": len(shifts),
+                            "pagination_complete": not has_cursor,
+                            "known_shift_ids_checked": not has_cursor,
+                            "note": "Pagination cursor returned." if has_cursor else "Weekly request completed.",
+                        })
                         for shift in shifts:
                             shift_id = str(shift.get("id") or "")
                             if not shift_id:
@@ -1257,6 +1287,104 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     if failed_requests:
                         events.append(f"Direct schedule search had {failed_requests} failed batched requests.")
 
+                async def retry_personal_events_missing_from_schedule() -> None:
+                    role_aliases = {
+                        "dir": "director", "director": "director", "svt": "soundvt",
+                        "soundvt": "soundvt", "sound": "sound", "vt": "vt",
+                        "ccu1": "ccu1", "ccu2": "ccu2", "eng": "eng",
+                        "engineer": "eng", "side1": "side1", "sideone": "side1",
+                        "side2": "side2", "sidetwo": "side2", "headon": "headon",
+                        "back": "back", "start": "start", "turn": "turn", "rts": "rts",
+                    }
+
+                    def role_key(value: Any) -> str:
+                        raw = re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+                        return role_aliases.get(raw, raw)
+
+                    core_positions = {
+                        "side1", "side2", "headon", "back", "start", "turn",
+                        "rts", "director", "sound", "soundvt", "vt", "ccu1",
+                        "ccu2", "eng",
+                    }
+
+                    now_date = datetime.now(settings.timezone).date()
+                    candidates: dict[tuple[str, int], set[str]] = {}
+                    for own_shift in extracted_shifts_by_id.values():
+                        start_text = str(own_shift.get("start") or "")
+                        date_text = start_text[:10]
+                        try:
+                            shift_date = datetime.fromisoformat(start_text).date()
+                        except ValueError:
+                            continue
+                        if shift_date < now_date:
+                            continue
+                        area = area_refs_by_id.get(str(own_shift.get("area") or ""), {})
+                        location_id = own_shift.get("location") or own_shift.get("locationId") or own_shift.get("areaLocationId") or area.get("locationId")
+                        try:
+                            location_id = int(location_id)
+                        except (TypeError, ValueError):
+                            continue
+                        position = role_key(own_shift.get("areaName") or area.get("name") or own_shift.get("roleName") or own_shift.get("role"))
+                        if position not in set(role_aliases.values()):
+                            continue
+                        candidates.setdefault((date_text, location_id), set()).add(position)
+
+                    for (date_text, location_id), personal_positions in sorted(candidates.items()):
+                        captured_positions = set()
+                        for schedule_shift in extracted_schedule_shifts_by_id.values():
+                            if str(schedule_shift.get("start") or "")[:10] != date_text:
+                                continue
+                            area = area_refs_by_id.get(str(schedule_shift.get("area") or ""), {})
+                            schedule_location = schedule_shift.get("location") or schedule_shift.get("locationId") or schedule_shift.get("areaLocationId") or area.get("locationId")
+                            if str(schedule_location or "") != str(location_id):
+                                continue
+                            captured_positions.add(role_key(schedule_shift.get("areaName") or area.get("name")))
+                        expected_positions = {
+                            role_key(area.get("name"))
+                            for area in area_refs_by_id.values()
+                            if str(area.get("locationId") or "") == str(location_id)
+                            and role_key(area.get("name")) in core_positions
+                        }
+                        missing = sorted((personal_positions | expected_positions) - captured_positions)
+                        if not missing:
+                            continue
+                        day_start = datetime.fromisoformat(f"{date_text}T00:00:00").replace(tzinfo=settings.timezone)
+                        day_end = day_start.replace(hour=23, minute=59, second=59)
+                        body_data = {
+                            "start": day_start.isoformat(),
+                            "end": day_end.isoformat(),
+                            "expandMetadata": True,
+                            "locationMode": "SELECTED",
+                            "locationIds": [location_id],
+                        }
+                        try:
+                            result = await fetch_schedule_search(body_data)
+                        except Exception as exc:
+                            event_retry_coverage.append({
+                                "date": date_text, "location_id": location_id,
+                                "status": "failed", "missing_positions": missing,
+                                "note": redacted_text(str(exc))[:180],
+                            })
+                            continue
+                        body = result.get("body") if isinstance(result, dict) else None
+                        complete = bool(isinstance(result, dict) and result.get("ok") and schedule_search_body_is_complete(body))
+                        recovered_count = store_schedule_search_body(body) if isinstance(result, dict) and result.get("ok") else 0
+                        event_retry_coverage.append({
+                            "date": date_text, "location_id": location_id,
+                            "status": "complete" if complete else "partial",
+                            "missing_positions": missing, "rows_returned": recovered_count,
+                            "note": "Selected-location retry completed." if complete else "Selected-location retry was incomplete.",
+                        })
+                        if complete:
+                            schedule_coverage.append({
+                                "start_date": date_text, "end_date": date_text,
+                                "mode": "selected", "location_ids": [location_id],
+                            })
+                        events.append(
+                            f"Retried {date_text} at location {location_id} for missing personal positions: "
+                            f"{', '.join(missing)}; recovered {recovered_count} rows."
+                        )
+
                 async def capture_response(response: Any) -> None:
                     try:
                         response_url = response.url
@@ -1381,6 +1509,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     await capture_extended_own_roster()
                     await capture_expanded_area_refs()
                     await capture_direct_schedule_searches()
+                    await retry_personal_events_missing_from_schedule()
             finally:
                 if context is not None:
                     await context.close()
@@ -1432,6 +1561,8 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
         ),
         "extracted_schedule_shifts": extracted_schedule_shifts,
         "schedule_coverage": schedule_coverage,
+        "own_roster_coverage": own_roster_coverage,
+        "event_retry_coverage": event_retry_coverage,
     }
     if login_problem_message:
         payload["auth_status"] = "login_failed"

@@ -72,6 +72,49 @@
     <p class="muted">Deactivated accounts and untrusted devices are automatically purged after 30 days. Active users are not purged. This runs the same cleanup now.</p>
   </section>
 
+  <details class="table-panel integrity-panel">
+    <summary class="management-panel-summary">
+      <span><strong>Roster integrity</strong><small>Capture coverage, personal confirmations, and locked history</small></span>
+      <span>
+        {% if integrity.partial_upcoming or integrity.possibly_missing or integrity.coverage_conflicts %}
+          {{ integrity.partial_upcoming + integrity.possibly_missing + integrity.coverage_conflicts }} to check
+        {% else %}
+          No current warnings
+        {% endif %}
+      </span>
+    </summary>
+    <div class="management-panel-body">
+      <div class="stats-card-grid stats-card-grid-three">
+        <div class="stat-card"><span>Partial upcoming events</span><strong>{{ integrity.partial_upcoming }}</strong><small>kept from destructive pruning</small></div>
+        <div class="stat-card"><span>Personal confirmations used</span><strong>{{ integrity.evidence_fills }}</strong><small>filled or checked crew assignments</small></div>
+        <div class="stat-card"><span>Possibly missing shifts</span><strong>{{ integrity.possibly_missing }}</strong><small>waiting for a second complete capture</small></div>
+        <div class="stat-card"><span>Locked completed events</span><strong>{{ integrity.locked_events }}</strong><small>{{ integrity.recovered_locks }} recovered from retained captures</small></div>
+        <div class="stat-card"><span>Current conflicts</span><strong>{{ integrity.coverage_conflicts }}</strong><small>personal and shared evidence disagree</small></div>
+        <div class="stat-card"><span>Late historical discrepancies</span><strong>{{ integrity.historical_discrepancies }}</strong><small>recorded without rewriting history</small></div>
+      </div>
+      {% if integrity.partial_rows %}
+        <h3>Upcoming captures to check</h3>
+        <div class="track-map-diagnostics">
+          {% for row in integrity.partial_rows %}
+            <div>
+              <strong>{{ row.date }} · {{ row.location_name }}</strong>
+              <span>{{ row.named_positions }} named · {{ row.placeholder_positions }} expected positions missing</span>
+              <small>{{ row.reason or "Capture was incomplete." }}</small>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+      {% if integrity.recovery %}
+        <p class="muted">
+          Historical recovery {{ integrity.recovery.ran_at|datetime }}:
+          {{ integrity.recovery.rows_restored }} rows across {{ integrity.recovery.events_restored }} events restored;
+          {{ integrity.recovery.events_unrecoverable }} events had conflicting or incomplete archive evidence.
+        </p>
+      {% endif %}
+      {% if integrity.last_checked_at %}<p class="muted">Latest coverage check: {{ integrity.last_checked_at|datetime }}</p>{% endif %}
+    </div>
+  </details>
+
   <section class="table-panel">
     <div class="section-heading">
       <h2>Track Maps</h2>

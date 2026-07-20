@@ -78,6 +78,8 @@ def init_db(settings: Settings | None = None) -> None:
                 field_name TEXT,
                 old_value TEXT,
                 new_value TEXT,
+                change_category TEXT DEFAULT 'source_change',
+                user_visible INTEGER DEFAULT 1,
                 FOREIGN KEY (shift_id) REFERENCES shifts(id) ON DELETE CASCADE
             );
 
@@ -362,6 +364,99 @@ def init_db(settings: Settings | None = None) -> None:
                 UNIQUE(group_id, change_key)
             );
 
+            CREATE TABLE IF NOT EXISTS deputy_personal_assignment_evidence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_user_id INTEGER NOT NULL,
+                deputy_employee_id INTEGER,
+                canonical_person_id INTEGER,
+                source_shift_uid TEXT NOT NULL,
+                source_shift_id TEXT,
+                date TEXT NOT NULL,
+                area_location_id INTEGER NOT NULL,
+                position_key TEXT NOT NULL,
+                position_label TEXT NOT NULL,
+                start_at TEXT NOT NULL,
+                end_at TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                last_confirmed_at TEXT NOT NULL,
+                missing_capture_count INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'confirmed',
+                provenance TEXT,
+                UNIQUE(owner_user_id, source_shift_uid),
+                FOREIGN KEY (owner_user_id) REFERENCES app_users(id) ON DELETE CASCADE,
+                FOREIGN KEY (canonical_person_id) REFERENCES crew_people(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_personal_capture_coverage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_user_id INTEGER NOT NULL,
+                captured_at TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                status TEXT NOT NULL,
+                records_returned INTEGER DEFAULT 0,
+                pagination_complete INTEGER DEFAULT 0,
+                known_shift_ids_checked INTEGER DEFAULT 0,
+                note TEXT,
+                UNIQUE(owner_user_id, captured_at, start_date, end_date),
+                FOREIGN KEY (owner_user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_event_coverage (
+                date TEXT NOT NULL,
+                area_location_id INTEGER NOT NULL,
+                event_start_at TEXT DEFAULT '',
+                event_end_at TEXT DEFAULT '',
+                status TEXT NOT NULL,
+                expected_positions INTEGER DEFAULT 0,
+                named_positions INTEGER DEFAULT 0,
+                open_positions INTEGER DEFAULT 0,
+                placeholder_positions INTEGER DEFAULT 0,
+                personal_evidence_fills INTEGER DEFAULT 0,
+                conflict_count INTEGER DEFAULT 0,
+                reason TEXT,
+                last_capture_at TEXT,
+                source_user_id INTEGER,
+                PRIMARY KEY (date, area_location_id, event_start_at),
+                FOREIGN KEY (source_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_event_locks (
+                date TEXT NOT NULL,
+                area_location_id INTEGER NOT NULL,
+                event_start_at TEXT DEFAULT '',
+                event_end_at TEXT DEFAULT '',
+                locked_at TEXT NOT NULL,
+                lock_reason TEXT NOT NULL,
+                recovered_from_capture INTEGER DEFAULT 0,
+                PRIMARY KEY (date, area_location_id, event_start_at)
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_historical_discrepancies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                area_location_id INTEGER NOT NULL,
+                source_shift_id INTEGER,
+                position_label TEXT,
+                existing_value TEXT,
+                incoming_value TEXT,
+                discrepancy_type TEXT NOT NULL,
+                captured_at TEXT NOT NULL,
+                details TEXT,
+                UNIQUE(date, area_location_id, source_shift_id, discrepancy_type, captured_at)
+            );
+
+            CREATE TABLE IF NOT EXISTS historical_recovery_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ran_at TEXT NOT NULL,
+                events_inspected INTEGER DEFAULT 0,
+                events_restored INTEGER DEFAULT 0,
+                rows_restored INTEGER DEFAULT 0,
+                events_unrecoverable INTEGER DEFAULT 0,
+                note TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS love_racing_meetings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 meeting_date TEXT,
@@ -493,6 +588,11 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "shifts", "source_link", "TEXT")
         _ensure_column(conn, "shifts", "source_status", "TEXT")
         _ensure_column(conn, "shifts", "owner_user_id", "INTEGER")
+        _ensure_column(conn, "shifts", "missing_capture_count", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "shifts", "capture_status", "TEXT DEFAULT 'confirmed'")
+        _ensure_column(conn, "shifts", "historical_locked_at", "TEXT")
+        _ensure_column(conn, "shift_changes", "change_category", "TEXT DEFAULT 'source_change'")
+        _ensure_column(conn, "shift_changes", "user_visible", "INTEGER DEFAULT 1")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_shifts_owner ON shifts(owner_user_id)")
         _ensure_column(conn, "shift_marks", "timing_adjustment_time", "TEXT")
         _ensure_column(conn, "shift_marks", "timing_adjustment_last_race", "INTEGER DEFAULT 0")
@@ -519,6 +619,7 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "track_maps", "candidate_count", "INTEGER DEFAULT 0")
         _ensure_column(conn, "track_maps", "refresh_result", "TEXT")
         _ensure_column(conn, "deputy_schedule_event_changes", "changed_since_viewed", "INTEGER DEFAULT 1")
+        _ensure_column(conn, "deputy_schedule_event_changes", "change_category", "TEXT DEFAULT 'assignment_change'")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_location ON deputy_schedule_shifts(date, area_location_id)"
         )
@@ -528,6 +629,10 @@ def init_db(settings: Settings | None = None) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_schedule_event_changes_day ON deputy_schedule_event_changes(date, area_location_id, changed_at DESC)"
         )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_personal_evidence_event ON deputy_personal_assignment_evidence(date, area_location_id, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_personal_coverage_user ON deputy_personal_capture_coverage(owner_user_id, captured_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_event_coverage_status ON deputy_event_coverage(status, date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_event_locks_date ON deputy_event_locks(date, area_location_id)")
         conn.execute(
             """
             UPDATE deputy_schedule_shifts
@@ -542,6 +647,10 @@ def init_db(settings: Settings | None = None) -> None:
         _merge_equivalent_travel_bases(conn)
         _migrate_travel_defaults_to_routes(conn)
         _sync_crew_directory(conn)
+        _reclassify_legacy_shift_changes(conn)
+    recover_historical_schedule_from_captures(settings=settings)
+    with get_connection(settings) as maintenance_conn:
+        lock_completed_events(maintenance_conn)
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -551,6 +660,83 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
     }
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _reclassify_legacy_shift_changes(conn: sqlite3.Connection) -> None:
+    marker = conn.execute(
+        "SELECT value FROM app_settings WHERE key = 'shift_change_classification_v1'"
+    ).fetchone()
+    if marker is not None:
+        return
+    rows = conn.execute("SELECT * FROM shift_changes ORDER BY id").fetchall()
+    for row in rows:
+        field_name = str(row["field_name"] or "")
+        old_value = str(row["old_value"] or "")
+        new_value = str(row["new_value"] or "")
+        category = "source_change"
+        visible = 1
+        replacement_field = field_name
+        replacement_old = old_value
+        replacement_new = new_value
+        if field_name in {"raw_hours", "paid_hours", "break_minutes"}:
+            category, visible = "derived_change", 0
+        elif field_name == "location":
+            category, visible = "enrichment", 0
+        elif field_name == "description" and (not old_value.strip() or not new_value.strip()):
+            category, visible = "enrichment", 0
+        elif field_name == "title":
+            old_location, _old_source, old_role, old_role_label = _canonical_title_facts(old_value)
+            new_location, _new_source, new_role, new_role_label = _canonical_title_facts(new_value)
+            if old_role and new_role and old_role != new_role:
+                replacement_field = "role"
+                replacement_old, replacement_new = old_role_label, new_role_label
+            elif old_location and new_location and old_location != new_location:
+                replacement_field = "track"
+                replacement_old, replacement_new = old_location, new_location
+            else:
+                category, visible = "normalization", 0
+        if re.sub(r"[\s/]", "", old_value.lower()) == re.sub(r"[\s/]", "", new_value.lower()):
+            category, visible = "normalization", 0
+        conn.execute(
+            """
+            UPDATE shift_changes
+            SET field_name = ?, old_value = ?, new_value = ?,
+                change_category = ?, user_visible = ?
+            WHERE id = ?
+            """,
+            (replacement_field, replacement_old, replacement_new, category, visible, int(row["id"])),
+        )
+    conn.execute(
+        """
+        UPDATE shift_changes
+        SET change_category = 'derived_change', user_visible = 0
+        WHERE field_name IN ('raw_hours', 'paid_hours')
+          AND EXISTS (
+              SELECT 1 FROM shift_changes other
+              WHERE other.shift_id = shift_changes.shift_id
+                AND other.changed_at = shift_changes.changed_at
+                AND other.field_name IN ('start_at', 'end_at')
+          )
+        """
+    )
+    conn.execute(
+        """
+        UPDATE shifts
+        SET changed_since_viewed = 0
+        WHERE changed_since_viewed = 1
+          AND NOT EXISTS (
+              SELECT 1
+              FROM shift_changes c
+              WHERE c.shift_id = shifts.id
+                AND c.user_visible = 1
+          )
+        """
+    )
+    now = datetime.now().isoformat(timespec="seconds")
+    conn.execute(
+        "INSERT INTO app_settings (key, value, updated_at) VALUES ('shift_change_classification_v1', 'done', ?) ON CONFLICT(key) DO UPDATE SET value = 'done', updated_at = excluded.updated_at",
+        (now,),
+    )
 
 
 def _ensure_default_crew_pool(conn: sqlite3.Connection) -> None:
@@ -2900,7 +3086,7 @@ def get_shift_changes_for_date(date_text: str) -> list[sqlite3.Row]:
             SELECT c.*
             FROM shift_changes c
             JOIN shifts s ON s.id = c.shift_id
-            WHERE s.date = ?
+            WHERE s.date = ? AND COALESCE(c.user_visible, 1) = 1
             ORDER BY c.changed_at DESC, c.id DESC
             """,
             (date_text,),
@@ -2998,6 +3184,7 @@ def fetch_deputy_event_changes_for_date(
             SELECT *
             FROM deputy_schedule_event_changes
             WHERE date = ?
+              AND change_category = 'assignment_change'
               {location_sql}
             ORDER BY changed_at DESC, id DESC
             """,
@@ -3265,6 +3452,73 @@ def get_latest_deputy_web_capture_for_user(owner_user_id: int) -> sqlite3.Row | 
             """,
             (owner_user_id,),
         ).fetchone()
+
+
+def get_roster_integrity_diagnostics() -> dict[str, object]:
+    today_text = datetime.now(get_settings().timezone).date().isoformat()
+    with get_connection() as conn:
+        totals = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN date >= ? AND status = 'partial' THEN 1 ELSE 0 END) AS partial_upcoming,
+                SUM(CASE WHEN date >= ? THEN personal_evidence_fills ELSE 0 END) AS evidence_fills,
+                SUM(CASE WHEN date >= ? THEN conflict_count ELSE 0 END) AS coverage_conflicts,
+                MAX(last_capture_at) AS last_checked_at
+            FROM deputy_event_coverage
+            """,
+            (today_text, today_text, today_text),
+        ).fetchone()
+        evidence = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN status = 'possibly_missing' AND date >= ? THEN 1 ELSE 0 END) AS possibly_missing,
+                SUM(CASE WHEN status = 'confirmed' AND date >= ? THEN 1 ELSE 0 END) AS confirmed_upcoming,
+                SUM(CASE WHEN status = 'historical_locked' THEN 1 ELSE 0 END) AS locked_personal
+            FROM deputy_personal_assignment_evidence
+            """,
+            (today_text, today_text),
+        ).fetchone()
+        locks = conn.execute(
+            """
+            SELECT COUNT(*) AS lock_count,
+                   SUM(CASE WHEN recovered_from_capture = 1 THEN 1 ELSE 0 END) AS recovered_locks,
+                   MAX(locked_at) AS latest_lock_at
+            FROM deputy_event_locks
+            """
+        ).fetchone()
+        recovery = conn.execute(
+            "SELECT * FROM historical_recovery_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        discrepancies = conn.execute(
+            "SELECT COUNT(*) AS count, MAX(captured_at) AS latest_at FROM deputy_historical_discrepancies"
+        ).fetchone()
+        partial_rows = conn.execute(
+            """
+            SELECT c.*, COALESCE(l.name, c.area_location_id) AS location_name
+            FROM deputy_event_coverage c
+            LEFT JOIN deputy_schedule_locations l ON l.location_id = c.area_location_id
+            WHERE c.date >= ? AND c.status = 'partial'
+            ORDER BY c.date, location_name
+            LIMIT 12
+            """,
+            (today_text,),
+        ).fetchall()
+    return {
+        "partial_upcoming": int((totals["partial_upcoming"] if totals else 0) or 0),
+        "evidence_fills": int((totals["evidence_fills"] if totals else 0) or 0),
+        "coverage_conflicts": int((totals["coverage_conflicts"] if totals else 0) or 0),
+        "possibly_missing": int((evidence["possibly_missing"] if evidence else 0) or 0),
+        "confirmed_upcoming": int((evidence["confirmed_upcoming"] if evidence else 0) or 0),
+        "locked_personal": int((evidence["locked_personal"] if evidence else 0) or 0),
+        "locked_events": int((locks["lock_count"] if locks else 0) or 0),
+        "recovered_locks": int((locks["recovered_locks"] if locks else 0) or 0),
+        "historical_discrepancies": int((discrepancies["count"] if discrepancies else 0) or 0),
+        "last_checked_at": str((totals["last_checked_at"] if totals else "") or ""),
+        "latest_lock_at": str((locks["latest_lock_at"] if locks else "") or ""),
+        "latest_discrepancy_at": str((discrepancies["latest_at"] if discrepancies else "") or ""),
+        "recovery": dict(recovery) if recovery is not None else None,
+        "partial_rows": [dict(row) for row in partial_rows],
+    }
 
 
 def get_calendar_url(settings: Settings | None = None) -> str:
@@ -3904,8 +4158,9 @@ def _record_authoritative_event_changes(
                         group_id, change_key, change_type, date, area_location_id,
                         event_start_at, event_end_at, old_positions, new_positions,
                         old_employee_id, old_employee_name, new_employee_id, new_employee_name,
-                        changed_at, display_summary, inline_summary, before_hash, after_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        changed_at, display_summary, inline_summary, before_hash, after_hash,
+                        changed_since_viewed, change_category
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         group_id, change_key, change["change_type"], date_text, location_id,
@@ -3914,22 +4169,184 @@ def _record_authoritative_event_changes(
                         change["old_employee_id"], change["old_employee_name"],
                         change["new_employee_id"], change["new_employee_name"], captured_at,
                         change["display_summary"], change["inline_summary"], before_hash, after_hash,
+                        0 if _event_lock_row(conn, date_text, location_id) is not None else 1,
+                        "historical_discrepancy" if _event_lock_row(conn, date_text, location_id) is not None else "assignment_change",
                     ),
                 )
                 saved += max(0, int(result.rowcount or 0))
     return saved
 
 
+def _coverage_contains_scope(coverage_rows: list[dict[str, object]], date_text: str, location_id: int) -> bool:
+    for coverage in coverage_rows:
+        if not (str(coverage["start_date"]) <= date_text <= str(coverage["end_date"])):
+            continue
+        if coverage["mode"] == "all" or location_id in coverage["location_ids"]:
+            return True
+    return False
+
+
+def _evaluate_event_coverage(
+    conn: sqlite3.Connection,
+    payload: dict[str, object],
+    coverage_rows: list[dict[str, object]],
+    before_snapshots: dict[tuple[str, int], list[dict[str, object]]],
+    captured_at: str,
+    owner_user_id: int | None,
+) -> set[tuple[str, int]]:
+    settings = get_settings()
+    today_text = datetime.now(settings.timezone).date().isoformat()
+    incoming_scopes: dict[tuple[str, int], list[dict[str, object]]] = {}
+    for row in payload.get("extracted_schedule_shifts") or []:
+        if not isinstance(row, dict):
+            continue
+        location_id = _optional_int(row.get("areaLocationId") or row.get("location") or row.get("locationId"))
+        date_text = str(row.get("start") or "")[:10]
+        position = _event_position(row.get("areaName"))
+        if location_id is None or not date_text or position is None:
+            continue
+        incoming_scopes.setdefault((date_text, location_id), []).append({
+            "position_key": position[0],
+            "position_label": position[1],
+            "employee_id": _optional_int(row.get("employee")),
+            "employee_name": str(row.get("employeeName") or "").strip(),
+            "is_open": bool(row.get("isOpen")),
+            "start_at": str(row.get("start") or ""),
+            "end_at": str(row.get("end") or ""),
+        })
+    evidence_scopes: dict[tuple[str, int], list[sqlite3.Row]] = {}
+    for evidence in conn.execute(
+        """
+        SELECT e.*, COALESCE(p.canonical_display_name, u.display_name) AS employee_name
+        FROM deputy_personal_assignment_evidence e
+        JOIN app_users u ON u.id = e.owner_user_id AND u.is_active = 1
+        LEFT JOIN crew_people p ON p.id = e.canonical_person_id
+        WHERE e.status IN ('confirmed', 'possibly_missing') AND e.date >= ?
+        """,
+        (today_text,),
+    ).fetchall():
+        scope = (str(evidence["date"]), int(evidence["area_location_id"]))
+        if _coverage_contains_scope(coverage_rows, *scope):
+            evidence_scopes.setdefault(scope, []).append(evidence)
+
+    scopes = {
+        scope for scope in set(incoming_scopes) | set(before_snapshots) | set(evidence_scopes)
+        if scope[0] >= today_text and _coverage_contains_scope(coverage_rows, *scope)
+    }
+    partial_scopes: set[tuple[str, int]] = set()
+    retry_lookup = {
+        (str(item.get("date") or ""), _optional_int(item.get("location_id"))): item
+        for item in payload.get("event_retry_coverage") or [] if isinstance(item, dict)
+    }
+    for date_text, location_id in sorted(scopes):
+        incoming = incoming_scopes.get((date_text, location_id), [])
+        evidence_rows = evidence_scopes.get((date_text, location_id), [])
+        captured_by_position = {
+            str(item["position_key"]): item for item in incoming
+            if str(item.get("employee_name") or "").strip() or item.get("is_open")
+        }
+        named_positions = {
+            key for key, item in captured_by_position.items()
+            if str(item.get("employee_name") or "").strip()
+        }
+        expected_positions = set()
+        for area in conn.execute(
+            "SELECT name FROM deputy_schedule_areas WHERE location_id = ?",
+            (location_id,),
+        ).fetchall():
+            position = _event_position(area["name"])
+            if position and position[0] in CORE_EVENT_POSITION_KEYS:
+                expected_positions.add(position[0])
+        personal_positions = {str(row["position_key"]) for row in evidence_rows}
+        previous_named = {
+            str(item["position_key"]) for item in before_snapshots.get((date_text, location_id), [])
+            if item.get("identity") != "open"
+        }
+        missing_expected = expected_positions - set(captured_by_position)
+        missing_personal = personal_positions - named_positions
+        missing_previous = previous_named - named_positions
+        retry = retry_lookup.get((date_text, location_id))
+        exact_selected_complete = any(
+            coverage["mode"] == "selected"
+            and str(coverage["start_date"]) == date_text
+            and str(coverage["end_date"]) == date_text
+            and location_id in coverage["location_ids"]
+            for coverage in coverage_rows
+        )
+        retry_complete = bool(retry and retry.get("status") == "complete") or exact_selected_complete
+        reasons = []
+        if missing_expected:
+            reasons.append("expected positions absent: " + ", ".join(sorted(missing_expected)))
+        if missing_personal:
+            reasons.append("personal assignments absent: " + ", ".join(sorted(missing_personal)))
+        if missing_previous and not retry_complete:
+            reasons.append("previous named assignments absent: " + ", ".join(sorted(missing_previous)))
+        conflicts = 0
+        for evidence in evidence_rows:
+            shared = captured_by_position.get(str(evidence["position_key"]))
+            if shared is None or not str(shared.get("employee_name") or "").strip():
+                continue
+            same_employee = (
+                evidence["deputy_employee_id"] is not None
+                and _optional_int(shared.get("employee_id")) == _optional_int(evidence["deputy_employee_id"])
+            ) or (
+                evidence["canonical_person_id"] is not None
+                and normalise_person_identity(str(shared.get("employee_name") or ""))
+                == normalise_person_identity(str(evidence["employee_name"] or ""))
+            )
+            if not same_employee:
+                conflicts += 1
+        if retry and retry.get("status") != "complete":
+            reasons.append("selected-location retry incomplete")
+        status = "partial" if reasons else "complete"
+        if status == "partial":
+            partial_scopes.add((date_text, location_id))
+        starts = [str(item.get("start_at") or "") for item in incoming if item.get("start_at")]
+        ends = [str(item.get("end_at") or "") for item in incoming if item.get("end_at")]
+        conn.execute(
+            """
+            INSERT INTO deputy_event_coverage (
+                date, area_location_id, event_start_at, event_end_at, status,
+                expected_positions, named_positions, open_positions,
+                placeholder_positions, personal_evidence_fills, conflict_count,
+                reason, last_capture_at, source_user_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(date, area_location_id, event_start_at) DO UPDATE SET
+                event_end_at = excluded.event_end_at,
+                status = excluded.status,
+                expected_positions = excluded.expected_positions,
+                named_positions = excluded.named_positions,
+                open_positions = excluded.open_positions,
+                placeholder_positions = excluded.placeholder_positions,
+                personal_evidence_fills = excluded.personal_evidence_fills,
+                conflict_count = excluded.conflict_count,
+                reason = excluded.reason,
+                last_capture_at = excluded.last_capture_at,
+                source_user_id = excluded.source_user_id
+            """,
+            (
+                date_text, location_id, min(starts) if starts else "", max(ends) if ends else "",
+                status, len(expected_positions), len(named_positions),
+                sum(1 for item in captured_by_position.values() if item.get("is_open")),
+                len(missing_expected), len(missing_personal), conflicts,
+                "; ".join(reasons), captured_at, owner_user_id,
+            ),
+        )
+    return partial_scopes
+
+
 def _prune_missing_deputy_schedule_rows(
     conn: sqlite3.Connection,
     payload: dict[str, object],
     captured_shift_ids: set[int],
+    partial_scopes: set[tuple[str, int]] | None = None,
 ) -> int:
     coverage_rows = payload.get("schedule_coverage")
     if not isinstance(coverage_rows, list):
         return 0
 
     remove_ids: set[int] = set()
+    partial_scopes = partial_scopes or set()
     for coverage in coverage_rows:
         if not isinstance(coverage, dict):
             continue
@@ -3949,7 +4366,7 @@ def _prune_missing_deputy_schedule_rows(
             continue
         existing_rows = conn.execute(
             """
-            SELECT s.source_shift_id,
+            SELECT s.source_shift_id, s.date,
                    COALESCE(s.area_location_id, a.location_id) AS schedule_location_id
             FROM deputy_schedule_shifts s
             LEFT JOIN deputy_schedule_areas a ON a.area_id = s.area_id
@@ -3960,6 +4377,11 @@ def _prune_missing_deputy_schedule_rows(
         for row in existing_rows:
             source_shift_id = int(row["source_shift_id"])
             if source_shift_id in captured_shift_ids:
+                continue
+            scope = (str(row["date"] or ""), _optional_int(row["schedule_location_id"]))
+            if scope in partial_scopes:
+                continue
+            if _event_lock_row(conn, scope[0], scope[1]) is not None or scope[0] < datetime.now(get_settings().timezone).date().isoformat():
                 continue
             if mode == "selected" and _optional_int(row["schedule_location_id"]) not in location_ids:
                 continue
@@ -3988,6 +4410,7 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
     }
 
     with get_connection() as conn:
+        lock_completed_events(conn)
         authoritative_coverage = _authoritative_schedule_coverage(payload)
         before_event_snapshots = _effective_event_snapshots(
             conn,
@@ -4104,6 +4527,9 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
             captured_at,
             owner_user_id,
         )
+        personal_coverage_counts = _save_personal_capture_coverage(
+            conn, payload, owner_user_id, captured_at
+        )
         saved = 0
         for shift in shifts:
             if not isinstance(shift, dict) or shift.get("id") in (None, ""):
@@ -4147,7 +4573,70 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                 "SELECT * FROM deputy_schedule_shifts WHERE source_shift_id = ?",
                 (source_shift_id,),
             ).fetchone()
-            change_summary = _schedule_change_summary(existing, values)
+            event_lock = _event_lock_row(
+                conn, str(values["date"]), _optional_int(values["area_location_id"]),
+                str(values["start_at"]), str(values["end_at"]),
+            )
+            if event_lock is not None and existing is None:
+                incoming_position = _event_position(values["area_name"])
+                same_position = next(
+                    (
+                        row for row in conn.execute(
+                            "SELECT * FROM deputy_schedule_shifts WHERE date = ? AND area_location_id = ? ORDER BY captured_at DESC",
+                            (values["date"], values["area_location_id"]),
+                        ).fetchall()
+                        if incoming_position is not None
+                        and _event_position(row["area_name"]) is not None
+                        and _event_position(row["area_name"])[0] == incoming_position[0]
+                    ),
+                    None,
+                )
+                if same_position is not None and str(same_position["employee_name"] or "").strip():
+                    incoming_name = str(values["employee_name"] or "").strip()
+                    if incoming_name and normalise_person_identity(incoming_name) != normalise_person_identity(str(same_position["employee_name"] or "")):
+                        conn.execute(
+                            """
+                            INSERT OR IGNORE INTO deputy_historical_discrepancies (
+                                date, area_location_id, source_shift_id, position_label,
+                                existing_value, incoming_value, discrepancy_type,
+                                captured_at, details
+                            ) VALUES (?, ?, ?, ?, ?, ?, 'locked_assignment_conflict', ?, ?)
+                            """,
+                            (
+                                values["date"], values["area_location_id"], source_shift_id,
+                                values["area_name"], same_position["employee_name"], incoming_name,
+                                captured_at, "Late Deputy row did not replace the locked historical assignment.",
+                            ),
+                        )
+                        continue
+            if event_lock is not None and existing is not None:
+                for field_name in ("area_name", "employee_name", "start_at", "end_at", "note"):
+                    old_value = existing[field_name]
+                    new_value = values[field_name]
+                    if str(old_value or "").strip() and str(new_value or "").strip() and str(old_value) != str(new_value):
+                        conn.execute(
+                            """
+                            INSERT OR IGNORE INTO deputy_historical_discrepancies (
+                                date, area_location_id, source_shift_id, position_label,
+                                existing_value, incoming_value, discrepancy_type,
+                                captured_at, details
+                            ) VALUES (?, ?, ?, ?, ?, ?, 'locked_field_conflict', ?, ?)
+                            """,
+                            (
+                                values["date"], values["area_location_id"], source_shift_id,
+                                values["area_name"], str(old_value), str(new_value), captured_at,
+                                f"Late Deputy {field_name} did not overwrite locked history.",
+                            ),
+                        )
+                    if str(old_value or "").strip():
+                        values[field_name] = old_value
+                for field_name in ("area_id", "area_location_id", "area_roster_sort_order", "employee_id", "duration"):
+                    if existing[field_name] is not None:
+                        values[field_name] = existing[field_name]
+                values["is_open"] = existing["is_open"]
+                values["is_published"] = existing["is_published"]
+                values["raw_payload"] = existing["raw_payload"]
+            change_summary = "" if event_lock is not None else _schedule_change_summary(existing, values)
             changed = bool(change_summary)
             if changed:
                 _record_schedule_assignment_change(conn, source_shift_id, existing, values, captured_at)
@@ -4209,6 +4698,10 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                 ),
             )
             saved += 1
+        partial_scopes = _evaluate_event_coverage(
+            conn, payload, authoritative_coverage, before_event_snapshots,
+            captured_at, owner_user_id,
+        )
         removed = _prune_missing_deputy_schedule_rows(
             conn,
             payload,
@@ -4217,6 +4710,7 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                 for shift_id in schedule_shift_lookup
                 if str(shift_id).isdigit()
             },
+            partial_scopes,
         )
         event_changes_saved = _record_authoritative_event_changes(
             conn,
@@ -4234,6 +4728,10 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
         "schedule_saved": saved,
         "schedule_removed": removed,
         "event_changes_saved": event_changes_saved,
+        "personal_evidence_saved": own_counts["seen"],
+        "personal_possibly_missing": personal_coverage_counts["possibly_missing"],
+        "personal_retired": personal_coverage_counts["retired"],
+        "partial_events": len(partial_scopes),
     }
 
 
@@ -4321,6 +4819,568 @@ def list_track_maps() -> list[sqlite3.Row]:
         ).fetchall()
 
 
+CORE_EVENT_POSITION_KEYS = {
+    "side1", "side2", "headon", "back", "director", "sound", "soundvt",
+    "vt", "ccu1", "ccu2", "eng",
+}
+
+
+def _event_completion_time(date_text: str, end_at: str, settings: Settings | None = None) -> datetime | None:
+    settings = settings or get_settings()
+    try:
+        event_date = datetime.fromisoformat(date_text).date()
+    except ValueError:
+        return None
+    if end_at:
+        try:
+            parsed_end = datetime.fromisoformat(end_at)
+            if parsed_end.tzinfo is None:
+                parsed_end = parsed_end.replace(tzinfo=settings.timezone)
+            return parsed_end.astimezone(settings.timezone) + timedelta(hours=6)
+        except ValueError:
+            pass
+    return datetime.combine(event_date + timedelta(days=1), datetime.min.time(), settings.timezone) + timedelta(hours=5)
+
+
+def _event_is_completed(date_text: str, end_at: str, now: datetime | None = None) -> bool:
+    settings = get_settings()
+    now = now or datetime.now(settings.timezone)
+    completion = _event_completion_time(date_text, end_at, settings)
+    return completion is not None and completion <= now
+
+
+def _event_lock_row(
+    conn: sqlite3.Connection,
+    date_text: str,
+    location_id: int | None,
+    start_at: str = "",
+    end_at: str = "",
+) -> sqlite3.Row | None:
+    if location_id is None:
+        return None
+    rows = conn.execute(
+        "SELECT * FROM deputy_event_locks WHERE date = ? AND area_location_id = ?",
+        (date_text, location_id),
+    ).fetchall()
+    for row in rows:
+        if not start_at or not row["event_start_at"]:
+            return row
+        if _event_rows_overlap(
+            {"start_at": start_at, "end_at": end_at},
+            {"start_at": row["event_start_at"], "end_at": row["event_end_at"]},
+        ):
+            return row
+    return None
+
+
+def lock_completed_events(conn: sqlite3.Connection | None = None, now: datetime | None = None) -> int:
+    owns_connection = conn is None
+    conn = conn or get_connection()
+    settings = get_settings()
+    now = now or datetime.now(settings.timezone)
+    locked = 0
+    try:
+        events = conn.execute(
+            """
+            SELECT date, area_location_id, MIN(start_at) AS event_start_at, MAX(end_at) AS event_end_at
+            FROM deputy_schedule_shifts
+            WHERE area_location_id IS NOT NULL AND TRIM(date) != ''
+            GROUP BY date, area_location_id
+            """
+        ).fetchall()
+        for event in events:
+            date_text = str(event["date"] or "")
+            location_id = _optional_int(event["area_location_id"])
+            start_at = str(event["event_start_at"] or "")
+            end_at = str(event["event_end_at"] or "")
+            if location_id is None or not _event_is_completed(date_text, end_at, now):
+                continue
+            result = conn.execute(
+                """
+                INSERT OR IGNORE INTO deputy_event_locks (
+                    date, area_location_id, event_start_at, event_end_at,
+                    locked_at, lock_reason, recovered_from_capture
+                ) VALUES (?, ?, ?, ?, ?, 'completed_plus_6h', 0)
+                """,
+                (date_text, location_id, start_at, end_at, now.isoformat(timespec="seconds")),
+            )
+            locked += max(0, int(result.rowcount or 0))
+            conn.execute(
+                "UPDATE deputy_schedule_shifts SET changed_since_viewed = 0 WHERE date = ? AND area_location_id = ?",
+                (date_text, location_id),
+            )
+            conn.execute(
+                "UPDATE deputy_schedule_event_changes SET changed_since_viewed = 0 WHERE date = ? AND area_location_id = ?",
+                (date_text, location_id),
+            )
+            conn.execute(
+                "UPDATE deputy_event_coverage SET status = 'locked_historical' WHERE date = ? AND area_location_id = ?",
+                (date_text, location_id),
+            )
+        personal_rows = conn.execute(
+            "SELECT id, date, end_at FROM shifts WHERE deleted_from_source = 0 AND historical_locked_at IS NULL"
+        ).fetchall()
+        for row in personal_rows:
+            if _event_is_completed(str(row["date"] or ""), str(row["end_at"] or ""), now):
+                conn.execute(
+                    "UPDATE shifts SET historical_locked_at = ?, changed_since_viewed = 0 WHERE id = ?",
+                    (now.isoformat(timespec="seconds"), int(row["id"])),
+                )
+        conn.execute(
+            """
+            UPDATE deputy_personal_assignment_evidence
+            SET status = 'historical_locked'
+            WHERE status != 'historical_locked'
+              AND EXISTS (
+                  SELECT 1 FROM deputy_event_locks l
+                  WHERE l.date = deputy_personal_assignment_evidence.date
+                    AND l.area_location_id = deputy_personal_assignment_evidence.area_location_id
+              )
+            """
+        )
+        if owns_connection:
+            conn.commit()
+        return locked
+    finally:
+        if owns_connection:
+            conn.close()
+
+
+def recover_historical_schedule_from_captures(
+    settings: Settings | None = None,
+    *,
+    force: bool = False,
+) -> dict[str, object]:
+    """Restore missing completed-event rows from retained successful captures once.
+
+    Recovery is deliberately additive. It never overwrites a current row and never
+    creates a row when the archived payload cannot identify the Deputy shift, event,
+    position, and location.
+    """
+    settings = settings or get_settings()
+    now = datetime.now(settings.timezone)
+    marker_key = "historical_schedule_recovery_v1"
+    with get_connection(settings) as conn:
+        marker = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?", (marker_key,)
+        ).fetchone()
+        if marker is not None and not force:
+            latest = conn.execute(
+                "SELECT * FROM historical_recovery_runs ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            return dict(latest) if latest is not None else {
+                "events_inspected": 0,
+                "events_restored": 0,
+                "rows_restored": 0,
+                "events_unrecoverable": 0,
+                "note": "Historical recovery already completed.",
+            }
+
+        snapshots: dict[tuple[str, int], tuple[tuple[int, str], list[dict[str, object]]]] = {}
+        captures = conn.execute(
+            """
+            SELECT captured_at, payload
+            FROM deputy_web_captures
+            WHERE status IN ('ok', 'success') AND TRIM(COALESCE(payload, '')) != ''
+            ORDER BY captured_at, id
+            """
+        ).fetchall()
+        for capture in captures:
+            try:
+                payload = json.loads(str(capture["payload"] or "{}"))
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            area_lookup = {
+                _optional_int(item.get("id")): item
+                for item in payload.get("areas") or []
+                if isinstance(item, dict) and _optional_int(item.get("id")) is not None
+            }
+            grouped: dict[tuple[str, int], list[dict[str, object]]] = {}
+            for raw in payload.get("extracted_schedule_shifts") or []:
+                if not isinstance(raw, dict) or _optional_int(raw.get("id")) is None:
+                    continue
+                area_id = _optional_int(raw.get("area"))
+                area = area_lookup.get(area_id) or {}
+                start_at = str(raw.get("start") or "")
+                end_at = str(raw.get("end") or "")
+                date_text = start_at[:10]
+                location_id = _optional_int(
+                    raw.get("areaLocationId")
+                    or raw.get("location")
+                    or raw.get("locationId")
+                    or area.get("locationId")
+                )
+                area_name = str(raw.get("areaName") or area.get("name") or "").strip()
+                if (
+                    location_id is None
+                    or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_text)
+                    or _event_position(area_name) is None
+                    or not _event_is_completed(date_text, end_at, now)
+                ):
+                    continue
+                grouped.setdefault((date_text, location_id), []).append({
+                    "source_shift_id": int(raw["id"]),
+                    "captured_at": str(capture["captured_at"] or ""),
+                    "area_id": area_id,
+                    "area_name": area_name,
+                    "area_location_id": location_id,
+                    "area_roster_sort_order": _optional_int(
+                        raw.get("areaRosterSortOrder") or area.get("rosterSortOrder")
+                    ),
+                    "employee_id": _optional_int(raw.get("employee")),
+                    "employee_name": str(raw.get("employeeName") or "").strip(),
+                    "start_at": start_at,
+                    "end_at": end_at,
+                    "date": date_text,
+                    "duration": _optional_float(raw.get("duration")),
+                    "is_open": 1 if raw.get("isOpen") else 0,
+                    "is_published": 1 if raw.get("isPublished") else 0,
+                    "note": str(raw.get("note") or ""),
+                    "raw_payload": json_dumps(raw),
+                })
+            capture_at = str(capture["captured_at"] or "")
+            for scope, rows in grouped.items():
+                latest_end = max((str(row["end_at"] or "") for row in rows), default="")
+                completion = _event_completion_time(scope[0], latest_end, settings)
+                try:
+                    capture_dt = datetime.fromisoformat(capture_at)
+                    if capture_dt.tzinfo is None:
+                        capture_dt = capture_dt.replace(tzinfo=settings.timezone)
+                except ValueError:
+                    capture_dt = None
+                preferred_window = int(
+                    completion is not None
+                    and capture_dt is not None
+                    and capture_dt <= completion + timedelta(hours=24)
+                )
+                score = (preferred_window, capture_at)
+                previous = snapshots.get(scope)
+                if previous is None or score >= previous[0]:
+                    snapshots[scope] = (score, rows)
+
+        events_inspected = len(snapshots)
+        events_restored = 0
+        rows_restored = 0
+        events_unrecoverable = 0
+        for (date_text, location_id), (_score, archived_rows) in sorted(snapshots.items()):
+            current_rows = conn.execute(
+                "SELECT * FROM deputy_schedule_shifts WHERE date = ? AND area_location_id = ?",
+                (date_text, location_id),
+            ).fetchall()
+            current_by_position: dict[str, list[sqlite3.Row]] = {}
+            for current in current_rows:
+                position = _event_position(current["area_name"])
+                if position is not None:
+                    current_by_position.setdefault(position[0], []).append(current)
+            restored_this_event = 0
+            conflict_this_event = False
+            for values in archived_rows:
+                if conn.execute(
+                    "SELECT 1 FROM deputy_schedule_shifts WHERE source_shift_id = ?",
+                    (values["source_shift_id"],),
+                ).fetchone() is not None:
+                    continue
+                position = _event_position(values["area_name"])
+                if position is None:
+                    conflict_this_event = True
+                    continue
+                same_position = current_by_position.get(position[0], [])
+                archived_name = str(values["employee_name"] or "").strip()
+                matching_current = any(
+                    (
+                        values["employee_id"] is not None
+                        and _optional_int(row["employee_id"]) == values["employee_id"]
+                    )
+                    or (
+                        archived_name
+                        and normalise_person_identity(row["employee_name"])
+                        == normalise_person_identity(archived_name)
+                    )
+                    for row in same_position
+                )
+                if matching_current:
+                    continue
+                if same_position and archived_name and any(
+                    str(row["employee_name"] or "").strip() for row in same_position
+                ):
+                    conflict_this_event = True
+                    continue
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO deputy_schedule_shifts (
+                        source_shift_id, captured_at, area_id, area_name,
+                        area_location_id, area_roster_sort_order, employee_id,
+                        employee_name, start_at, end_at, date, duration, is_open,
+                        is_published, changed_since_viewed, last_changed_at,
+                        change_summary, note, raw_payload
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '', ?, ?)
+                    """,
+                    (
+                        values["source_shift_id"], values["captured_at"], values["area_id"],
+                        values["area_name"], values["area_location_id"],
+                        values["area_roster_sort_order"], values["employee_id"],
+                        values["employee_name"], values["start_at"], values["end_at"],
+                        values["date"], values["duration"], values["is_open"],
+                        values["is_published"], values["note"], values["raw_payload"],
+                    ),
+                )
+                restored_this_event += max(0, int(conn.execute("SELECT changes()").fetchone()[0]))
+            if restored_this_event:
+                events_restored += 1
+                rows_restored += restored_this_event
+                starts = [str(item["start_at"] or "") for item in archived_rows if item["start_at"]]
+                ends = [str(item["end_at"] or "") for item in archived_rows if item["end_at"]]
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO deputy_event_locks (
+                        date, area_location_id, event_start_at, event_end_at,
+                        locked_at, lock_reason, recovered_from_capture
+                    ) VALUES (?, ?, ?, ?, ?, 'recovered_completed_event', 1)
+                    """,
+                    (
+                        date_text, location_id, min(starts) if starts else "",
+                        max(ends) if ends else "", now.isoformat(timespec="seconds"),
+                    ),
+                )
+            if conflict_this_event:
+                events_unrecoverable += 1
+
+        note = (
+            f"Replayed {len(captures)} retained successful captures; "
+            "restored only archived rows with stable Deputy event identities."
+        )
+        conn.execute(
+            """
+            INSERT INTO historical_recovery_runs (
+                ran_at, events_inspected, events_restored, rows_restored,
+                events_unrecoverable, note
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now.isoformat(timespec="seconds"), events_inspected, events_restored,
+                rows_restored, events_unrecoverable, note,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, 'done', ?)
+            ON CONFLICT(key) DO UPDATE SET value = 'done', updated_at = excluded.updated_at
+            """,
+            (marker_key, now.isoformat(timespec="seconds")),
+        )
+        return {
+            "events_inspected": events_inspected,
+            "events_restored": events_restored,
+            "rows_restored": rows_restored,
+            "events_unrecoverable": events_unrecoverable,
+            "note": note,
+        }
+
+
+def _personal_evidence_identity(conn: sqlite3.Connection, owner_user_id: int, employee_id: int | None) -> tuple[int | None, str]:
+    person = None
+    if employee_id is not None:
+        person = conn.execute(
+            "SELECT id, canonical_display_name FROM crew_people WHERE deputy_employee_id = ? LIMIT 1",
+            (employee_id,),
+        ).fetchone()
+    if person is None:
+        person = conn.execute(
+            "SELECT id, canonical_display_name FROM crew_people WHERE app_user_id = ? LIMIT 1",
+            (owner_user_id,),
+        ).fetchone()
+    user = conn.execute("SELECT display_name FROM app_users WHERE id = ?", (owner_user_id,)).fetchone()
+    display_name = str(
+        (person["canonical_display_name"] if person is not None else "")
+        or (user["display_name"] if user is not None else "")
+        or "Crew member"
+    )
+    return (_optional_int(person["id"] if person is not None else None), display_name)
+
+
+def _upsert_personal_assignment_evidence(
+    conn: sqlite3.Connection,
+    values: dict[str, object],
+    owner_user_id: int | None,
+    captured_at: str,
+) -> bool:
+    if owner_user_id is None:
+        return False
+    payload = _json_loads_dict(str(values.get("source_payload") or ""))
+    normalised = payload.get("normalised") if isinstance(payload.get("normalised"), dict) else {}
+    position = _event_position(normalised.get("role_label") or normalised.get("area_name"))
+    location_id = _optional_int(normalised.get("area_location_id"))
+    employee_id = _optional_int(normalised.get("employee_id"))
+    if position is None or position[0] not in EVENT_POSITION_ALIASES and position[0] not in CORE_EVENT_POSITION_KEYS:
+        return False
+    if location_id is None or not values.get("date") or not values.get("start_at") or not values.get("end_at"):
+        return False
+    canonical_person_id, display_name = _personal_evidence_identity(conn, owner_user_id, employee_id)
+    source_uid = str(values.get("source_uid") or "")
+    source_shift_id = source_uid.rsplit(":", 1)[-1] if source_uid else ""
+    evidence_status = "cancelled" if values.get("source_status") == "cancelled" else "confirmed"
+    provenance = json_dumps({
+        "source": "deputy_personal_roster",
+        "display_name": display_name,
+        "captured_at": captured_at,
+    })
+    conn.execute(
+        """
+        INSERT INTO deputy_personal_assignment_evidence (
+            owner_user_id, deputy_employee_id, canonical_person_id,
+            source_shift_uid, source_shift_id, date, area_location_id,
+            position_key, position_label, start_at, end_at,
+            first_seen_at, last_seen_at, last_confirmed_at,
+            missing_capture_count, status, provenance
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        ON CONFLICT(owner_user_id, source_shift_uid) DO UPDATE SET
+            deputy_employee_id = excluded.deputy_employee_id,
+            canonical_person_id = excluded.canonical_person_id,
+            source_shift_id = excluded.source_shift_id,
+            date = excluded.date,
+            area_location_id = excluded.area_location_id,
+            position_key = excluded.position_key,
+            position_label = excluded.position_label,
+            start_at = excluded.start_at,
+            end_at = excluded.end_at,
+            last_seen_at = excluded.last_seen_at,
+            last_confirmed_at = excluded.last_confirmed_at,
+            missing_capture_count = 0,
+            status = CASE WHEN status = 'historical_locked' THEN status ELSE excluded.status END,
+            provenance = excluded.provenance
+        """,
+        (
+            owner_user_id, employee_id, canonical_person_id, source_uid, source_shift_id,
+            values["date"], location_id, position[0], position[1], values["start_at"],
+            values["end_at"], captured_at, captured_at, captured_at, evidence_status, provenance,
+        ),
+    )
+    return True
+
+
+def _save_personal_capture_coverage(
+    conn: sqlite3.Connection,
+    payload: dict[str, object],
+    owner_user_id: int | None,
+    captured_at: str,
+) -> dict[str, int]:
+    counts = {"possibly_missing": 0, "retired": 0, "coverage_rows": 0}
+    if owner_user_id is None:
+        return counts
+    seen_uids = {
+        f"deputy-web:{owner_user_id}:{shift.get('id')}"
+        for shift in payload.get("extracted_shifts") or []
+        if isinstance(shift, dict) and shift.get("id") not in (None, "")
+    }
+    processed_missing_evidence: set[int] = set()
+    for coverage in payload.get("own_roster_coverage") or []:
+        if not isinstance(coverage, dict):
+            continue
+        start_date = str(coverage.get("start_date") or "")[:10]
+        end_date = str(coverage.get("end_date") or "")[:10]
+        status = str(coverage.get("status") or "failed")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", start_date) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", end_date):
+            continue
+        complete = status == "complete" and bool(coverage.get("pagination_complete"))
+        coverage_insert = conn.execute(
+            """
+            INSERT OR IGNORE INTO deputy_personal_capture_coverage (
+                owner_user_id, captured_at, start_date, end_date, status,
+                records_returned, pagination_complete, known_shift_ids_checked, note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                owner_user_id, captured_at, start_date, end_date, status,
+                int(coverage.get("records_returned") or 0),
+                1 if coverage.get("pagination_complete") else 0,
+                1 if coverage.get("known_shift_ids_checked") else 0,
+                str(coverage.get("note") or ""),
+            ),
+        )
+        if int(coverage_insert.rowcount or 0) <= 0:
+            continue
+        counts["coverage_rows"] += 1
+        if not complete:
+            continue
+        evidence_rows = conn.execute(
+            """
+            SELECT * FROM deputy_personal_assignment_evidence
+            WHERE owner_user_id = ? AND date BETWEEN ? AND ?
+              AND status IN ('confirmed', 'possibly_missing')
+            """,
+            (owner_user_id, start_date, end_date),
+        ).fetchall()
+        for evidence in evidence_rows:
+            evidence_id = int(evidence["id"])
+            if (
+                evidence_id in processed_missing_evidence
+                or evidence["source_shift_uid"] in seen_uids
+                or evidence["status"] == "historical_locked"
+            ):
+                continue
+            processed_missing_evidence.add(evidence_id)
+            missing_count = int(evidence["missing_capture_count"] or 0) + 1
+            new_status = "cancelled" if missing_count >= 2 else "possibly_missing"
+            conn.execute(
+                "UPDATE deputy_personal_assignment_evidence SET missing_capture_count = ?, status = ? WHERE id = ?",
+                (missing_count, new_status, evidence_id),
+            )
+            shift = conn.execute(
+                "SELECT id, deleted_from_source FROM shifts WHERE owner_user_id = ? AND source_uid = ?",
+                (owner_user_id, evidence["source_shift_uid"]),
+            ).fetchone()
+            if shift is not None:
+                conn.execute(
+                    """
+                    UPDATE shifts
+                    SET missing_capture_count = ?, capture_status = ?,
+                        deleted_from_source = CASE WHEN ? = 'cancelled' THEN 1 ELSE deleted_from_source END,
+                        changed_since_viewed = CASE WHEN ? = 'cancelled' THEN 1 ELSE changed_since_viewed END,
+                        last_changed_at = CASE WHEN ? = 'cancelled' THEN ? ELSE last_changed_at END
+                    WHERE id = ?
+                    """,
+                    (missing_count, new_status, new_status, new_status, new_status, captured_at, int(shift["id"])),
+                )
+                if new_status == "cancelled":
+                    write_shift_changes(
+                        conn, int(shift["id"]), captured_at,
+                        {"deleted_from_source": (0, 1)},
+                        classifications={"deleted_from_source": ("source_change", True)},
+                    )
+            counts["retired" if new_status == "cancelled" else "possibly_missing"] += 1
+    return counts
+
+
+def fetch_personal_assignment_evidence_for_date(
+    date_text: str,
+    location_ids: list[int] | tuple[int, ...] | set[int] | None = None,
+) -> list[sqlite3.Row]:
+    location_ids = _normalise_int_list(location_ids)
+    location_sql = ""
+    params: list[object] = [date_text]
+    if location_ids:
+        placeholders = ", ".join("?" for _ in location_ids)
+        location_sql = f"AND e.area_location_id IN ({placeholders})"
+        params.extend(location_ids)
+    with get_connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT e.*, u.display_name,
+                   COALESCE(p.canonical_display_name, u.display_name) AS employee_name
+            FROM deputy_personal_assignment_evidence e
+            JOIN app_users u ON u.id = e.owner_user_id AND u.is_active = 1
+            LEFT JOIN crew_people p ON p.id = e.canonical_person_id
+            WHERE e.date = ? {location_sql}
+              AND e.status IN ('confirmed', 'possibly_missing', 'historical_locked')
+            ORDER BY e.position_label, employee_name
+            """,
+            params,
+        ).fetchall()
+
+
 def _save_deputy_web_own_shifts(
     conn: sqlite3.Connection,
     own_shifts: list[object],
@@ -4353,6 +5413,7 @@ def _save_deputy_web_own_shifts(
             continue
         counts["seen"] += 1
         _record_known_location_from_shift(conn, values, owner_user_id, captured_at)
+        _upsert_personal_assignment_evidence(conn, values, owner_user_id, captured_at)
         existing = _find_existing_shift_for_web(conn, str(values["source_uid"]), shift_id, owner_user_id)
         if existing is None:
             conn.execute(
@@ -4382,7 +5443,7 @@ def _save_deputy_web_own_shifts(
                     captured_at,
                     None,
                     0,
-                    0,
+                    1 if values["source_status"] == "cancelled" else 0,
                     owner_user_id,
                     values["source_link"],
                     values["source_status"],
@@ -4392,8 +5453,8 @@ def _save_deputy_web_own_shifts(
             counts["created"] += 1
             continue
 
-        changes = _deputy_web_shift_changes(existing, values)
-        changed = bool(changes)
+        changes, classifications = _deputy_web_shift_changes(existing, values)
+        changed = any(visible for _category, visible in classifications.values())
         conn.execute(
             """
             UPDATE shifts
@@ -4414,7 +5475,13 @@ def _save_deputy_web_own_shifts(
                 last_synced_at = ?,
                 last_changed_at = CASE WHEN ? THEN ? ELSE last_changed_at END,
                 changed_since_viewed = CASE WHEN ? THEN 1 ELSE changed_since_viewed END,
-                deleted_from_source = 0,
+                deleted_from_source = ?,
+                missing_capture_count = 0,
+                capture_status = CASE
+                    WHEN historical_locked_at IS NOT NULL THEN 'historical_locked'
+                    WHEN ? = 'cancelled' THEN 'cancelled'
+                    ELSE 'confirmed'
+                END,
                 source_payload = ?
             WHERE id = ?
             """,
@@ -4437,13 +5504,19 @@ def _save_deputy_web_own_shifts(
                 1 if changed else 0,
                 captured_at,
                 1 if changed else 0,
+                1 if values["source_status"] == "cancelled" else 0,
+                values["source_status"],
                 values["source_payload"],
                 int(existing["id"]),
             ),
         )
         if changed:
-            write_shift_changes(conn, int(existing["id"]), captured_at, changes)
             counts["updated"] += 1
+        if changes:
+            write_shift_changes(
+                conn, int(existing["id"]), captured_at, changes,
+                classifications=classifications,
+            )
     return counts
 
 
@@ -4516,8 +5589,26 @@ WEB_SHIFT_COMPARE_FIELDS = (
 )
 
 
-def _deputy_web_shift_changes(existing: sqlite3.Row, values: dict[str, object]) -> dict[str, tuple[object, object]]:
-    changes = {}
+def _canonical_title_facts(title: object) -> tuple[str, str, str, str]:
+    raw = str(title or "").strip()
+    match = re.match(r"^\[([^]]+)\]\s*(.*)$", raw)
+    source_code = str(match.group(1) if match else "").strip()
+    role_raw = str(match.group(2) if match else raw).strip()
+    position = _event_position(role_raw)
+    role_key = position[0] if position else re.sub(r"[^a-z0-9]+", "", role_raw.lower())
+    role_label = position[1] if position else role_raw
+    location_key = re.sub(r"[^a-z0-9]+", "", re.sub(r"^[thg]-", "", source_code.lower()))
+    if location_key in {"", "web", "shift", "national", "travel", "8pe"}:
+        location_key = ""
+    return location_key, source_code, role_key, role_label
+
+
+def _deputy_web_shift_changes(
+    existing: sqlite3.Row,
+    values: dict[str, object],
+) -> tuple[dict[str, tuple[object, object]], dict[str, tuple[str, bool]]]:
+    technical_changes: dict[str, tuple[object, object]] = {}
+    classifications: dict[str, tuple[str, bool]] = {}
     for field_name in WEB_SHIFT_COMPARE_FIELDS:
         old_value = existing[field_name]
         new_value = values[field_name]
@@ -4529,8 +5620,41 @@ def _deputy_web_shift_changes(existing: sqlite3.Row, values: dict[str, object]) 
                 pass
         elif str(old_value or "") == str(new_value or ""):
             continue
-        changes[field_name] = (old_value, new_value)
-    return changes
+        technical_changes[field_name] = (old_value, new_value)
+        classifications[field_name] = ("normalization", False)
+
+    old_location_key, _old_source, old_role_key, old_role_label = _canonical_title_facts(existing["title"])
+    new_location_key, _new_source, new_role_key, new_role_label = _canonical_title_facts(values["title"])
+    if old_location_key and new_location_key and old_location_key != new_location_key:
+        technical_changes["track"] = (old_location_key, new_location_key)
+        classifications["track"] = ("source_change", True)
+    if old_role_key and new_role_key and old_role_key != new_role_key:
+        technical_changes["role"] = (old_role_label, new_role_label)
+        classifications["role"] = ("source_change", True)
+
+    for field_name in ("start_at", "end_at"):
+        if field_name in technical_changes:
+            classifications[field_name] = ("source_change", True)
+    if "description" in technical_changes:
+        old_note, new_note = technical_changes["description"]
+        classifications["description"] = (
+            "source_change" if str(old_note or "").strip() and str(new_note or "").strip() else "enrichment",
+            bool(str(old_note or "").strip() and str(new_note or "").strip()),
+        )
+    if "source_status" in technical_changes:
+        old_status, new_status = technical_changes["source_status"]
+        classifications["source_status"] = (
+            "source_change" if "cancelled" in {str(old_status), str(new_status)} else "normalization",
+            "cancelled" in {str(old_status), str(new_status)},
+        )
+    for field_name in ("raw_hours", "paid_hours", "break_minutes"):
+        if field_name in technical_changes:
+            classifications[field_name] = ("derived_change", False)
+    if "location" in technical_changes:
+        classifications["location"] = ("enrichment", False)
+    if "title" in technical_changes:
+        classifications["title"] = ("normalization", False)
+    return technical_changes, classifications
 
 
 def _find_existing_shift_for_web(
@@ -4617,8 +5741,18 @@ def _deputy_web_shift_values(
     raw_hours = round((end_dt - start_dt).total_seconds() / 3600, 2)
     break_minutes = 0
     paid_hours = raw_hours
+    status_text = str(shift.get("status") or shift.get("Status") or "").strip().lower()
+    is_cancelled = bool(
+        shift.get("isDeleted")
+        or shift.get("deleted")
+        or shift.get("isCancelled")
+        or shift.get("cancelled")
+        or status_text in {"cancelled", "canceled", "deleted", "removed"}
+    )
     source_status = "published" if shift.get("isPublished") else "unpublished"
-    if shift.get("isOpen"):
+    if is_cancelled:
+        source_status = "cancelled"
+    elif shift.get("isOpen"):
         source_status = "open"
     source_uid = f"deputy-web:{owner_user_id if owner_user_id is not None else 'env'}:{shift.get('id')}"
     normalised = {
@@ -4818,12 +5952,23 @@ def write_sync_log(summary: dict[str, object]) -> None:
         )
 
 
-def write_shift_changes(conn: sqlite3.Connection, shift_id: int, changed_at: str, changes: dict[str, tuple[object, object]]) -> None:
+def write_shift_changes(
+    conn: sqlite3.Connection,
+    shift_id: int,
+    changed_at: str,
+    changes: dict[str, tuple[object, object]],
+    *,
+    classifications: dict[str, tuple[str, bool]] | None = None,
+) -> None:
+    classifications = classifications or {}
     for field_name, (old_value, new_value) in changes.items():
+        category, user_visible = classifications.get(field_name, ("source_change", True))
         conn.execute(
             """
-            INSERT INTO shift_changes (shift_id, changed_at, field_name, old_value, new_value)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO shift_changes (
+                shift_id, changed_at, field_name, old_value, new_value,
+                change_category, user_visible
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 shift_id,
@@ -4831,6 +5976,8 @@ def write_shift_changes(conn: sqlite3.Connection, shift_id: int, changed_at: str
                 field_name,
                 "" if old_value is None else str(old_value),
                 "" if new_value is None else str(new_value),
+                category,
+                1 if user_visible else 0,
             ),
         )
 

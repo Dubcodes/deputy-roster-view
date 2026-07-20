@@ -33,6 +33,7 @@ Run this after changing account, settings, admin, or form-handling code. It crea
 python scripts\smoke_route_flows.py
 python scripts\smoke_love_racing.py
 python scripts\smoke_extended_features.py
+python scripts\smoke_roster_integrity.py
 ```
 
 ## Manual App Checks
@@ -47,6 +48,10 @@ After Portainer redeploy:
 - Capture an authoritative crew roster, then replace it with the Ruakaka-style Side 2/CCU2/VT/Sound change chain. Confirm Change History records both moves, the Sound/VT merge, and any evidenced same-position replacement exactly once.
 - Confirm `SVT` displays as `Sound/VT` when it is the only audio/replay assignment, and as `Sound` when another employee has an overlapping `VT` assignment at the same location.
 - Confirm a removed Deputy schedule assignment disappears after the next successful complete schedule-window sync, while a failed/partial capture retains the previous crew list.
+- Confirm a personal assignment fills only its matching TBC crew position and a conflicting named shared assignment remains visible with a warning.
+- Confirm one complete personal-capture absence warns, the second may retire, and partial/failed captures do not advance the count.
+- Confirm completed events no longer show active Changed badges and later captures cannot prune or replace their populated history.
+- Expand Admin Roster integrity and inspect any partial upcoming events, evidence fills, conflicts, locked events, and archive recovery counts.
 - Confirm empty RTS/FM areas do not create TBC rows, while assigned RTS/FM people still appear.
 - On a known Thoroughbred track, confirm the cached 2D map appears at the bottom of the day page without an outbound link. Confirm Harness/Greyhound days do not borrow the Cambridge Thoroughbred map.
 - Open `/settings`.
@@ -72,6 +77,6 @@ The route smoke also verifies that Office/Clow Place travel defaults collapse to
 
 ## Known Test Gaps
 
-- No automated unit tests yet.
+- Integrity behavior is covered by a sanitized database smoke fixture rather than a live Deputy account.
 - Deputy web capture is hard to test without live credentials.
 - Live Deputy capture remains difficult to reproduce without credentials; parsing and database behavior are covered with sanitized fixtures.

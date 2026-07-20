@@ -136,3 +136,15 @@ Day-view schedule reconciliation also suppresses an older overlapping production
 Empty `RTS` and `FM` areas are not emitted as inferred `TBC` rows. Assigned rows still display normally.
 
 Timing-only crew schedule changes should not badge every crew row.
+
+## Roster Integrity
+
+Personal roster rows are also stored as durable `deputy_personal_assignment_evidence`. Effective crew display uses named shared-schedule rows first, matching confirmed personal evidence second, and TBC placeholders last. Matching uses Deputy employee identity where available and the canonical crew directory only as a safe fallback. A disagreement is retained as two-source evidence and shown as a conflict; neither source silently replaces the other.
+
+`deputy_personal_capture_coverage` records each weekly own-roster request. One absence from a complete request marks a future shift possibly missing; two independent complete absences may retire it. Failed, partial, and truncated requests do not advance that count. Explicit Deputy cancellation is immediate.
+
+`deputy_event_coverage` records event-level completeness. Upcoming events are checked against known production areas, the prior effective snapshot, and registered users' personal evidence. Missing evidence triggers an exact-date selected-location retry. Partial event captures never prune prior valid shared rows.
+
+Completed shared events are recorded in `deputy_event_locks` after the latest known finish plus six hours, with an early-following-morning fallback when no finish is known. Personal shifts receive `historical_locked_at`. Locked snapshots cannot be pruned or have nonblank operational facts replaced; late conflicts go to `deputy_historical_discrepancies`. A one-time additive replay can restore missing completed rows from retained successful `deputy_web_captures`, with counts in `historical_recovery_runs`.
+
+`shift_changes.change_category` and `user_visible` separate operational alerts from enrichment, normalization, derived values, parser reinterpretation, and historical discrepancies. Normal day history reads only user-visible records. Technical records remain in SQLite for diagnosis.
