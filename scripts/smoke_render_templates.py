@@ -32,6 +32,19 @@ THEME_VALUES = {
     "studio",
 }
 
+SIMPLIFIED_CALCULATION_LINES = [
+    {"label": "Start · Office / Clow Place", "value": "09:30"},
+    {"label": "On track", "value": "10:00"},
+    {"label": "Outbound travel", "value": "0h 30m"},
+    {"label": "Deputy roster start", "value": "10:00"},
+    {"label": "Last race", "value": "16:24"},
+    {"label": "Race cleared", "value": "16:30"},
+    {"label": "Pack-up done", "value": "17:30"},
+    {"label": "Return travel", "value": "0h 30m"},
+    {"label": "Finish · Office / Clow Place", "value": "18:00"},
+    {"label": "Calculated total", "value": "8h 30m"},
+]
+
 
 def datetime_filter(value: object, fmt: str = "%a %d %b %H:%M") -> str:
     if hasattr(value, "strftime"):
@@ -128,10 +141,7 @@ def render_day_template() -> None:
                     "race_day": {
                         "available": True,
                         "complete": True,
-                        "lines": [
-                            {"label": "Clow Place", "value": "08:30"},
-                            {"label": "Back at base", "value": "17:45"},
-                        ],
+                        "lines": SIMPLIFIED_CALCULATION_LINES,
                         "formula": "Clow Place 08:30 to on track 08:45; return travel gives 17:45.",
                     },
                 },
@@ -150,6 +160,12 @@ def render_day_template() -> None:
         raise AssertionError("Day template did not render the cached track map.")
     if 'aria-label="Public holiday: Waitangi Day"' not in html:
         raise AssertionError("Day template did not render an accessible public-holiday marker.")
+    if "Start · Office / Clow Place" not in html or "Finish · Office / Clow Place" not in html:
+        raise AssertionError("Day template did not render simplified start/finish wording.")
+    if "Deputy roster start" not in html:
+        raise AssertionError("Day template hid an operational timing discrepancy.")
+    if any(label in html for label in ("Start origin evidence", "Finish destination evidence", "roster base timing")):
+        raise AssertionError("Day template rendered internal timeline evidence labels.")
 
 
 def render_month_template() -> None:
@@ -235,10 +251,32 @@ def render_timesheet_template() -> None:
     html = env.get_template("timesheet.html").render(
         request={}, notice=None, current_user=None, month_year=2026, month_number=2,
         summary={
-            "period_label": "24 Jan-06 Feb 2026", "total": 0,
+            "period_label": "24 Jan-06 Feb 2026", "total": 8.5,
             "days": [{
-                "iso": "2026-02-06", "date_label": "Fri 06 Feb", "total": 0,
-                "locations": "-", "shifts": [], "notes": [],
+                "iso": "2026-02-06", "date_label": "Fri 06 Feb", "total": 8.5,
+                "locations": "Te Rapa", "notes": [],
+                "shifts": [{
+                    "track_label": "Te Rapa", "time_range": "09:30-18:00", "display_hours_label": "8h 30m",
+                    "timing_math": {"race_day": {
+                        "available": True, "complete": True, "start_label": "09:30",
+                        "end_label": "18:00", "hours_label": "8h 30m",
+                        "lines": SIMPLIFIED_CALCULATION_LINES,
+                        "formula": "Office / Clow Place to Te Rapa and return.",
+                    }},
+                }, {
+                    "track_label": "Unconfigured Track", "time_range": "09:30-", "display_hours_label": "Incomplete",
+                    "timing_math": {"race_day": {
+                        "available": True, "complete": False, "start_label": "09:30",
+                        "end_label": "", "hours_label": "Incomplete",
+                        "warning": "Return travel not configured",
+                        "lines": [
+                            {"label": "Start · Office / Clow Place", "value": "09:30"},
+                            {"label": "Return travel not configured", "value": "Incomplete"},
+                            {"label": "Finish · Office / Clow Place", "value": "Not calculated"},
+                        ],
+                        "formula": "Return travel is not configured, so the finish and total are incomplete.",
+                    }},
+                }],
                 "holiday": {"is_public_holiday": True, "names": ["Waitangi Day"], "name": "Waitangi Day", "aria_label": "Public holiday: Waitangi Day"},
             }],
         },
@@ -247,6 +285,14 @@ def render_timesheet_template() -> None:
         raise AssertionError("Timesheet row did not render the holiday marker.")
     if 'class="timesheet-date-heading"' not in html:
         raise AssertionError("Timesheet holiday marker is not in reserved date-heading layout space.")
+    if "Start · Office / Clow Place" not in html or "Finish · Office / Clow Place" not in html:
+        raise AssertionError("Timesheet template did not render the shared simplified wording.")
+    if "Deputy roster start" not in html:
+        raise AssertionError("Timesheet template hid an operational timing discrepancy.")
+    if "Return travel not configured" not in html:
+        raise AssertionError("Timesheet template hid a missing-route warning.")
+    if any(label in html for label in ("Start origin evidence", "Finish destination evidence", "roster base timing")):
+        raise AssertionError("Timesheet template rendered internal timeline evidence labels.")
 
 
 def check_holiday_marker_css() -> None:

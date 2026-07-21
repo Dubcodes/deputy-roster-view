@@ -43,6 +43,14 @@ def main() -> None:
     labels = [str(line.get("label")) for line in calculation.get("lines", [])]
     if "Outbound travel" not in labels or "Return travel" not in labels or "travel each way" in calculation.get("formula", "").lower():
         raise AssertionError(f"Travel leg labels are not explicit: {calculation!r}")
+    if not any(label.startswith("Start · Beachfront Motel") for label in labels) or "Finish · Office / Clow Place" not in labels:
+        raise AssertionError(f"Timeline start/finish wording was not simplified: {calculation!r}")
+    redundant_labels = {
+        "Start origin evidence", "Finish destination evidence", "roster base timing",
+        "saved route default", "Deputy accommodation note", "trip ends after this race day",
+    }
+    if redundant_labels.intersection(labels):
+        raise AssertionError(f"Internal evidence labels leaked into the visible timeline: {calculation!r}")
 
     return_route = get_travel_route("Ruakaka", "Office / Clow Place")
     assert return_route is not None
@@ -50,6 +58,9 @@ def main() -> None:
     incomplete = build_race_day_calculation(shift)
     if incomplete.get("complete") or incomplete.get("warning") != "Return travel not configured" or incomplete.get("end_label"):
         raise AssertionError(f"Missing return route should remain visibly incomplete: {incomplete!r}")
+    incomplete_labels = [str(line.get("label")) for line in incomplete.get("lines", [])]
+    if "Return travel not configured" not in incomplete_labels or "Finish · Office / Clow Place" not in incomplete_labels:
+        raise AssertionError(f"Missing-route warning was lost from the simplified timeline: {incomplete!r}")
 
     upsert_travel_route(origin_label="Office / Clow Place", destination_label="Matamata", travel_minutes=60, also_reverse=True)
     ordinary = build_race_day_calculation({
@@ -58,6 +69,9 @@ def main() -> None:
     })
     if not ordinary.get("complete") or ordinary.get("outbound_travel_label") != "1h" or ordinary.get("return_travel_label") != "1h":
         raise AssertionError(f"Ordinary same-base race day regressed: {ordinary!r}")
+    ordinary_labels = [str(line.get("label")) for line in ordinary.get("lines", [])]
+    if "Start · Office / Clow Place" not in ordinary_labels or "Finish · Office / Clow Place" not in ordinary_labels:
+        raise AssertionError(f"Ordinary timeline did not use simplified start/finish wording: {ordinary!r}")
 
     upsert_travel_time_default(
         track_key="legacy-track", track_label="Legacy Track", base_label="Office",

@@ -131,7 +131,7 @@ from .public_holidays import holiday_for_date
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.21.1"
+APP_BUILD = "2026.07.21.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -1510,7 +1510,7 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
                 "hours": hours,
                 "hours_label": format_hours(hours),
                 "lines": [
-                    {"label": f"Start origin · {start_origin}", "value": start_at.strftime("%H:%M")},
+                    {"label": f"Start · {start_origin}", "value": start_at.strftime("%H:%M")},
                     {"label": "Finished/back", "value": finished_at.strftime("%H:%M")},
                     {"label": "Rounded end", "value": rounded_end.strftime("%H:%M")},
                     {"label": "Calculated total", "value": format_hours(hours)},
@@ -1550,8 +1550,7 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
         and roster_start_at >= on_track_at
     )
     calculation_lines = [
-        {"label": f"Start origin · {start_origin}{' · inferred' if inferred_start else ''}", "value": start_at.strftime("%H:%M")},
-        {"label": "Start origin evidence", "value": context["start_evidence"]},
+        {"label": f"Start · {start_origin}{' · inferred' if inferred_start else ''}", "value": start_at.strftime("%H:%M")},
         {"label": f"On track{' inferred' if inferred_on_track else ''}", "value": on_track_at.strftime("%H:%M")},
         {"label": "Outbound travel", "value": format_minutes_duration(outbound_minutes)},
     ]
@@ -1567,15 +1566,13 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     if calculated_end_at is not None and return_minutes is not None:
         calculation_lines.extend([
             {"label": "Return travel", "value": format_minutes_duration(return_minutes)},
-            {"label": f"Finish destination · {finish_destination}", "value": calculated_end_at.strftime("%H:%M")},
-            {"label": "Finish destination evidence", "value": context["finish_evidence"]},
+            {"label": f"Finish · {finish_destination}", "value": calculated_end_at.strftime("%H:%M")},
             {"label": "Calculated total", "value": format_hours(hours)},
         ])
     else:
         calculation_lines.extend([
             {"label": "Return travel not configured", "value": "Incomplete"},
-            {"label": f"Finish destination · {finish_destination}", "value": "Not calculated"},
-            {"label": "Finish destination evidence", "value": context["finish_evidence"]},
+            {"label": f"Finish · {finish_destination}", "value": "Not calculated"},
         ])
     complete = calculated_end_at is not None
     result.update(
