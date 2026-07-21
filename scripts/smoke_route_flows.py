@@ -365,6 +365,33 @@ def main() -> None:
             "Expected the cached track-map route to serve the local image, got "
             f"{track_map_response.status_code} {track_map_response.content[:120]!r}."
         )
+    manual_map = (
+        b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR"
+        + (640).to_bytes(4, "big") + (480).to_bytes(4, "big")
+        + b"manual-track-map-smoke"
+    )
+    upload_map = client.post(
+        "/admin/track-maps/tearoha/upload",
+        data={"track_label": "Te Aroha"},
+        files={"image": ("te-aroha-better.png", manual_map, "image/png")},
+        follow_redirects=False,
+    )
+    assert_redirect(upload_map, "Manual+map+uploaded+for+Te+Aroha")
+    manual_response = client.get("/track-map/tearoha")
+    if manual_response.status_code != 200 or manual_response.content != manual_map:
+        raise AssertionError("Expected a manual track-map upload to override the automatic image.")
+    auto_download = client.get("/admin/track-maps/tearoha/auto")
+    if auto_download.status_code != 200 or auto_download.content != b"track-map-smoke":
+        raise AssertionError("Expected the original automatic map to remain downloadable after an override.")
+    invalid_upload = client.post(
+        "/admin/track-maps/tearoha/upload",
+        data={"track_label": "Te Aroha"},
+        files={"image": ("not-an-image.txt", b"not an image", "text/plain")},
+        follow_redirects=False,
+    )
+    assert_redirect(invalid_upload, "Upload+a+valid+JPEG%2C+PNG%2C+or+WebP+image")
+    if client.get("/track-map/tearoha").content != manual_map:
+        raise AssertionError("An invalid upload must not replace the current manual map.")
 
     settings_save = client.post(
         "/settings/deputy-login",
@@ -783,6 +810,17 @@ def main() -> None:
         raise AssertionError("Expected admin page to render the planning refresh control.")
     if "/admin/track-maps-refresh" not in admin_page.text or "Refresh Track Maps" not in admin_page.text:
         raise AssertionError("Expected admin page to render the track-map refresh control.")
+    if "Manual upload" not in admin_page.text or "/admin/track-maps/tearoha/reset" not in admin_page.text:
+        raise AssertionError("Expected admin track-map controls to show the active manual override.")
+    if "/admin/track-maps/tearoha/auto" not in admin_page.text or "Download auto" not in admin_page.text:
+        raise AssertionError("Expected the automatic map download control to remain available.")
+    if "/admin/track-maps/testpark/upload" not in admin_page.text:
+        raise AssertionError("Expected every crew roster location to have a manual map upload control.")
+    reset_map = client.post("/admin/track-maps/tearoha/reset", follow_redirects=False)
+    assert_redirect(reset_map, "Manual+map+removed")
+    reset_response = client.get("/track-map/tearoha")
+    if reset_response.status_code != 200 or reset_response.content != b"track-map-smoke":
+        raise AssertionError("Expected reset to restore the untouched automatic track map.")
     help_page = client.get("/help")
     if help_page.status_code != 200 or "<dt>Your shifts</dt>" not in help_page.text or "<dt>Day heading</dt>" not in help_page.text:
         raise AssertionError("Expected help introductions to use the aligned label-and-detail layout.")

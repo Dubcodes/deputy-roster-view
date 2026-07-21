@@ -218,6 +218,27 @@ def main() -> None:
     if result["upgraded"] != 1 or cached is None or cached["image_width"] != 1400 or cached["byte_size"] != len(high):
         raise AssertionError(f"Low-resolution cached map was not upgraded: {result!r}")
     saved_hash = cached["image_hash"]
+    manual = png(1800, 1200, 5000)
+    track_maps.save_manual_track_map("Ruakaka", manual, get_settings())
+    manual_row = get_track_map("ruakaka")
+    manual_effective = track_maps.effective_track_map_file(manual_row)
+    if not manual_effective["is_manual"] or manual_effective["image_width"] != 1800:
+        raise AssertionError(f"Manual map did not become the effective image: {manual_effective!r}")
+    track_maps.requests.Session = Session
+    track_maps.list_known_racecourse_names = lambda **_kwargs: ["Ruakaka"]
+    try:
+        track_maps.refresh_track_maps(get_settings())
+    finally:
+        track_maps.requests.Session = original_session
+        track_maps.list_known_racecourse_names = original_known
+    refreshed_effective = track_maps.effective_track_map_file(get_track_map("ruakaka"))
+    if not refreshed_effective["is_manual"] or refreshed_effective["image_hash"] != manual_effective["image_hash"]:
+        raise AssertionError("Automatic refresh replaced the manual track-map override.")
+    if not track_maps.reset_manual_track_map("ruakaka", get_settings()):
+        raise AssertionError("Manual track-map reset did not report success.")
+    reset_effective = track_maps.effective_track_map_file(get_track_map("ruakaka"))
+    if reset_effective["is_manual"] or reset_effective["image_hash"] != saved_hash:
+        raise AssertionError("Reset did not restore the automatic cached track map.")
 
     class FailingSession(Session):
         def get(self, url, **_kwargs):

@@ -15,15 +15,18 @@ import requests
 from .config import Settings, get_settings
 from .database import (
     calendar_location_key,
+    clear_track_map_manual_override,
     get_app_setting,
     get_track_map,
     list_known_racecourse_names,
+    set_track_map_manual_override,
     update_app_settings,
     upsert_track_map,
 )
 
 
 LOVE_RACING_ORIGIN = "https://loveracing.nz"
+MAX_MANUAL_MAP_BYTES = 15 * 1024 * 1024
 IMAGE_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -177,6 +180,10 @@ def track_map_course_key(track_label: object) -> str:
     return ""
 
 
+def track_map_storage_key(track_label: object) -> str:
+    return track_map_course_key(track_label) or calendar_location_key(track_label)
+
+
 def _direct_image_url(value: str) -> str:
     absolute = urljoin(LOVE_RACING_ORIGIN, value)
     parts = urlsplit(absolute)
@@ -260,6 +267,94 @@ def image_dimensions(content: bytes, content_type: str = "") -> tuple[int, int]:
             height = 1 + int.from_bytes(content[27:30], "little")
             return width, height
     return 0, 0
+
+
+def image_content_type(content: bytes) -> tuple[str, str]:
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png", ".png"
+    if content[:2] == b"\xff\xd8":
+        return "image/jpeg", ".jpg"
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return "image/webp", ".webp"
+    return "", ""
+
+
+def effective_track_map_file(row: object) -> dict[str, object]:
+    values = dict(row) if row is not None else {}
+    manual_file_name = str(values.get("manual_file_name") or "").strip()
+    manual = bool(manual_file_name)
+    prefix = "manual_" if manual else ""
+    return {
+        "file_name": manual_file_name if manual else str(values.get("file_name") or "").strip(),
+        "content_type": str(values.get(f"{prefix}content_type") or "image/jpeg"),
+        "image_hash": str(values.get(f"{prefix}image_hash") or ""),
+        "image_width": int(values.get(f"{prefix}image_width") or 0),
+        "image_height": int(values.get(f"{prefix}image_height") or 0),
+        "byte_size": int(values.get(f"{prefix}byte_size") or 0),
+        "updated_at": str(values.get("manual_updated_at" if manual else "updated_at") or ""),
+        "is_manual": manual,
+    }
+
+
+def save_manual_track_map(
+    track_label: str,
+    content: bytes,
+    settings: Settings | None = None,
+) -> dict[str, object]:
+    settings = settings or get_settings()
+    label = str(track_label or "").strip()
+    track_key = track_map_storage_key(label)
+    if not label or not track_key:
+        raise ValueError("Track name is missing.")
+    if not content:
+        raise ValueError("Choose an image to upload.")
+    if len(content) > MAX_MANUAL_MAP_BYTES:
+        raise ValueError("Track map images must be 15 MB or smaller.")
+    content_type, extension = image_content_type(content)
+    width, height = image_dimensions(content, content_type)
+    if not content_type or not width or not height:
+        raise ValueError("Upload a valid JPEG, PNG, or WebP image.")
+    map_dir = Path(settings.data_dir) / "track_maps"
+    map_dir.mkdir(parents=True, exist_ok=True)
+    file_name = f"manual-{track_key}{extension}"
+    destination = map_dir / file_name
+    previous = get_track_map(track_key)
+    previous_manual = str(previous["manual_file_name"] or "") if previous is not None else ""
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary.write_bytes(content)
+    os.replace(temporary, destination)
+    if previous_manual and previous_manual != file_name:
+        previous_path = map_dir / Path(previous_manual).name
+        if previous_path.parent == map_dir and previous_path.is_file():
+            previous_path.unlink()
+    updated_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
+    image_hash = hashlib.sha256(content).hexdigest()
+    set_track_map_manual_override(
+        track_key=track_key, track_label=label, file_name=file_name,
+        content_type=content_type, image_hash=image_hash,
+        image_width=width, image_height=height, byte_size=len(content),
+        updated_at=updated_at,
+    )
+    return {
+        "track_key": track_key, "track_label": label, "file_name": file_name,
+        "content_type": content_type, "image_width": width, "image_height": height,
+        "byte_size": len(content), "image_hash": image_hash, "updated_at": updated_at,
+    }
+
+
+def reset_manual_track_map(track_key: str, settings: Settings | None = None) -> bool:
+    settings = settings or get_settings()
+    key = track_map_storage_key(track_key)
+    if not key:
+        return False
+    file_name = clear_track_map_manual_override(key)
+    if not file_name:
+        return False
+    map_dir = (Path(settings.data_dir) / "track_maps").resolve()
+    image_path = (map_dir / Path(file_name).name).resolve()
+    if image_path.parent == map_dir and image_path.is_file():
+        image_path.unlink()
+    return True
 
 
 def _candidate_matches_course(image_url: str, course: dict[str, object]) -> bool:

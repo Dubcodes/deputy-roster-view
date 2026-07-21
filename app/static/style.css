@@ -4699,9 +4699,58 @@ th {
 
 .travel-route-list,
 .crew-directory-list,
-.track-map-diagnostics {
+.track-map-diagnostics,
+.track-map-admin-list {
   display: grid;
   gap: 8px;
+}
+
+.track-map-admin-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(420px, 2fr);
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.track-map-admin-info span,
+.track-map-admin-info small {
+  display: block;
+}
+
+.track-map-admin-info small {
+  color: var(--muted);
+}
+
+.track-map-admin-actions,
+.track-map-upload-form {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.track-map-admin-actions form {
+  margin: 0;
+}
+
+.track-map-file-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: min(260px, 100%);
+}
+
+.track-map-file-control span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.track-map-file-control input {
+  min-width: 0;
+  max-width: 220px;
 }
 
 .travel-route-row {
@@ -4759,8 +4808,14 @@ th {
 @media (max-width: 760px) {
   .travel-route-row,
   .crew-directory-row > summary,
-  .track-map-diagnostics > div {
+  .track-map-diagnostics > div,
+  .track-map-admin-row {
     grid-template-columns: 1fr;
+  }
+
+  .track-map-admin-actions,
+  .track-map-upload-form {
+    justify-content: flex-start;
   }
 
   .date-heading {

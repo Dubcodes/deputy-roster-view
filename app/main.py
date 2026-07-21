@@ -80,6 +80,7 @@ from .database import (
     list_travel_time_defaults,
     list_travel_routes,
     list_known_place_labels,
+    list_crew_work_location_labels,
     list_crew_people,
     crew_identity_records,
     list_track_maps,
@@ -125,13 +126,21 @@ from .security import (
     verify_pin,
 )
 from .user_credentials import settings_for_user
-from .track_maps import image_dimensions, refresh_track_maps, track_map_course_key
+from .track_maps import (
+    MAX_MANUAL_MAP_BYTES,
+    effective_track_map_file,
+    image_dimensions,
+    refresh_track_maps,
+    reset_manual_track_map,
+    save_manual_track_map,
+    track_map_storage_key,
+)
 from .public_holidays import holiday_for_date
 
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.21.2"
+APP_BUILD = "2026.07.22.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -3043,25 +3052,23 @@ def track_maps_for_day(
     maps = []
     seen = set()
     for item in list(shifts) + list(manual_rosters):
-        race_type = str(item.get("race_type_label") or item.get("race_type") or "").strip().lower()
-        if "thoroughbred" not in race_type:
-            continue
         track_label = str(item.get("track_label") or item.get("location_label") or "").strip()
-        course_key = track_map_course_key(track_label)
+        course_key = track_map_storage_key(track_label)
         if not course_key or course_key in seen:
             continue
         row = get_track_map(course_key)
         if row is None:
             continue
-        image_width = int(row["image_width"] or 0)
-        image_height = int(row["image_height"] or 0)
-        byte_size = int(row["byte_size"] or 0)
+        effective = effective_track_map_file(row)
+        image_width = int(effective["image_width"] or 0)
+        image_height = int(effective["image_height"] or 0)
+        byte_size = int(effective["byte_size"] or 0)
         if not image_width or not image_height:
-            file_name = Path(str(row["file_name"] or "")).name
+            file_name = Path(str(effective["file_name"] or "")).name
             image_path = Path(get_settings().data_dir) / "track_maps" / file_name
             if file_name and image_path.is_file():
                 content = image_path.read_bytes()
-                image_width, image_height = image_dimensions(content, str(row["content_type"] or ""))
+                image_width, image_height = image_dimensions(content, str(effective["content_type"] or ""))
                 byte_size = byte_size or len(content)
         seen.add(course_key)
         maps.append(
@@ -3069,13 +3076,48 @@ def track_maps_for_day(
                 "track_key": course_key,
                 "track_label": track_label or str(row["track_label"] or row["course_label"] or "Track"),
                 "course_label": str(row["course_label"] or track_label or "Track"),
-                "image_url": f"/track-map/{course_key}",
+                "image_url": f"/track-map/{course_key}?v={str(effective['image_hash'])[:12]}",
                 "image_width": image_width,
                 "image_height": image_height,
                 "byte_size": byte_size,
+                "is_manual": bool(effective["is_manual"]),
             }
         )
     return maps
+
+
+def track_map_admin_rows() -> list[dict[str, object]]:
+    records = {str(row["track_key"]): dict(row) for row in list_track_maps()}
+    rows: dict[str, dict[str, object]] = {}
+    for label in list_crew_work_location_labels():
+        key = track_map_storage_key(label)
+        if not key:
+            continue
+        record = dict(records.get(key) or {})
+        record.setdefault("track_key", key)
+        record.setdefault("track_label", label)
+        rows[key] = record
+    for key, record in records.items():
+        rows.setdefault(key, record)
+
+    map_dir = Path(get_settings().data_dir) / "track_maps"
+    result = []
+    for key, record in rows.items():
+        effective = effective_track_map_file(record)
+        auto_file = Path(str(record.get("file_name") or "")).name
+        manual_file = Path(str(record.get("manual_file_name") or "")).name
+        result.append({
+            **record,
+            "track_key": key,
+            "track_label": str(record.get("track_label") or record.get("course_label") or key),
+            "auto_available": bool(auto_file and (map_dir / auto_file).is_file()),
+            "manual_available": bool(manual_file and (map_dir / manual_file).is_file()),
+            "effective_width": int(effective["image_width"] or 0),
+            "effective_height": int(effective["image_height"] or 0),
+            "effective_byte_size": int(effective["byte_size"] or 0),
+            "effective_source": "Manual upload" if effective["is_manual"] else ("Automatic" if auto_file else "No image"),
+        })
+    return sorted(result, key=lambda item: str(item["track_label"]).lower())
 
 
 def deputy_schedule_label_for_shifts(base_label: str, shifts: list[dict[str, object]]) -> str:
@@ -4443,7 +4485,7 @@ def admin_view(request: Request, notice: str | None = None) -> object:
             "love_racing_url": LOVE_RACING_URL,
             "planning_locations": planning_locations,
             "location_rows": location_rows,
-            "track_maps": [dict(row) for row in list_track_maps()],
+            "track_maps": track_map_admin_rows(),
             "travel_routes": [dict(row) for row in list_travel_routes()],
             "known_places": list_known_place_labels(),
             "crew_people": list_crew_people(),
@@ -4889,20 +4931,68 @@ def timesheet_view(request: Request, date_text: str, notice: str | None = None) 
 
 @app.get("/track-map/{track_key}")
 def track_map_image(track_key: str) -> FileResponse:
-    course_key = track_map_course_key(track_key)
+    course_key = track_map_storage_key(track_key)
     row = get_track_map(course_key) if course_key else None
     if row is None:
         raise HTTPException(status_code=404, detail="Track map not found")
-    file_name = Path(str(row["file_name"] or "")).name
+    effective = effective_track_map_file(row)
+    file_name = Path(str(effective["file_name"] or "")).name
     map_dir = (Path(get_settings().data_dir) / "track_maps").resolve()
     image_path = (map_dir / file_name).resolve()
     if image_path.parent != map_dir or not image_path.is_file():
         raise HTTPException(status_code=404, detail="Track map file not found")
     return FileResponse(
         image_path,
-        media_type=str(row["content_type"] or "image/jpeg"),
+        media_type=str(effective["content_type"] or "image/jpeg"),
         headers={"Cache-Control": "private, max-age=86400"},
     )
+
+
+@app.get("/admin/track-maps/{track_key}/auto")
+def admin_download_auto_track_map(request: Request, track_key: str) -> FileResponse:
+    require_admin_user(request)
+    course_key = track_map_storage_key(track_key)
+    row = get_track_map(course_key) if course_key else None
+    if row is None:
+        raise HTTPException(status_code=404, detail="Automatic track map not found")
+    file_name = Path(str(row["file_name"] or "")).name
+    map_dir = (Path(get_settings().data_dir) / "track_maps").resolve()
+    image_path = (map_dir / file_name).resolve()
+    if not file_name or image_path.parent != map_dir or not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Automatic track map file not found")
+    return FileResponse(
+        image_path,
+        media_type=str(row["content_type"] or "image/jpeg"),
+        filename=f"{course_key}-automatic{image_path.suffix.lower()}",
+    )
+
+
+@app.post("/admin/track-maps/{track_key}/upload")
+async def admin_upload_track_map(request: Request, track_key: str) -> RedirectResponse:
+    require_admin_user(request)
+    form = await request.form()
+    track_label = str(form.get("track_label") or "").strip()
+    expected_key = track_map_storage_key(track_label)
+    if not track_label or expected_key != track_map_storage_key(track_key):
+        return RedirectResponse(url=notice_url("/admin", "Track map upload did not match that location."), status_code=303)
+    upload = form.get("image")
+    if upload is None or not hasattr(upload, "read"):
+        return RedirectResponse(url=notice_url("/admin", "Choose an image to upload."), status_code=303)
+    content = await upload.read(MAX_MANUAL_MAP_BYTES + 1)
+    try:
+        saved = save_manual_track_map(track_label, content)
+        message = f"Manual map uploaded for {track_label} ({saved['image_width']}×{saved['image_height']})."
+    except ValueError as exc:
+        message = str(exc)
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/track-maps/{track_key}/reset")
+def admin_reset_track_map(request: Request, track_key: str) -> RedirectResponse:
+    require_admin_user(request)
+    reset = reset_manual_track_map(track_key)
+    message = "Manual map removed; the automatic map is active again." if reset else "No manual map was set for that track."
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
 @app.get("/day/{date_text}")

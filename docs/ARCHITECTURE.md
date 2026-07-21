@@ -56,7 +56,7 @@ Admins can include or ignore individual saved planning locations. The preference
 
 ### Love Racing Track Maps
 
-`app/track_maps.py` maintains a small verified catalog of northern Thoroughbred course pages and their official 2D map images. A monthly scheduler job checks only courses already known from roster data, downloads changed image bytes into `data/track_maps`, and stores metadata in `track_maps`. Day views serve the local file through `/track-map/{track_key}` so users do not leave the app and slow/blocked Love Racing page requests do not affect normal page loads.
+`app/track_maps.py` maintains a verified catalog of official 2D map images and optional admin-uploaded overrides. A monthly scheduler job checks catalog courses already known from roster data and retains the automatic file even when a manual image is active. Manual JPEG, PNG, or WebP files are stored separately in `data/track_maps`; day views prefer them until an admin resets the track to automatic. `/track-map/{track_key}` serves the effective local file, while the admin-only automatic download route always serves the untouched acquired image.
 
 Discovery considers the track image's `src`, `srcset`, `data-src`, `data-original`, parent link, Open Graph image, and verified catalog fallback. Love Racing's `Common/Image.ashx` proxy is converted to its direct `OnHorseFiles` source. Candidates must be supported images, have sensible decoded dimensions, and match the expected course; the largest valid official candidate wins. Width, height, byte size, candidate count, selected source URL, and refresh result are stored. A failed or lower-quality replacement never removes a working cache.
 

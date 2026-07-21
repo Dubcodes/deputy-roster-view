@@ -483,7 +483,14 @@ def init_db(settings: Settings | None = None) -> None:
                 image_hash TEXT,
                 status TEXT,
                 checked_at TEXT,
-                updated_at TEXT
+                updated_at TEXT,
+                manual_file_name TEXT,
+                manual_content_type TEXT,
+                manual_image_hash TEXT,
+                manual_image_width INTEGER,
+                manual_image_height INTEGER,
+                manual_byte_size INTEGER,
+                manual_updated_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS planning_location_preferences (
@@ -618,6 +625,13 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "track_maps", "selected_source_url", "TEXT")
         _ensure_column(conn, "track_maps", "candidate_count", "INTEGER DEFAULT 0")
         _ensure_column(conn, "track_maps", "refresh_result", "TEXT")
+        _ensure_column(conn, "track_maps", "manual_file_name", "TEXT")
+        _ensure_column(conn, "track_maps", "manual_content_type", "TEXT")
+        _ensure_column(conn, "track_maps", "manual_image_hash", "TEXT")
+        _ensure_column(conn, "track_maps", "manual_image_width", "INTEGER")
+        _ensure_column(conn, "track_maps", "manual_image_height", "INTEGER")
+        _ensure_column(conn, "track_maps", "manual_byte_size", "INTEGER")
+        _ensure_column(conn, "track_maps", "manual_updated_at", "TEXT")
         _ensure_column(conn, "deputy_schedule_event_changes", "changed_since_viewed", "INTEGER DEFAULT 1")
         _ensure_column(conn, "deputy_schedule_event_changes", "change_category", "TEXT DEFAULT 'assignment_change'")
         conn.execute(
@@ -2155,6 +2169,10 @@ def list_known_racecourse_names(*, include_fallback: bool = True) -> list[str]:
             WHERE TRIM(COALESCE(name, '')) != ''
             UNION
             SELECT track_label AS name
+            FROM roster_days
+            WHERE TRIM(COALESCE(track_label, '')) != ''
+            UNION
+            SELECT track_label AS name
             FROM travel_time_defaults
             WHERE TRIM(COALESCE(track_label, '')) != ''
             UNION
@@ -2191,6 +2209,40 @@ def list_known_racecourse_names(*, include_fallback: bool = True) -> list[str]:
         ):
             add(fallback)
     return names
+
+
+def list_crew_work_location_labels() -> list[str]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT display_name AS name
+            FROM crew_known_locations
+            WHERE TRIM(COALESCE(display_name, '')) != ''
+            UNION
+            SELECT locations.name
+            FROM deputy_schedule_locations locations
+            WHERE TRIM(COALESCE(locations.name, '')) != ''
+              AND EXISTS (
+                  SELECT 1 FROM deputy_schedule_shifts shifts
+                  WHERE shifts.area_location_id = locations.location_id
+              )
+            UNION
+            SELECT track_label AS name
+            FROM roster_days
+            WHERE TRIM(COALESCE(track_label, '')) != ''
+            ORDER BY name COLLATE NOCASE
+            """
+        ).fetchall()
+    labels: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        label = re.sub(r"^[THG]-", "", str(row["name"] or ""), flags=re.IGNORECASE).strip()
+        key = calendar_location_key(label)
+        if not key or key in seen or label.lower() in {"web", "shift", "vehicles", "travel"}:
+            continue
+        seen.add(key)
+        labels.append(label)
+    return labels
 
 
 def save_love_racing_meetings(meetings: list[dict[str, object]], synced_at: str | None = None) -> int:
@@ -4807,7 +4859,9 @@ def upsert_track_map(
 def get_track_map(track_key: str) -> sqlite3.Row | None:
     with get_connection() as conn:
         return conn.execute(
-            "SELECT * FROM track_maps WHERE track_key = ? AND status = 'ok'",
+            """SELECT * FROM track_maps
+               WHERE track_key = ?
+                 AND (status = 'ok' OR TRIM(COALESCE(manual_file_name, '')) != '')""",
             (track_key,),
         ).fetchone()
 
@@ -4817,6 +4871,77 @@ def list_track_maps() -> list[sqlite3.Row]:
         return conn.execute(
             "SELECT * FROM track_maps ORDER BY track_label, track_key"
         ).fetchall()
+
+
+def set_track_map_manual_override(
+    *,
+    track_key: str,
+    track_label: str,
+    file_name: str,
+    content_type: str,
+    image_hash: str,
+    image_width: int,
+    image_height: int,
+    byte_size: int,
+    updated_at: str,
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO track_maps (
+                track_key, track_label, course_label, status, checked_at, updated_at,
+                manual_file_name, manual_content_type, manual_image_hash,
+                manual_image_width, manual_image_height, manual_byte_size, manual_updated_at
+            ) VALUES (?, ?, ?, 'manual', '', '', ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(track_key) DO UPDATE SET
+                track_label = CASE
+                    WHEN TRIM(COALESCE(track_maps.track_label, '')) = '' THEN excluded.track_label
+                    ELSE track_maps.track_label
+                END,
+                course_label = CASE
+                    WHEN TRIM(COALESCE(track_maps.course_label, '')) = '' THEN excluded.course_label
+                    ELSE track_maps.course_label
+                END,
+                manual_file_name = excluded.manual_file_name,
+                manual_content_type = excluded.manual_content_type,
+                manual_image_hash = excluded.manual_image_hash,
+                manual_image_width = excluded.manual_image_width,
+                manual_image_height = excluded.manual_image_height,
+                manual_byte_size = excluded.manual_byte_size,
+                manual_updated_at = excluded.manual_updated_at
+            """,
+            (
+                track_key, track_label, track_label, file_name, content_type, image_hash,
+                max(0, int(image_width or 0)), max(0, int(image_height or 0)),
+                max(0, int(byte_size or 0)), updated_at,
+            ),
+        )
+
+
+def clear_track_map_manual_override(track_key: str) -> str:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT manual_file_name FROM track_maps WHERE track_key = ?",
+            (track_key,),
+        ).fetchone()
+        if row is None:
+            return ""
+        conn.execute(
+            """
+            UPDATE track_maps
+            SET manual_file_name = NULL,
+                manual_content_type = NULL,
+                manual_image_hash = NULL,
+                manual_image_width = NULL,
+                manual_image_height = NULL,
+                manual_byte_size = NULL,
+                manual_updated_at = NULL,
+                status = CASE WHEN TRIM(COALESCE(file_name, '')) != '' THEN status ELSE 'unavailable' END
+            WHERE track_key = ?
+            """,
+            (track_key,),
+        )
+        return str(row["manual_file_name"] or "")
 
 
 CORE_EVENT_POSITION_KEYS = {
