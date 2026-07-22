@@ -117,24 +117,25 @@
 
   <details class="table-panel">
     <summary class="management-panel-summary">
-      <span><strong>Track maps</strong><small>{{ track_maps|length }} crew locations</small></span>
+      <span><strong>Track maps</strong><small>{{ track_maps|length }} racing venues</small></span>
       <span>Manage images</span>
     </summary>
     <div class="management-panel-body">
-      <div class="section-heading">
+      <div class="section-heading track-map-section-heading">
         <p class="muted">A manual upload takes priority on race-day pages while the automatic image remains available to download or restore.</p>
       <form action="/admin/track-maps-refresh" method="post">
         <button class="button button-secondary" type="submit">Refresh Track Maps</button>
       </form>
       </div>
     {% if track_maps %}
-      <p>{{ track_maps|selectattr("manual_available")|list|length }} manual · {{ track_maps|selectattr("auto_available")|list|length }} automatic · {{ track_maps|length }} locations</p>
+      <p>{{ track_maps|selectattr("manual_available")|list|length }} manual · {{ track_maps|selectattr("auto_available")|list|length }} automatic · {{ track_maps|length }} racing venues</p>
       <div class="track-map-admin-list">
         {% for map in track_maps %}
           <div class="track-map-admin-row">
             <div class="track-map-admin-info">
               <strong>{{ map.track_label }}</strong>
               <span>{{ map.effective_source }}</span>
+              {% if map.aliases %}<small>Also used for: {{ map.aliases|join(", ") }}</small>{% endif %}
               <small>{% if map.effective_width and map.effective_height %}{{ map.effective_width }}×{{ map.effective_height }} · {{ map.effective_byte_size }} bytes{% else %}No map image available yet{% endif %}</small>
             </div>
             <div class="track-map-admin-actions">
@@ -159,7 +160,70 @@
         {% endfor %}
       </div>
     {% else %}
-      <p class="muted">No crew locations have been recorded yet.</p>
+      <p class="muted">No racing venues have been recorded yet.</p>
+    {% endif %}
+
+    {% if unclassified_track_map_locations %}
+      <details class="track-map-classification-panel">
+        <summary><strong>Unclassified locations</strong><span>{{ unclassified_track_map_locations|length }} to review</span></summary>
+        <p class="muted">Choose only when the location is genuinely a racecourse or an alias of one. Historical roster labels are not changed.</p>
+        <div class="track-map-classification-list">
+          {% for location in unclassified_track_map_locations %}
+            <div class="track-map-classification-row">
+              <strong>{{ location.location_label }}</strong>
+              <div class="track-map-classification-actions">
+                <form action="/admin/track-map-locations/{{ location.location_key }}/classify" method="post">
+                  <input type="hidden" name="location_label" value="{{ location.location_label }}">
+                  <input type="hidden" name="classification" value="venue">
+                  <button class="button button-secondary" type="submit">Treat as racing venue</button>
+                </form>
+                <form class="track-map-alias-form" action="/admin/track-map-locations/{{ location.location_key }}/classify" method="post">
+                  <input type="hidden" name="location_label" value="{{ location.location_label }}">
+                  <input type="hidden" name="classification" value="alias">
+                  <select name="canonical_venue_key" aria-label="Existing racing venue" required>
+                    <option value="">Alias to…</option>
+                    {% for venue in track_maps %}<option value="{{ venue.track_key }}">{{ venue.track_label }}</option>{% endfor %}
+                  </select>
+                  <button class="button button-secondary" type="submit">Save alias</button>
+                </form>
+                <form action="/admin/track-map-locations/{{ location.location_key }}/classify" method="post">
+                  <input type="hidden" name="location_label" value="{{ location.location_label }}">
+                  <input type="hidden" name="classification" value="excluded">
+                  <button class="button button-secondary" type="submit">Exclude</button>
+                </form>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </details>
+    {% endif %}
+
+    {% if track_map_classification_decisions %}
+      <details class="track-map-classification-panel">
+        <summary><strong>Saved classifications</strong><span>{{ track_map_classification_decisions|length }} admin decisions</span></summary>
+        <div class="track-map-decision-list">
+          {% for decision in track_map_classification_decisions %}
+            <div>
+              <span><strong>{{ decision.location_label }}</strong> · {% if decision.classification == "alias" %}uses {{ decision.canonical_venue_label }}{% else %}{{ decision.classification }}{% endif %}</span>
+              <form action="/admin/track-map-locations/{{ decision.location_key }}/reset" method="post">
+                <button class="button button-secondary" type="submit">Reset</button>
+              </form>
+            </div>
+          {% endfor %}
+        </div>
+      </details>
+    {% endif %}
+
+    {% if track_map_migration_warnings %}
+      <details class="track-map-classification-panel warning-panel">
+        <summary><strong>Retained alias files</strong><span>{{ track_map_migration_warnings|length }} for review</span></summary>
+        {% for warning in track_map_migration_warnings %}
+          <div class="track-map-retained-file">
+            <p><strong>{{ warning.alias_label }}</strong> → {{ warning.canonical_venue_label }} · {{ warning.retained_file_name }}<br><small>{{ warning.note }}</small></p>
+            <a class="button button-secondary" href="/admin/track-map-migration-files/{{ warning.id }}">Download retained file</a>
+          </div>
+        {% endfor %}
+      </details>
     {% endif %}
     </div>
   </details>

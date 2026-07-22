@@ -125,6 +125,8 @@ Official 2D course maps are a separate, slower-changing cache. The app keeps a v
 
 Course-page discovery evaluates all credible official image attributes and downloads candidates before choosing by decoded resolution. The chosen source and natural dimensions are persisted. Refresh reports upgraded, unchanged, unavailable, or failed and preserves the previous file on any failed/lower-quality replacement.
 
+Track-map identity is separate from raw roster location identity. Clear racecourses and trial aliases resolve to one canonical image venue; clear operational labels are excluded; uncertain labels wait for a persisted admin decision. This keeps raw Deputy history intact while preventing duplicate image uploads. Cambridge trials resolve to Cambridge Synthetic, never Cambridge Harness. Manual overrides on legacy alias rows migrate only when safe, and conflicting files are retained with a migration warning.
+
 ## Manual Roster Publishing Trial
 
 The replacement-roster trial uses an explicit draft, review, publish flow. Saving never changes what crew see. The builder compares the draft with the last published snapshot and highlights timing, notes, person, position, and vehicle changes before an admin publishes a new version.

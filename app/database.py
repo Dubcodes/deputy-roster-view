@@ -493,6 +493,32 @@ def init_db(settings: Settings | None = None) -> None:
                 manual_updated_at TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS track_map_location_rules (
+                location_key TEXT PRIMARY KEY,
+                location_label TEXT NOT NULL,
+                classification TEXT NOT NULL,
+                canonical_venue_key TEXT,
+                canonical_venue_label TEXT,
+                source TEXT DEFAULT 'admin',
+                note TEXT,
+                updated_at TEXT NOT NULL,
+                CHECK (classification IN ('venue', 'alias', 'excluded'))
+            );
+
+            CREATE TABLE IF NOT EXISTS track_map_migration_warnings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                alias_key TEXT NOT NULL,
+                alias_label TEXT,
+                canonical_venue_key TEXT NOT NULL,
+                canonical_venue_label TEXT,
+                retained_file_name TEXT,
+                image_hash TEXT,
+                warning_type TEXT NOT NULL,
+                note TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(alias_key, canonical_venue_key, image_hash, warning_type)
+            );
+
             CREATE TABLE IF NOT EXISTS planning_location_preferences (
                 location_key TEXT PRIMARY KEY,
                 display_name TEXT,
@@ -2236,13 +2262,92 @@ def list_crew_work_location_labels() -> list[str]:
     labels: list[str] = []
     seen: set[str] = set()
     for row in rows:
-        label = re.sub(r"^[THG]-", "", str(row["name"] or ""), flags=re.IGNORECASE).strip()
+        label = str(row["name"] or "").strip()
         key = calendar_location_key(label)
         if not key or key in seen or label.lower() in {"web", "shift", "vehicles", "travel"}:
             continue
         seen.add(key)
         labels.append(label)
     return labels
+
+
+def list_track_map_location_rules() -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        try:
+            return conn.execute(
+                "SELECT * FROM track_map_location_rules ORDER BY location_label COLLATE NOCASE"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+
+
+def get_track_map_location_rule(location_key: str) -> sqlite3.Row | None:
+    with get_connection() as conn:
+        try:
+            return conn.execute(
+                "SELECT * FROM track_map_location_rules WHERE location_key = ?",
+                (location_key,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+
+
+def upsert_track_map_location_rule(
+    *,
+    location_key: str,
+    location_label: str,
+    classification: str,
+    canonical_venue_key: str = "",
+    canonical_venue_label: str = "",
+    source: str = "admin",
+    note: str = "",
+    updated_at: str | None = None,
+) -> None:
+    if classification not in {"venue", "alias", "excluded"}:
+        raise ValueError("Invalid track-map location classification.")
+    updated_at = updated_at or datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO track_map_location_rules (
+                location_key, location_label, classification,
+                canonical_venue_key, canonical_venue_label, source, note, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(location_key) DO UPDATE SET
+                location_label = excluded.location_label,
+                classification = excluded.classification,
+                canonical_venue_key = excluded.canonical_venue_key,
+                canonical_venue_label = excluded.canonical_venue_label,
+                source = excluded.source,
+                note = excluded.note,
+                updated_at = excluded.updated_at
+            """,
+            (
+                location_key, location_label, classification,
+                canonical_venue_key or None, canonical_venue_label or None,
+                source, note or None, updated_at,
+            ),
+        )
+
+
+def delete_track_map_location_rule(location_key: str) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM track_map_location_rules WHERE location_key = ?", (location_key,))
+
+
+def list_track_map_migration_warnings() -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM track_map_migration_warnings ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+
+
+def get_track_map_migration_warning(warning_id: int) -> sqlite3.Row | None:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM track_map_migration_warnings WHERE id = ?",
+            (warning_id,),
+        ).fetchone()
 
 
 def save_love_racing_meetings(meetings: list[dict[str, object]], synced_at: str | None = None) -> int:
@@ -4942,6 +5047,96 @@ def clear_track_map_manual_override(track_key: str) -> str:
             (track_key,),
         )
         return str(row["manual_file_name"] or "")
+
+
+def migrate_track_map_alias_overrides(
+    mappings: list[dict[str, str]],
+    migrated_at: str | None = None,
+) -> dict[str, int]:
+    """Move active alias overrides onto canonical rows without deleting cached files."""
+    migrated_at = migrated_at or datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    adopted = 0
+    conflicts = 0
+    deduplicated = 0
+    with get_connection() as conn:
+        for mapping in sorted(mappings, key=lambda item: (item["canonical_key"], item["alias_key"])):
+            alias_key = str(mapping.get("alias_key") or "").strip()
+            canonical_key = str(mapping.get("canonical_key") or "").strip()
+            if not alias_key or not canonical_key or alias_key == canonical_key:
+                continue
+            alias = conn.execute("SELECT * FROM track_maps WHERE track_key = ?", (alias_key,)).fetchone()
+            if alias is None or not str(alias["manual_file_name"] or "").strip():
+                continue
+            canonical = conn.execute("SELECT * FROM track_maps WHERE track_key = ?", (canonical_key,)).fetchone()
+            canonical_hash = str(canonical["manual_image_hash"] or "") if canonical is not None else ""
+            alias_hash = str(alias["manual_image_hash"] or "")
+            warning_type = ""
+            note = ""
+            if canonical is None or not str(canonical["manual_file_name"] or "").strip():
+                conn.execute(
+                    """
+                    INSERT INTO track_maps (
+                        track_key, track_label, course_label, status, checked_at, updated_at,
+                        manual_file_name, manual_content_type, manual_image_hash,
+                        manual_image_width, manual_image_height, manual_byte_size, manual_updated_at
+                    ) VALUES (?, ?, ?, 'manual', '', '', ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(track_key) DO UPDATE SET
+                        manual_file_name = excluded.manual_file_name,
+                        manual_content_type = excluded.manual_content_type,
+                        manual_image_hash = excluded.manual_image_hash,
+                        manual_image_width = excluded.manual_image_width,
+                        manual_image_height = excluded.manual_image_height,
+                        manual_byte_size = excluded.manual_byte_size,
+                        manual_updated_at = excluded.manual_updated_at
+                    """,
+                    (
+                        canonical_key,
+                        mapping.get("canonical_label") or alias["track_label"] or canonical_key,
+                        mapping.get("canonical_label") or alias["course_label"] or canonical_key,
+                        alias["manual_file_name"], alias["manual_content_type"], alias["manual_image_hash"],
+                        alias["manual_image_width"], alias["manual_image_height"], alias["manual_byte_size"],
+                        alias["manual_updated_at"] or migrated_at,
+                    ),
+                )
+                adopted += 1
+            elif canonical_hash and canonical_hash == alias_hash:
+                warning_type = "duplicate_alias_upload"
+                note = "The alias upload matched the canonical manual image; the cached alias file was retained."
+                deduplicated += 1
+            else:
+                warning_type = "conflicting_alias_upload"
+                note = "The canonical manual image was kept. The different alias file remains on disk for recovery."
+                conflicts += 1
+            if warning_type:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO track_map_migration_warnings (
+                        alias_key, alias_label, canonical_venue_key, canonical_venue_label,
+                        retained_file_name, image_hash, warning_type, note, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        alias_key, mapping.get("alias_label") or alias["track_label"],
+                        canonical_key, mapping.get("canonical_label"), alias["manual_file_name"],
+                        alias_hash, warning_type, note, migrated_at,
+                    ),
+                )
+            conn.execute(
+                """
+                UPDATE track_maps
+                SET manual_file_name = NULL,
+                    manual_content_type = NULL,
+                    manual_image_hash = NULL,
+                    manual_image_width = NULL,
+                    manual_image_height = NULL,
+                    manual_byte_size = NULL,
+                    manual_updated_at = NULL,
+                    status = CASE WHEN TRIM(COALESCE(file_name, '')) != '' THEN status ELSE 'unavailable' END
+                WHERE track_key = ?
+                """,
+                (alias_key,),
+            )
+    return {"adopted": adopted, "conflicts": conflicts, "deduplicated": deduplicated}
 
 
 CORE_EVENT_POSITION_KEYS = {

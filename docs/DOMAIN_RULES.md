@@ -149,10 +149,15 @@ Love Racing data is public planning information only. Use it to show future race
 
 ## Track Maps
 
-For Thoroughbred race days, the app may show Love Racing's official 2D course map at the bottom of the day view.
+For race days, the app may show a cached or admin-uploaded 2D course map at the bottom of the day view.
 
 - Only cache maps for racecourses already seen in roster data.
 - Do not attach the Cambridge Thoroughbred map to Cambridge Harness or Greyhound meetings.
+- Cambridge Thoroughbred trial labels use the Cambridge Synthetic image venue. Other trial labels use the ordinary physical venue whenever that course is already known to the map catalogue, including Avondale, Pukekohe, Rotorua, Taupo, Te Rapa, and Waipa.
+- Office/base, vehicle, training, travel, abandoned, contractor-context, and out-of-region labels are not image venues. This classification affects maps only and never renames historical shifts.
+- Alexandra Park, Manukau, Cambridge Harness, and Cambridge Greyhound remain valid manual-image venues even without a Love Racing automatic image.
+- Unknown crew locations remain visible to an admin for venue, alias, or exclusion classification rather than being guessed.
+- A canonical manual upload wins. Alias uploads may be adopted only when the canonical venue has no manual image; conflicting files must remain recoverable.
 - Serve cached maps from the app; the day view should not link users out to Love Racing.
 - Refresh map files no more than about monthly unless an admin/developer explicitly forces a refresh.
 - If a course cannot be matched confidently or the image fetch fails, show no map rather than guessing.

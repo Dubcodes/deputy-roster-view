@@ -58,6 +58,10 @@ Admins can include or ignore individual saved planning locations. The preference
 
 `app/track_maps.py` maintains a verified catalog of official 2D map images and optional admin-uploaded overrides. A monthly scheduler job checks catalog courses already known from roster data and retains the automatic file even when a manual image is active. Manual JPEG, PNG, or WebP files are stored separately in `data/track_maps`; day views prefer them until an admin resets the track to automatic. `/track-map/{track_key}` serves the effective local file, while the admin-only automatic download route always serves the untouched acquired image.
 
+Raw crew locations are classified before image lookup. Built-in rules exclude operational contexts, consolidate trial labels onto their physical racecourse, and keep Harness/Greyhound venues available for manual images even when Love Racing has no automatic source. `track_map_location_rules` stores compact admin decisions for uncertain locations without changing historical roster labels. All day and Admin image lookups use the resulting canonical venue key.
+
+Legacy manual uploads saved against an alias are adopted by the canonical venue when it has no manual image. An existing canonical override wins conflicts; the alias file remains on disk and `track_map_migration_warnings` records it for recovery instead of silently deleting it.
+
 Discovery considers the track image's `src`, `srcset`, `data-src`, `data-original`, parent link, Open Graph image, and verified catalog fallback. Love Racing's `Common/Image.ashx` proxy is converted to its direct `OnHorseFiles` source. Candidates must be supported images, have sensible decoded dimensions, and match the expected course; the largest valid official candidate wins. Width, height, byte size, candidate count, selected source URL, and refresh result are stored. A failed or lower-quality replacement never removes a working cache.
 
 ### Travel Routes And Holidays

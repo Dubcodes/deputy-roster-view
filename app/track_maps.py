@@ -18,7 +18,11 @@ from .database import (
     clear_track_map_manual_override,
     get_app_setting,
     get_track_map,
+    get_track_map_location_rule,
     list_known_racecourse_names,
+    list_track_map_location_rules,
+    list_track_maps,
+    migrate_track_map_alias_overrides,
     set_track_map_manual_override,
     update_app_settings,
     upsert_track_map,
@@ -121,6 +125,152 @@ COURSE_CATALOG = {
     },
 }
 
+MANUAL_VENUES = {
+    "alexandrapark": {"label": "Alexandra Park", "aliases": ("Alexandra Park",)},
+    "cambridgegreyhound": {
+        "label": "Cambridge Greyhound",
+        "aliases": ("Cambridge Greyhound", "G Cambridge", "G-Cambridge"),
+    },
+    "cambridgeharness": {
+        "label": "Cambridge Harness",
+        "aliases": ("Cambridge Harness", "H Cambridge", "H-Cambridge"),
+    },
+    "manukau": {"label": "Manukau", "aliases": ("Manukau",)},
+    "waipa": {"label": "Waipa", "aliases": ("Waipa",)},
+}
+TRIAL_VENUES = {
+    "avondale": ("avondale", "Avondale"),
+    "cambridge": ("cambridge", "Cambridge Synthetic"),
+    "pukekohe": ("pukekohepark", "Pukekohe"),
+    "pukekohepark": ("pukekohepark", "Pukekohe"),
+    "rotorua": ("arawapark", "Rotorua"),
+    "arawapark": ("arawapark", "Rotorua"),
+    "taupo": ("taupo", "Taupo"),
+    "terapa": ("terapa", "Te Rapa"),
+    "waipa": ("waipa", "Waipa"),
+}
+OPERATIONAL_LOCATION_KEYS = {
+    "aoffice", "office", "clowplace", "abandoned", "mewptraining",
+    "northernops", "northernopscontractors", "veh", "vehicle", "vehicles",
+    "travel", "ttravel", "outofregion", "travelthenovernighter", "web", "shift",
+}
+
+
+def _built_in_venue_index() -> dict[str, tuple[str, str]]:
+    index: dict[str, tuple[str, str]] = {}
+    for course_key, course in COURSE_CATALOG.items():
+        label = str(course["label"])
+        for alias in (course_key, label, *course.get("aliases", ())):
+            key = calendar_location_key(alias)
+            if key:
+                index[key] = (course_key, label)
+    for venue_key, venue in MANUAL_VENUES.items():
+        label = str(venue["label"])
+        for alias in (venue_key, label, *venue.get("aliases", ())):
+            key = calendar_location_key(alias)
+            if key:
+                index[key] = (venue_key, label)
+    return index
+
+
+BUILT_IN_VENUES = _built_in_venue_index()
+
+
+def track_map_location_rule_index() -> dict[str, dict[str, object]]:
+    return {str(row["location_key"]): dict(row) for row in list_track_map_location_rules()}
+
+
+def _classification_label(value: object) -> str:
+    label = re.sub(r"_+", " ", str(value or "").strip())
+    label = re.sub(r"\s+", " ", label)
+    label = re.sub(r"^\s*\([^)]{1,12}\)\s*", "", label)
+    return re.sub(r"^\s*[THG]\s*-\s*", "", label, flags=re.IGNORECASE).strip()
+
+
+def _is_operational_location(label: str) -> bool:
+    key = calendar_location_key(label)
+    if key in OPERATIONAL_LOCATION_KEYS:
+        return True
+    return bool(re.match(
+        r"^(?:(?:northern|central|southern)\s+ops(?:\s*-?\s*(?:contractors|canterbury|otago))?|"
+        r"mewp\s+training|training(?:\s*\([^)]*\))?|annual\s+leave|leave|rdo|"
+        r"public\s+holiday(?:\s+not\s+worked)?|pubhol|default\s+pay\s+centre|"
+        r"travel(?:\s+then\s+overnighter)?|out\s+of\s+region|vehicles?|"
+        r"admin|site\s+day|(?:hamilton|christchurch|dunedin)\s*-?\s*site(?:\s+day)?|"
+        r"track\s+(?:install|test)|test\s+hq.*|prodshoot|radio\s+ob\s+kits)$",
+        label,
+        flags=re.IGNORECASE,
+    ))
+
+
+def classify_track_map_location(
+    track_label: object,
+    rules: dict[str, dict[str, object]] | None = None,
+) -> dict[str, object]:
+    raw_label = re.sub(r"\s+", " ", str(track_label or "").strip())
+    raw_key = calendar_location_key(raw_label)
+    result: dict[str, object] = {
+        "raw_label": raw_label,
+        "location_key": raw_key,
+        "classification": "unclassified",
+        "canonical_key": "",
+        "canonical_label": "",
+        "source": "unclassified",
+        "is_alias": False,
+    }
+    if not raw_key:
+        return result
+
+    rule = (rules or {}).get(raw_key) if rules is not None else None
+    if rule is None and rules is None:
+        stored = get_track_map_location_rule(raw_key)
+        rule = dict(stored) if stored is not None else None
+    if rule:
+        classification = str(rule.get("classification") or "unclassified")
+        canonical_key = str(rule.get("canonical_venue_key") or "")
+        canonical_label = str(rule.get("canonical_venue_label") or "")
+        if classification == "venue":
+            canonical_key = canonical_key or raw_key
+            canonical_label = canonical_label or raw_label
+        result.update({
+            "classification": classification,
+            "canonical_key": canonical_key,
+            "canonical_label": canonical_label,
+            "source": str(rule.get("source") or "admin"),
+            "is_alias": classification == "alias",
+        })
+        return result
+
+    label = _classification_label(raw_label)
+    if _is_operational_location(label):
+        result.update({"classification": "excluded", "source": "built-in"})
+        return result
+
+    trial_match = re.match(r"^trials?\s*(?:[-:–—/.]\s*)?(.*?)\s*$", label, flags=re.IGNORECASE)
+    if trial_match:
+        trial_key = calendar_location_key(trial_match.group(1))
+        venue = TRIAL_VENUES.get(trial_key) or BUILT_IN_VENUES.get(trial_key)
+        if venue:
+            result.update({
+                "classification": "alias",
+                "canonical_key": venue[0],
+                "canonical_label": venue[1],
+                "source": "built-in",
+                "is_alias": True,
+            })
+        return result
+
+    venue = BUILT_IN_VENUES.get(raw_key) or BUILT_IN_VENUES.get(calendar_location_key(label))
+    if venue:
+        result.update({
+            "classification": "venue",
+            "canonical_key": venue[0],
+            "canonical_label": venue[1],
+            "source": "built-in",
+            "is_alias": calendar_location_key(label) != calendar_location_key(venue[1]),
+        })
+    return result
+
 
 class _TrackMapImageParser(HTMLParser):
     def __init__(self) -> None:
@@ -169,19 +319,37 @@ class _TrackMapImageParser(HTMLParser):
 
 
 def track_map_course_key(track_label: object) -> str:
-    candidate = calendar_location_key(track_label)
-    if not candidate:
-        return ""
-    if candidate in COURSE_CATALOG:
-        return candidate
-    for course_key, course in COURSE_CATALOG.items():
-        if candidate in {calendar_location_key(alias) for alias in course["aliases"]}:
-            return course_key
-    return ""
+    classification = classify_track_map_location(track_label)
+    key = str(classification.get("canonical_key") or "")
+    return key if key in COURSE_CATALOG else ""
 
 
 def track_map_storage_key(track_label: object) -> str:
-    return track_map_course_key(track_label) or calendar_location_key(track_label)
+    classification = classify_track_map_location(track_label)
+    if classification.get("classification") not in {"venue", "alias"}:
+        return ""
+    return str(classification.get("canonical_key") or "")
+
+
+def migrate_existing_track_map_aliases() -> dict[str, int]:
+    rules = track_map_location_rule_index()
+    mappings: list[dict[str, str]] = []
+    for row in list_track_maps():
+        record = dict(row)
+        alias_key = str(record.get("track_key") or "")
+        label = str(record.get("track_label") or record.get("course_label") or alias_key)
+        classification = classify_track_map_location(label, rules)
+        canonical_key = str(classification.get("canonical_key") or "")
+        if classification.get("classification") not in {"venue", "alias"} or not canonical_key:
+            continue
+        if alias_key != canonical_key:
+            mappings.append({
+                "alias_key": alias_key,
+                "alias_label": label,
+                "canonical_key": canonical_key,
+                "canonical_label": str(classification.get("canonical_label") or label),
+            })
+    return migrate_track_map_alias_overrides(mappings)
 
 
 def _direct_image_url(value: str) -> str:
@@ -303,9 +471,11 @@ def save_manual_track_map(
 ) -> dict[str, object]:
     settings = settings or get_settings()
     label = str(track_label or "").strip()
-    track_key = track_map_storage_key(label)
+    classification = classify_track_map_location(label)
+    track_key = str(classification.get("canonical_key") or "")
     if not label or not track_key:
-        raise ValueError("Track name is missing.")
+        raise ValueError("Choose a location classified as a racing venue.")
+    canonical_label = str(classification.get("canonical_label") or label)
     if not content:
         raise ValueError("Choose an image to upload.")
     if len(content) > MAX_MANUAL_MAP_BYTES:
@@ -330,13 +500,13 @@ def save_manual_track_map(
     updated_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
     image_hash = hashlib.sha256(content).hexdigest()
     set_track_map_manual_override(
-        track_key=track_key, track_label=label, file_name=file_name,
+        track_key=track_key, track_label=canonical_label, file_name=file_name,
         content_type=content_type, image_hash=image_hash,
         image_width=width, image_height=height, byte_size=len(content),
         updated_at=updated_at,
     )
     return {
-        "track_key": track_key, "track_label": label, "file_name": file_name,
+        "track_key": track_key, "track_label": canonical_label, "file_name": file_name,
         "content_type": content_type, "image_width": width, "image_height": height,
         "byte_size": len(content), "image_hash": image_hash, "updated_at": updated_at,
     }
@@ -387,14 +557,18 @@ def refresh_track_maps(settings: Settings | None = None) -> dict[str, object]:
     settings = settings or get_settings()
     now = datetime.now(settings.timezone)
     checked_at = now.isoformat(timespec="seconds")
+    migrate_existing_track_map_aliases()
+    rules = track_map_location_rule_index()
     known_keys = {
-        calendar_location_key(value)
+        str(classification.get("canonical_key") or "")
         for value in list_known_racecourse_names(include_fallback=False)
+        for classification in (classify_track_map_location(value, rules),)
+        if classification.get("classification") in {"venue", "alias"}
     }
     targets = [
         (course_key, course)
         for course_key, course in COURSE_CATALOG.items()
-        if known_keys & {calendar_location_key(alias) for alias in course["aliases"]}
+        if course_key in known_keys
     ]
     map_dir = Path(settings.data_dir) / "track_maps"
     map_dir.mkdir(parents=True, exist_ok=True)

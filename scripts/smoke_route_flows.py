@@ -814,8 +814,17 @@ def main() -> None:
         raise AssertionError("Expected admin track-map controls to show the active manual override.")
     if "/admin/track-maps/tearoha/auto" not in admin_page.text or "Download auto" not in admin_page.text:
         raise AssertionError("Expected the automatic map download control to remain available.")
+    if "Unclassified locations" not in admin_page.text or "Test Park" not in admin_page.text:
+        raise AssertionError("Expected an uncertain crew location to require compact admin classification.")
+    classify_test_park = client.post(
+        "/admin/track-map-locations/testpark/classify",
+        data={"location_label": "Test Park", "classification": "venue"},
+        follow_redirects=False,
+    )
+    assert_redirect(classify_test_park, "Test+Park+is+now+a+racing+venue")
+    admin_page = client.get("/admin")
     if "/admin/track-maps/testpark/upload" not in admin_page.text:
-        raise AssertionError("Expected every crew roster location to have a manual map upload control.")
+        raise AssertionError("Expected a classified racing venue to gain a manual map upload control.")
     reset_map = client.post("/admin/track-maps/tearoha/reset", follow_redirects=False)
     assert_redirect(reset_map, "Manual+map+removed")
     reset_response = client.get("/track-map/tearoha")

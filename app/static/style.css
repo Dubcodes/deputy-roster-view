@@ -4753,6 +4753,71 @@ th {
   max-width: 220px;
 }
 
+.track-map-classification-panel {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.track-map-classification-panel > summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  cursor: pointer;
+}
+
+.track-map-classification-panel > summary span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.track-map-classification-list,
+.track-map-decision-list {
+  display: grid;
+  gap: 8px;
+}
+
+.track-map-classification-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(420px, 2fr);
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+}
+
+.track-map-classification-actions,
+.track-map-alias-form,
+.track-map-decision-list > div {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.track-map-classification-actions form,
+.track-map-decision-list form {
+  margin: 0;
+}
+
+.track-map-retained-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.track-map-retained-file p {
+  margin: 0;
+}
+
+.track-map-alias-form select {
+  width: min(190px, 100%);
+}
+
 .travel-route-row {
   display: grid;
   grid-template-columns: minmax(220px, 1.5fr) 80px minmax(160px, 1fr) minmax(150px, 1fr) auto;
@@ -4809,13 +4874,31 @@ th {
   .travel-route-row,
   .crew-directory-row > summary,
   .track-map-diagnostics > div,
-  .track-map-admin-row {
+  .track-map-admin-row,
+  .track-map-classification-row,
+  .track-map-decision-list > div {
     grid-template-columns: 1fr;
   }
 
   .track-map-admin-actions,
-  .track-map-upload-form {
+  .track-map-upload-form,
+  .track-map-classification-actions,
+  .track-map-decision-list > div {
     justify-content: flex-start;
+  }
+
+  .track-map-alias-form {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .track-map-section-heading {
+    flex-direction: column;
+  }
+
+  .track-map-retained-file {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .date-heading {

@@ -18,6 +18,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from .auth import clear_trusted_device, current_user, require_admin_user, trusted_device_middleware
 from .config import get_settings
 from .database import (
+    calendar_location_key,
     canonical_travel_base_label,
     canonical_travel_track,
     clear_all_changed_flags,
@@ -66,6 +67,7 @@ from .database import (
     get_travel_time_default,
     get_travel_route,
     get_track_map,
+    get_track_map_migration_warning,
     get_recent_sync_logs,
     get_upcoming_shifts,
     get_user_sync_state,
@@ -84,6 +86,8 @@ from .database import (
     list_crew_people,
     crew_identity_records,
     list_track_maps,
+    list_track_map_location_rules,
+    list_track_map_migration_warnings,
     list_trusted_devices_for_user,
     mark_user_sync_finished,
     mark_user_sync_started,
@@ -108,6 +112,8 @@ from .database import (
     update_crew_person,
     update_user_display_theme,
     update_user_pin_hash,
+    upsert_track_map_location_rule,
+    delete_track_map_location_rule,
     user_has_deputy_credentials,
     user_has_ical_url,
 )
@@ -128,19 +134,22 @@ from .security import (
 from .user_credentials import settings_for_user
 from .track_maps import (
     MAX_MANUAL_MAP_BYTES,
+    classify_track_map_location,
     effective_track_map_file,
     image_dimensions,
+    migrate_existing_track_map_aliases,
     refresh_track_maps,
     reset_manual_track_map,
     save_manual_track_map,
     track_map_storage_key,
+    track_map_location_rule_index,
 )
 from .public_holidays import holiday_for_date
 
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.22.1"
+APP_BUILD = "2026.07.22.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -3051,9 +3060,13 @@ def track_maps_for_day(
 ) -> list[dict[str, object]]:
     maps = []
     seen = set()
+    rules = track_map_location_rule_index()
     for item in list(shifts) + list(manual_rosters):
         track_label = str(item.get("track_label") or item.get("location_label") or "").strip()
-        course_key = track_map_storage_key(track_label)
+        classification = classify_track_map_location(track_label, rules)
+        if classification.get("classification") not in {"venue", "alias"}:
+            continue
+        course_key = str(classification.get("canonical_key") or "")
         if not course_key or course_key in seen:
             continue
         row = get_track_map(course_key)
@@ -3074,8 +3087,8 @@ def track_maps_for_day(
         maps.append(
             {
                 "track_key": course_key,
-                "track_label": track_label or str(row["track_label"] or row["course_label"] or "Track"),
-                "course_label": str(row["course_label"] or track_label or "Track"),
+                "track_label": str(classification.get("canonical_label") or row["track_label"] or "Track"),
+                "course_label": str(row["course_label"] or classification.get("canonical_label") or "Track"),
                 "image_url": f"/track-map/{course_key}?v={str(effective['image_hash'])[:12]}",
                 "image_width": image_width,
                 "image_height": image_height,
@@ -3086,30 +3099,67 @@ def track_maps_for_day(
     return maps
 
 
-def track_map_admin_rows() -> list[dict[str, object]]:
+def track_map_admin_data() -> dict[str, list[dict[str, object]]]:
+    migrate_existing_track_map_aliases()
+    rules = track_map_location_rule_index()
     records = {str(row["track_key"]): dict(row) for row in list_track_maps()}
-    rows: dict[str, dict[str, object]] = {}
-    for label in list_crew_work_location_labels():
-        key = track_map_storage_key(label)
-        if not key:
+    venues: dict[str, dict[str, object]] = {}
+    unclassified: dict[str, dict[str, object]] = {}
+    observations = [(label, "crew") for label in list_crew_work_location_labels()]
+    observations.extend(
+        (str(record.get("track_label") or record.get("course_label") or key), "map")
+        for key, record in records.items()
+    )
+    for label, observation_source in observations:
+        classification = classify_track_map_location(label, rules)
+        location_key = str(classification.get("location_key") or "")
+        kind = str(classification.get("classification") or "unclassified")
+        if kind in {"venue", "alias"}:
+            key = str(classification.get("canonical_key") or "")
+            if not key:
+                continue
+            venue = venues.setdefault(key, {
+                "track_key": key,
+                "track_label": str(classification.get("canonical_label") or label),
+                "aliases": set(),
+            })
+            if classification.get("is_alias") or kind == "alias":
+                alias = str(classification.get("raw_label") or label)
+                if calendar_location_key(alias) != calendar_location_key(venue["track_label"]):
+                    venue["aliases"].add(alias)
             continue
-        record = dict(records.get(key) or {})
-        record.setdefault("track_key", key)
-        record.setdefault("track_label", label)
-        rows[key] = record
+        if kind == "unclassified" and location_key:
+            unclassified.setdefault(location_key, {
+                "location_key": location_key,
+                "location_label": str(classification.get("raw_label") or label),
+                "source": observation_source,
+            })
+
     for key, record in records.items():
-        rows.setdefault(key, record)
+        classification = classify_track_map_location(
+            record.get("track_label") or record.get("course_label") or key,
+            rules,
+        )
+        canonical_key = str(classification.get("canonical_key") or "")
+        if classification.get("classification") in {"venue", "alias"} and canonical_key:
+            venues.setdefault(canonical_key, {
+                "track_key": canonical_key,
+                "track_label": str(classification.get("canonical_label") or record.get("track_label") or key),
+                "aliases": set(),
+            })
 
     map_dir = Path(get_settings().data_dir) / "track_maps"
-    result = []
-    for key, record in rows.items():
+    result: list[dict[str, object]] = []
+    for key, venue in venues.items():
+        record = dict(records.get(key) or {})
         effective = effective_track_map_file(record)
         auto_file = Path(str(record.get("file_name") or "")).name
         manual_file = Path(str(record.get("manual_file_name") or "")).name
         result.append({
             **record,
             "track_key": key,
-            "track_label": str(record.get("track_label") or record.get("course_label") or key),
+            "track_label": str(venue["track_label"]),
+            "aliases": sorted(venue["aliases"], key=str.lower),
             "auto_available": bool(auto_file and (map_dir / auto_file).is_file()),
             "manual_available": bool(manual_file and (map_dir / manual_file).is_file()),
             "effective_width": int(effective["image_width"] or 0),
@@ -3117,7 +3167,16 @@ def track_map_admin_rows() -> list[dict[str, object]]:
             "effective_byte_size": int(effective["byte_size"] or 0),
             "effective_source": "Manual upload" if effective["is_manual"] else ("Automatic" if auto_file else "No image"),
         })
-    return sorted(result, key=lambda item: str(item["track_label"]).lower())
+    admin_rules = [
+        dict(row) for row in list_track_map_location_rules()
+        if str(row["source"] or "") == "admin"
+    ]
+    return {
+        "venues": sorted(result, key=lambda item: str(item["track_label"]).lower()),
+        "unclassified": sorted(unclassified.values(), key=lambda item: str(item["location_label"]).lower()),
+        "decisions": admin_rules,
+        "warnings": [dict(row) for row in list_track_map_migration_warnings()],
+    }
 
 
 def deputy_schedule_label_for_shifts(base_label: str, shifts: list[dict[str, object]]) -> str:
@@ -4222,6 +4281,7 @@ def credential_save_failed_response(path: str, user_id: int | None, exc: Excepti
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    migrate_existing_track_map_aliases()
     purge_old_inactive_records(days=30)
     reset_incomplete_user_syncs()
     start_scheduler()
@@ -4465,6 +4525,7 @@ def admin_view(request: Request, notice: str | None = None) -> object:
         datetime.now(settings.timezone).date())
     planning_locations = list_planning_locations()
     location_rows = admin_location_rows(planning_locations, travel_defaults)
+    track_map_data = track_map_admin_data()
     return templates.TemplateResponse(
         "admin.html",
         {
@@ -4485,7 +4546,10 @@ def admin_view(request: Request, notice: str | None = None) -> object:
             "love_racing_url": LOVE_RACING_URL,
             "planning_locations": planning_locations,
             "location_rows": location_rows,
-            "track_maps": track_map_admin_rows(),
+            "track_maps": track_map_data["venues"],
+            "unclassified_track_map_locations": track_map_data["unclassified"],
+            "track_map_classification_decisions": track_map_data["decisions"],
+            "track_map_migration_warnings": track_map_data["warnings"],
             "travel_routes": [dict(row) for row in list_travel_routes()],
             "known_places": list_known_place_labels(),
             "crew_people": list_crew_people(),
@@ -4967,6 +5031,26 @@ def admin_download_auto_track_map(request: Request, track_key: str) -> FileRespo
     )
 
 
+@app.get("/admin/track-map-migration-files/{warning_id}")
+def admin_download_retained_track_map(request: Request, warning_id: int) -> FileResponse:
+    require_admin_user(request)
+    warning = get_track_map_migration_warning(warning_id)
+    if warning is None:
+        raise HTTPException(status_code=404, detail="Retained track map not found")
+    file_name = Path(str(warning["retained_file_name"] or "")).name
+    map_dir = (Path(get_settings().data_dir) / "track_maps").resolve()
+    image_path = (map_dir / file_name).resolve()
+    if not file_name or image_path.parent != map_dir or not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Retained track map file not found")
+    media_type = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }.get(image_path.suffix.lower(), "application/octet-stream")
+    return FileResponse(image_path, media_type=media_type, filename=file_name)
+
+
 @app.post("/admin/track-maps/{track_key}/upload")
 async def admin_upload_track_map(request: Request, track_key: str) -> RedirectResponse:
     require_admin_user(request)
@@ -4993,6 +5077,62 @@ def admin_reset_track_map(request: Request, track_key: str) -> RedirectResponse:
     reset = reset_manual_track_map(track_key)
     message = "Manual map removed; the automatic map is active again." if reset else "No manual map was set for that track."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/track-map-locations/{location_key}/classify")
+async def admin_classify_track_map_location(request: Request, location_key: str) -> RedirectResponse:
+    require_admin_user(request)
+    form = await request.form()
+    location_label = str(form.get("location_label") or "").strip()
+    classification = str(form.get("classification") or "").strip().lower()
+    if not location_label or calendar_location_key(location_label) != location_key:
+        return RedirectResponse(
+            url=notice_url("/admin", "That location no longer matches the classification request."),
+            status_code=303,
+        )
+    canonical_key = ""
+    canonical_label = ""
+    if classification == "venue":
+        canonical_key = location_key
+        canonical_label = location_label
+    elif classification == "alias":
+        requested_key = str(form.get("canonical_venue_key") or "").strip()
+        venues = {str(item["track_key"]): item for item in track_map_admin_data()["venues"]}
+        target = venues.get(requested_key)
+        if target is None:
+            return RedirectResponse(
+                url=notice_url("/admin", "Choose an existing racing venue for that alias."),
+                status_code=303,
+            )
+        canonical_key = requested_key
+        canonical_label = str(target["track_label"])
+    elif classification != "excluded":
+        return RedirectResponse(url=notice_url("/admin", "Choose a location classification."), status_code=303)
+    upsert_track_map_location_rule(
+        location_key=location_key,
+        location_label=location_label,
+        classification=classification,
+        canonical_venue_key=canonical_key,
+        canonical_venue_label=canonical_label,
+        source="admin",
+    )
+    migrate_existing_track_map_aliases()
+    message = {
+        "venue": f"{location_label} is now a racing venue.",
+        "alias": f"{location_label} now uses the {canonical_label} track map.",
+        "excluded": f"{location_label} is excluded from track maps.",
+    }[classification]
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/track-map-locations/{location_key}/reset")
+def admin_reset_track_map_location_classification(request: Request, location_key: str) -> RedirectResponse:
+    require_admin_user(request)
+    delete_track_map_location_rule(location_key)
+    return RedirectResponse(
+        url=notice_url("/admin", "Location classification reset to automatic."),
+        status_code=303,
+    )
 
 
 @app.get("/day/{date_text}")

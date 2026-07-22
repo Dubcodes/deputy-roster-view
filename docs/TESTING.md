@@ -34,6 +34,7 @@ python scripts\smoke_route_flows.py
 python scripts\smoke_love_racing.py
 python scripts\smoke_extended_features.py
 python scripts\smoke_roster_integrity.py
+python scripts\smoke_track_map_classification.py
 ```
 
 ## Manual App Checks
@@ -70,6 +71,7 @@ After Portainer redeploy:
 - On Waitangi Day or another national holiday, confirm one keyboard-focusable star appears beside the date in personal month, shared month, list, day, and timesheet views.
 - At approximately 320px and 375px width, confirm the holiday star has reserved heading space and its popover stays inside the viewport without covering the date, weekday, shifts, or a neighbouring cell.
 - Refresh Track Maps and inspect the recorded dimensions/result. At phone width, confirm the map remains inside the page, keeps its aspect ratio, and is not enlarged beyond its natural width.
+- In Admin Track maps, confirm trial aliases appear only beneath their canonical venue, operational locations are absent, and uncertain locations stay in the collapsed classification subsection. Check the controls around 320px and 375px wide.
 - Confirm each user shows next planned sync and last sync status.
 - If using the temporary tunnel stack, confirm its `cloudflared` container logs show a `trycloudflare.com` URL.
 
