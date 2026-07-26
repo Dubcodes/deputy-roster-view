@@ -41,6 +41,7 @@ from .database import (
     fetch_deputy_event_changes_for_date,
     fetch_personal_assignment_evidence_for_date,
     fetch_love_racing_meetings_between,
+    fetch_love_racing_details_between,
     fetch_deputy_schedule_for_date,
     fetch_deputy_schedule_areas_for_locations,
     fetch_shifts_for_travel_learning,
@@ -76,6 +77,7 @@ from .database import (
     list_app_users,
     list_error_reports,
     list_planning_locations,
+    list_love_racing_detail_diagnostics,
     list_roster_builder_area_names,
     list_roster_builder_location_labels,
     list_roster_days,
@@ -120,7 +122,11 @@ from .database import (
 from .deputy_api import test_deputy_roster_api
 from .deputy_web import capture_and_save_deputy_web, format_capture_payload
 from .love_racing import LOVE_RACING_URL
-from .planning_calendar import refresh_planning_calendar
+from .planning_calendar import (
+    queue_due_love_racing_details,
+    refresh_planning_calendar,
+    run_love_racing_detail_jobs,
+)
 from .scheduler import get_pre_shift_status, shutdown_scheduler, start_scheduler, sync_roster_sources
 from .security import (
     SESSION_COOKIE_NAME,
@@ -149,7 +155,7 @@ from .public_holidays import holiday_for_date
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.26.1"
+APP_BUILD = "2026.07.26.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -780,6 +786,102 @@ def timing_lookup(summary: dict[str, object]) -> dict[str, str]:
         if label and time_value:
             lookup[label] = time_value
     return lookup
+
+
+def deputy_race_count(summary: dict[str, object]) -> int | None:
+    for note in summary.get("production_notes") or []:
+        match = re.fullmatch(r"\s*(\d+)\s+races?\s*", str(note or ""), re.IGNORECASE)
+        if match and int(match.group(1)) > 0:
+            return int(match.group(1))
+    return None
+
+
+def resolve_race_timing_fields(
+    shift: dict[str, object],
+    meeting_detail: dict[str, object] | None,
+) -> dict[str, object]:
+    summary = shift.get("roster_summary") if isinstance(shift.get("roster_summary"), dict) else {}
+    timings = timing_lookup(summary)
+    deputy_count = deputy_race_count(summary)
+    deputy_first = timings.get("first race", "")
+    deputy_last = timings.get("last race", "")
+    adjustment = clean_time_value(str(shift.get("timing_adjustment_time") or ""))
+    user_last = (
+        adjustment
+        if adjustment and int(shift.get("timing_adjustment_last_race") or 0)
+        else ""
+    )
+    love_count = None
+    love_first = ""
+    love_last = ""
+    if (
+        meeting_detail
+        and str(shift.get("race_type_label") or "") == "Thoroughbred racing"
+        and str(meeting_detail.get("lifecycle_status") or "")
+        in {"partial", "complete", "historical"}
+    ):
+        love_count = safe_int(meeting_detail.get("race_count"))
+        love_first = clean_time_value(str(meeting_detail.get("first_race_time") or ""))
+        love_last = clean_time_value(str(meeting_detail.get("last_race_time") or ""))
+
+    race_count = deputy_count if deputy_count is not None else love_count
+    first_race = deputy_first or love_first
+    last_race = user_last or deputy_last or love_last
+    sources = {
+        "race_count": "Deputy" if deputy_count is not None else ("Love Racing" if love_count else ""),
+        "first_race_time": "Deputy" if deputy_first else ("Love Racing" if love_first else ""),
+        "last_race_time": (
+            "User"
+            if user_last
+            else ("Deputy" if deputy_last else ("Love Racing" if love_last else ""))
+        ),
+    }
+    love_fields = [field for field, source in sources.items() if source == "Love Racing"]
+    source_note = ""
+    if love_fields:
+        if (
+            sources["race_count"] == "Deputy"
+            and sources["first_race_time"] == "Love Racing"
+            and sources["last_race_time"] == "Love Racing"
+        ):
+            source_note = "Race count from Deputy · Race times from Love Racing"
+        elif set(love_fields) <= {"first_race_time", "last_race_time"}:
+            source_note = "Race times filled from Love Racing"
+        else:
+            source_note = "Race details filled from Love Racing"
+    return {
+        "race_count": race_count,
+        "first_race_time": first_race,
+        "last_race_time": last_race,
+        "sources": sources,
+        "source_note": source_note,
+        "meeting_id": str((meeting_detail or {}).get("meeting_id") or ""),
+    }
+
+
+def enrich_shifts_with_love_racing(
+    shifts: list[dict[str, object]],
+    start_date: str,
+    end_date: str,
+) -> None:
+    details = {
+        (
+            str(row["meeting_date"]),
+            str(row["canonical_venue_key"]),
+        ): dict(row)
+        for row in fetch_love_racing_details_between(start_date, end_date)
+    }
+    for shift in shifts:
+        if str(shift.get("race_type_label") or "") != "Thoroughbred racing":
+            continue
+        detail = details.get(
+            (
+                str(shift.get("date") or ""),
+                calendar_location_key(shift.get("track_label") or shift.get("location_label")),
+            )
+        )
+        shift["effective_race_timing"] = resolve_race_timing_fields(shift, detail)
+        apply_timing_math(shift)
 
 
 def accommodation_base_labels_for_shift(shift: dict[str, object]) -> list[str]:
@@ -1548,7 +1650,17 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     adjustment_time = clean_time_value(str(shift.get("timing_adjustment_time") or ""))
     use_last_race_adjustment = bool(int(shift.get("timing_adjustment_last_race") or 0)) and adjustment_time
     use_finished_adjustment = bool(int(shift.get("timing_adjustment_day_finished") or 0)) and adjustment_time
-    last_race_clock = adjustment_time if use_last_race_adjustment else timings.get("last race")
+    effective_race_timing = (
+        shift.get("effective_race_timing")
+        if isinstance(shift.get("effective_race_timing"), dict)
+        else {}
+    )
+    last_race_clock = (
+        adjustment_time
+        if use_last_race_adjustment
+        else clean_time_value(str(effective_race_timing.get("last_race_time") or ""))
+        or timings.get("last race")
+    )
 
     result: dict[str, object] = {
         "available": False,
@@ -1702,6 +1814,10 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     )
     if use_last_race_adjustment:
         result["formula"] = f"Using changed last race time. {result['formula']}"
+    elif (
+        effective_race_timing.get("sources", {}).get("last_race_time") == "Love Racing"
+    ):
+        result["formula"] = f"Using the scheduled last race from Love Racing. {result['formula']}"
     if inferred_start or inferred_on_track:
         result["formula"] = f"Using {default_source or 'saved'} default travel time. {result['formula']}"
     if roster_start_conflict and roster_start_at:
@@ -1804,9 +1920,35 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
             if value:
                 add_row(display_label(simple_timing.group(1)), value)
 
+    effective = (
+        shift.get("effective_race_timing")
+        if isinstance(shift.get("effective_race_timing"), dict)
+        else {}
+    )
+    if effective:
+        rows = [
+            row
+            for row in rows
+            if not re.fullmatch(r"\d+\s+races?", str(row.get("label") or ""), re.IGNORECASE)
+            and str(row.get("label") or "").lower() not in {"first race", "last race"}
+        ]
+        count = safe_int(effective.get("race_count"))
+        first_race = clean_time_value(str(effective.get("first_race_time") or ""))
+        last_race = clean_time_value(str(effective.get("last_race_time") or ""))
+        if count and first_race and last_race:
+            add_row(f"{count} races", f"{first_race} | {last_race}")
+        else:
+            if count:
+                add_row(f"{count} races", "")
+            if first_race:
+                add_row("First race", first_race)
+            if last_race:
+                add_row("Last race", last_race)
+
     return {
         "rows": rows,
         "has_items": bool(rows),
+        "source_note": str(effective.get("source_note") or ""),
     }
 
 
@@ -4008,6 +4150,11 @@ def build_timesheet_summary(submission_date: date, owner_user_id: int | None = N
         shifts_by_date.setdefault(row["date"], []).append(decorate_shift(row))
     for date_key, day_shifts in list(shifts_by_date.items()):
         shifts_by_date[date_key] = combine_adjacent_shifts(day_shifts)
+    enrich_shifts_with_love_racing(
+        [shift for day_shifts in shifts_by_date.values() for shift in day_shifts],
+        period_start.isoformat(),
+        period_end.isoformat(),
+    )
 
     day_rows = []
     total_hours = 0.0
@@ -4802,9 +4949,10 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
 def admin_view(request: Request, notice: str | None = None) -> object:
     user = require_admin_user(request)
     settings = get_settings()
+    today = datetime.now(settings.timezone).date()
     travel_defaults = travel_default_rows()
     love_racing_snapshot, love_racing_status = love_racing_view_context(
-        datetime.now(settings.timezone).date())
+        today)
     planning_locations = list_planning_locations()
     location_rows = admin_location_rows(planning_locations, travel_defaults)
     track_map_data = track_map_admin_data()
@@ -4825,6 +4973,10 @@ def admin_view(request: Request, notice: str | None = None) -> object:
             "travel_defaults": travel_defaults,
             "love_racing_snapshot": love_racing_snapshot,
             "love_racing_status": love_racing_status,
+            "love_racing_detail_diagnostics": list_love_racing_detail_diagnostics(
+                today.isoformat(),
+                (today + timedelta(days=7)).isoformat(),
+            ),
             "love_racing_url": LOVE_RACING_URL,
             "planning_locations": planning_locations,
             "location_rows": location_rows,
@@ -5150,6 +5302,11 @@ def month_view(
     for date_key, day_shifts in list(shifts_by_date.items()):
         shifts_by_date[date_key] = day_shifts if global_view else combine_adjacent_shifts(day_shifts)
     if not global_view:
+        enrich_shifts_with_love_racing(
+            [shift for day_shifts in shifts_by_date.values() for shift in day_shifts],
+            grid_start,
+            grid_end,
+        )
         apply_schedule_role_context(
             [shift for day_shifts in shifts_by_date.values() for shift in day_shifts],
             schedule_role_rows,
@@ -5217,6 +5374,12 @@ def month_view(
         upcoming_shifts = combine_adjacent_shifts(
             [decorate_shift(row) for row in get_upcoming_shifts(now_iso, limit=10, owner_user_id=owner_user_id)]
         )[:5]
+        if upcoming_shifts:
+            enrich_shifts_with_love_racing(
+                upcoming_shifts,
+                min(str(shift["date"]) for shift in upcoming_shifts),
+                max(str(shift["date"]) for shift in upcoming_shifts),
+            )
         apply_saved_schedule_role_context(upcoming_shifts)
 
     scope_query = "&scope=global" if global_view else ""
@@ -5508,6 +5671,7 @@ def day_view(
     shifts = combine_adjacent_shifts(
         [decorate_shift(row) for row in fetch_shifts_for_date(date_text, owner_user_id=owner_user_id)]
     )
+    enrich_shifts_with_love_racing(shifts, date_text, date_text)
 
 
     open_shifts = open_schedule_by_date(date_text, date_text).get(date_text, [])
@@ -5919,6 +6083,11 @@ def settings_view(request: Request, notice: str | None = None) -> object:
     current_theme = normalise_theme(raw_theme)
     next_shift_display = decorate_shift(next_shift) if next_shift else None
     if next_shift_display:
+        enrich_shifts_with_love_racing(
+            [next_shift_display],
+            str(next_shift_display["date"]),
+            str(next_shift_display["date"]),
+        )
         apply_saved_schedule_role_context([next_shift_display])
     return templates.TemplateResponse(
         "settings.html",
@@ -5983,6 +6152,28 @@ def admin_refresh_love_racing_calendar(request: Request) -> RedirectResponse:
     require_admin_user(request)
     result = refresh_planning_calendar()
     return RedirectResponse(url=notice_url("/admin", str(result["message"])), status_code=303)
+
+
+@app.post("/admin/love-racing-times-refresh")
+def admin_refresh_love_racing_times(
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> RedirectResponse:
+    require_admin_user(request)
+    queued = queue_due_love_racing_details(
+        manual=True,
+        reason="admin refresh",
+        horizon_days=7,
+    )
+    if queued["eligible"]:
+        background_tasks.add_task(run_love_racing_detail_jobs)
+        message = (
+            f"Race-time refresh queued for {queued['eligible']} upcoming "
+            f"meeting{'s' if queued['eligible'] != 1 else ''}."
+        )
+    else:
+        message = "No discovered upcoming thoroughbred meetings need race-time refresh."
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
 @app.post("/admin/track-maps-refresh")

@@ -463,6 +463,10 @@ def init_db(settings: Settings | None = None) -> None:
                 racecourse_key TEXT,
                 racecourse TEXT,
                 club_name TEXT,
+                meeting_id TEXT,
+                meeting_url TEXT,
+                discovery_source TEXT,
+                discovered_at TEXT,
                 source_url TEXT,
                 source_hash TEXT UNIQUE,
                 raw_text TEXT,
@@ -470,6 +474,51 @@ def init_db(settings: Settings | None = None) -> None:
                 last_seen_at TEXT,
                 last_synced_at TEXT,
                 is_active INTEGER DEFAULT 1
+            );
+
+            CREATE TABLE IF NOT EXISTS love_racing_meeting_details (
+                meeting_id TEXT PRIMARY KEY,
+                meeting_date TEXT NOT NULL,
+                canonical_venue_key TEXT NOT NULL,
+                canonical_venue_label TEXT NOT NULL,
+                club TEXT,
+                meeting_url TEXT NOT NULL,
+                lifecycle_status TEXT NOT NULL DEFAULT 'discovered',
+                fetch_status TEXT NOT NULL DEFAULT 'ready',
+                race_count INTEGER,
+                race_count_last_confirmed_at TEXT,
+                first_race_time TEXT,
+                first_race_last_confirmed_at TEXT,
+                last_race_time TEXT,
+                last_race_last_confirmed_at TEXT,
+                races_json TEXT NOT NULL DEFAULT '[]',
+                parser_diagnostics TEXT NOT NULL DEFAULT '[]',
+                page_last_checked_at TEXT,
+                page_content_hash TEXT,
+                last_material_change_at TEXT,
+                failure_count INTEGER NOT NULL DEFAULT 0,
+                last_failure_at TEXT,
+                last_error_summary TEXT,
+                next_retry_at TEXT,
+                race_morning_confirmed_at TEXT,
+                post_meeting_checked_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS love_racing_detail_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                meeting_id TEXT NOT NULL,
+                requested_reason TEXT,
+                priority INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'queued',
+                requested_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT,
+                last_error TEXT,
+                FOREIGN KEY (meeting_id) REFERENCES love_racing_meeting_details(meeting_id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS track_maps (
@@ -601,6 +650,11 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_crew_aliases_normalized ON crew_aliases(normalized_alias);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_crew_aliases_unique_normalized ON crew_aliases(normalized_alias);
             CREATE INDEX IF NOT EXISTS idx_love_racing_meetings_date ON love_racing_meetings(meeting_date, racecourse_key);
+            CREATE INDEX IF NOT EXISTS idx_love_racing_details_date ON love_racing_meeting_details(meeting_date, canonical_venue_key);
+            CREATE INDEX IF NOT EXISTS idx_love_racing_jobs_due ON love_racing_detail_jobs(status, next_attempt_at, priority);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_love_racing_jobs_active
+                ON love_racing_detail_jobs(meeting_id)
+                WHERE status IN ('queued', 'fetching');
             CREATE INDEX IF NOT EXISTS idx_planning_location_preferences_enabled ON planning_location_preferences(is_enabled);
             CREATE INDEX IF NOT EXISTS idx_roster_days_date ON roster_days(roster_date, status);
             CREATE INDEX IF NOT EXISTS idx_roster_day_assignments_user ON roster_day_assignments(user_id, roster_day_id);
@@ -641,6 +695,10 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "deputy_user_secrets", "encrypted_ical_url", "TEXT")
         _ensure_column(conn, "app_users", "deactivated_at", "TEXT")
         _ensure_column(conn, "love_racing_meetings", "is_active", "INTEGER DEFAULT 1")
+        _ensure_column(conn, "love_racing_meetings", "meeting_id", "TEXT")
+        _ensure_column(conn, "love_racing_meetings", "meeting_url", "TEXT")
+        _ensure_column(conn, "love_racing_meetings", "discovery_source", "TEXT")
+        _ensure_column(conn, "love_racing_meetings", "discovered_at", "TEXT")
         _ensure_column(conn, "roster_days", "day_type", "TEXT DEFAULT 'race_day'")
         _ensure_column(conn, "roster_days", "hotel_assignments", "TEXT DEFAULT '[]'")
         _ensure_column(conn, "roster_days", "start_origin", "TEXT")
@@ -2365,6 +2423,10 @@ def save_love_racing_meetings(meetings: list[dict[str, object]], synced_at: str 
                 continue
             racecourse_key = str(meeting.get("racecourse_key") or calendar_location_key(racecourse)).strip()
             club_name = str(meeting.get("club_name") or "").strip()
+            meeting_id = str(meeting.get("meeting_id") or "").strip()
+            meeting_url = str(meeting.get("meeting_url") or "").strip()
+            discovery_source = str(meeting.get("discovery_source") or "").strip()
+            discovered_at = str(meeting.get("discovered_at") or "").strip()
             source_url = str(meeting.get("source_url") or "").strip()
             raw_text = str(meeting.get("raw_text") or "").strip()
             source_hash = str(meeting.get("source_hash") or "").strip()
@@ -2376,15 +2438,20 @@ def save_love_racing_meetings(meetings: list[dict[str, object]], synced_at: str 
                 """
                 INSERT INTO love_racing_meetings (
                     meeting_date, racecourse_key, racecourse, club_name,
+                    meeting_id, meeting_url, discovery_source, discovered_at,
                     source_url, source_hash, raw_text, first_seen_at,
                     last_seen_at, last_synced_at, is_active
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                 ON CONFLICT(source_hash) DO UPDATE SET
                     meeting_date = excluded.meeting_date,
                     racecourse_key = excluded.racecourse_key,
                     racecourse = excluded.racecourse,
                     club_name = excluded.club_name,
+                    meeting_id = COALESCE(NULLIF(excluded.meeting_id, ''), love_racing_meetings.meeting_id),
+                    meeting_url = COALESCE(NULLIF(excluded.meeting_url, ''), love_racing_meetings.meeting_url),
+                    discovery_source = COALESCE(NULLIF(excluded.discovery_source, ''), love_racing_meetings.discovery_source),
+                    discovered_at = COALESCE(NULLIF(excluded.discovered_at, ''), love_racing_meetings.discovered_at),
                     source_url = excluded.source_url,
                     raw_text = excluded.raw_text,
                     last_seen_at = excluded.last_seen_at,
@@ -2396,6 +2463,10 @@ def save_love_racing_meetings(meetings: list[dict[str, object]], synced_at: str 
                     racecourse_key,
                     racecourse,
                     club_name,
+                    meeting_id,
+                    meeting_url,
+                    discovery_source,
+                    discovered_at,
                     source_url,
                     source_hash,
                     raw_text,
@@ -2427,6 +2498,453 @@ def fetch_love_racing_meetings_between(start_date: str, end_date: str) -> list[s
             """,
             (start_date, end_date),
         ).fetchall()
+
+
+def merge_love_racing_meeting_identities(
+    meetings: list[dict[str, object]],
+    discovered_at: str,
+    discovery_source: str = "Love Racing browser calendar",
+) -> dict[str, int]:
+    matched = 0
+    ambiguous = 0
+    with get_connection() as conn:
+        for meeting in meetings:
+            meeting_id = str(meeting.get("meeting_id") or "").strip()
+            meeting_url = str(meeting.get("meeting_url") or "").strip()
+            meeting_date = str(meeting.get("date") or meeting.get("meeting_date") or "").strip()
+            racecourse = str(meeting.get("racecourse") or "").strip()
+            racecourse_key = str(
+                meeting.get("racecourse_key") or calendar_location_key(racecourse)
+            ).strip()
+            club_name = str(meeting.get("club_name") or "").strip()
+            if not meeting_id or not meeting_url or not meeting_date or not racecourse_key:
+                continue
+            candidates = conn.execute(
+                """
+                SELECT *
+                FROM love_racing_meetings
+                WHERE is_active = 1
+                  AND meeting_date = ?
+                  AND racecourse_key = ?
+                ORDER BY id
+                """,
+                (meeting_date, racecourse_key),
+            ).fetchall()
+            if len(candidates) > 1 and club_name:
+                club_key = calendar_location_key(club_name)
+                club_matches = [
+                    row for row in candidates
+                    if calendar_location_key(row["club_name"]) == club_key
+                ]
+                if len(club_matches) == 1:
+                    candidates = club_matches
+            if len(candidates) != 1:
+                ambiguous += 1
+                continue
+            conn.execute(
+                """
+                UPDATE love_racing_meetings
+                SET meeting_id = ?,
+                    meeting_url = ?,
+                    discovery_source = ?,
+                    discovered_at = ?
+                WHERE id = ?
+                """,
+                (
+                    meeting_id,
+                    meeting_url,
+                    discovery_source,
+                    discovered_at,
+                    int(candidates[0]["id"]),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO love_racing_meeting_details (
+                    meeting_id, meeting_date, canonical_venue_key,
+                    canonical_venue_label, club, meeting_url,
+                    lifecycle_status, fetch_status, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'discovered', 'ready', ?, ?)
+                ON CONFLICT(meeting_id) DO UPDATE SET
+                    meeting_date = excluded.meeting_date,
+                    canonical_venue_key = excluded.canonical_venue_key,
+                    canonical_venue_label = excluded.canonical_venue_label,
+                    club = excluded.club,
+                    meeting_url = excluded.meeting_url,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    meeting_id,
+                    meeting_date,
+                    racecourse_key,
+                    racecourse,
+                    club_name,
+                    meeting_url,
+                    discovered_at,
+                    discovered_at,
+                ),
+            )
+            matched += 1
+    return {"matched": matched, "ambiguous": ambiguous}
+
+
+def fetch_love_racing_details_between(start_date: str, end_date: str) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT *
+            FROM love_racing_meeting_details
+            WHERE meeting_date BETWEEN ? AND ?
+            ORDER BY meeting_date, canonical_venue_label, meeting_id
+            """,
+            (start_date, end_date),
+        ).fetchall()
+
+
+def get_love_racing_meeting_detail(meeting_id: str) -> sqlite3.Row | None:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM love_racing_meeting_details WHERE meeting_id = ?",
+            (meeting_id,),
+        ).fetchone()
+
+
+def list_love_racing_detail_diagnostics(
+    start_date: str,
+    end_date: str,
+) -> list[dict[str, object]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT details.*,
+                   jobs.status AS queue_status,
+                   jobs.requested_reason,
+                   jobs.next_attempt_at AS job_next_attempt_at
+            FROM love_racing_meeting_details details
+            LEFT JOIN love_racing_detail_jobs jobs
+              ON jobs.id = (
+                  SELECT candidate.id
+                  FROM love_racing_detail_jobs candidate
+                  WHERE candidate.meeting_id = details.meeting_id
+                  ORDER BY candidate.id DESC
+                  LIMIT 1
+              )
+            WHERE details.meeting_date BETWEEN ? AND ?
+            ORDER BY details.meeting_date, details.canonical_venue_label
+            """,
+            (start_date, end_date),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def merge_love_racing_programme(
+    meeting_id: str,
+    programme: dict[str, object],
+    checked_at: str,
+) -> dict[str, object]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM love_racing_meeting_details WHERE meeting_id = ?",
+            (meeting_id,),
+        ).fetchone()
+        if row is None:
+            return {"updated": False, "material_change": False}
+        existing = dict(row)
+        try:
+            existing_races = {
+                int(item["number"]): str(item.get("scheduled_start") or "")
+                for item in json.loads(str(existing.get("races_json") or "[]"))
+                if isinstance(item, dict) and int(item.get("number") or 0) > 0
+            }
+        except (TypeError, ValueError, json.JSONDecodeError):
+            existing_races = {}
+        incoming_races = {}
+        for item in programme.get("races") or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                number = int(item.get("number") or 0)
+            except (TypeError, ValueError):
+                continue
+            if number <= 0:
+                continue
+            incoming_races[number] = str(item.get("scheduled_start") or "")
+        existing_lifecycle = str(existing.get("lifecycle_status") or "discovered")
+        incoming_lifecycle = str(programme.get("lifecycle_status") or "awaiting_schedule")
+        accept_complete_revision = (
+            incoming_lifecycle == "complete" and existing_lifecycle != "historical"
+        )
+        preserve_confirmed = (
+            existing_lifecycle == "historical"
+            or (existing_lifecycle == "complete" and not accept_complete_revision)
+        )
+        merged_races = dict(existing_races)
+        for number, scheduled_start in incoming_races.items():
+            if scheduled_start and not (
+                preserve_confirmed and existing_races.get(number)
+            ):
+                merged_races[number] = scheduled_start
+            else:
+                merged_races.setdefault(number, "")
+        races_json = json.dumps(
+            [
+                {"number": number, "scheduled_start": merged_races[number]}
+                for number in sorted(merged_races)
+            ],
+            separators=(",", ":"),
+        )
+        incoming_count = programme.get("race_count")
+        race_count = existing.get("race_count")
+        if incoming_count not in (None, "") and (
+            race_count in (None, "") or accept_complete_revision
+        ):
+            race_count = int(incoming_count)
+        incoming_first = str(programme.get("first_race_time") or "")
+        incoming_last = str(programme.get("last_race_time") or "")
+        first_race = (
+            incoming_first
+            if incoming_first and accept_complete_revision
+            else str(existing.get("first_race_time") or "") or incoming_first
+        )
+        last_race = (
+            incoming_last
+            if incoming_last and accept_complete_revision
+            else str(existing.get("last_race_time") or "") or incoming_last
+        )
+        if existing_lifecycle in {"complete", "historical"} and incoming_lifecycle != "complete":
+            lifecycle = existing_lifecycle
+        else:
+            lifecycle = incoming_lifecycle
+        checked = datetime.fromisoformat(checked_at)
+        meeting_day = datetime.fromisoformat(str(existing["meeting_date"])).date()
+        race_morning_confirmed_at = existing.get("race_morning_confirmed_at")
+        post_meeting_checked_at = existing.get("post_meeting_checked_at")
+        if lifecycle == "complete" and checked.date() == meeting_day and checked.hour >= 6:
+            race_morning_confirmed_at = checked_at
+        if checked.date() > meeting_day:
+            lifecycle = "historical"
+            post_meeting_checked_at = checked_at
+        material_change = any(
+            (
+                str(existing.get("race_count") or "") != str(race_count or ""),
+                str(existing.get("first_race_time") or "") != first_race,
+                str(existing.get("last_race_time") or "") != last_race,
+                str(existing.get("races_json") or "[]") != races_json,
+            )
+        )
+        conn.execute(
+            """
+            UPDATE love_racing_meeting_details
+            SET lifecycle_status = ?,
+                fetch_status = 'ok',
+                race_count = ?,
+                race_count_last_confirmed_at = CASE
+                    WHEN ? IS NOT NULL THEN ? ELSE race_count_last_confirmed_at END,
+                first_race_time = ?,
+                first_race_last_confirmed_at = CASE
+                    WHEN ? <> '' THEN ? ELSE first_race_last_confirmed_at END,
+                last_race_time = ?,
+                last_race_last_confirmed_at = CASE
+                    WHEN ? <> '' THEN ? ELSE last_race_last_confirmed_at END,
+                races_json = ?,
+                parser_diagnostics = ?,
+                page_last_checked_at = ?,
+                page_content_hash = ?,
+                last_material_change_at = CASE WHEN ? THEN ? ELSE last_material_change_at END,
+                failure_count = 0,
+                last_failure_at = NULL,
+                last_error_summary = NULL,
+                next_retry_at = NULL,
+                race_morning_confirmed_at = ?,
+                post_meeting_checked_at = ?,
+                updated_at = ?
+            WHERE meeting_id = ?
+            """,
+            (
+                lifecycle,
+                race_count,
+                incoming_count
+                if existing.get("race_count") in (None, "") or accept_complete_revision
+                else None,
+                checked_at,
+                first_race,
+                incoming_first
+                if not existing.get("first_race_time") or accept_complete_revision
+                else "",
+                checked_at,
+                last_race,
+                incoming_last
+                if not existing.get("last_race_time") or accept_complete_revision
+                else "",
+                checked_at,
+                races_json,
+                json.dumps(list(programme.get("diagnostics") or []), separators=(",", ":")),
+                checked_at,
+                str(programme.get("content_hash") or ""),
+                1 if material_change else 0,
+                checked_at,
+                race_morning_confirmed_at,
+                post_meeting_checked_at,
+                checked_at,
+                meeting_id,
+            ),
+        )
+    return {"updated": True, "material_change": material_change, "lifecycle_status": lifecycle}
+
+
+def mark_love_racing_detail_fetch_failed(
+    meeting_id: str,
+    *,
+    failed_at: str,
+    error_summary: str,
+    next_retry_at: str,
+) -> int:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT failure_count FROM love_racing_meeting_details WHERE meeting_id = ?",
+            (meeting_id,),
+        ).fetchone()
+        if row is None:
+            return 0
+        failure_count = int(row["failure_count"] or 0) + 1
+        conn.execute(
+            """
+            UPDATE love_racing_meeting_details
+            SET fetch_status = 'failed',
+                failure_count = ?,
+                last_failure_at = ?,
+                last_error_summary = ?,
+                next_retry_at = ?,
+                updated_at = ?
+            WHERE meeting_id = ?
+            """,
+            (
+                failure_count,
+                failed_at,
+                error_summary[:500],
+                next_retry_at,
+                failed_at,
+                meeting_id,
+            ),
+        )
+    return failure_count
+
+
+def queue_love_racing_detail_job(
+    meeting_id: str,
+    *,
+    reason: str,
+    priority: int,
+    requested_at: str,
+) -> bool:
+    with get_connection() as conn:
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM love_racing_detail_jobs
+            WHERE meeting_id = ? AND status IN ('queued', 'fetching')
+            """,
+            (meeting_id,),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE love_racing_detail_jobs
+                SET priority = MAX(priority, ?),
+                    requested_reason = CASE
+                        WHEN requested_reason LIKE '%' || ? || '%' THEN requested_reason
+                        ELSE TRIM(COALESCE(requested_reason, '') || ', ' || ?)
+                    END
+                WHERE id = ?
+                """,
+                (priority, reason, reason, int(existing["id"])),
+            )
+            return False
+        conn.execute(
+            """
+            INSERT INTO love_racing_detail_jobs (
+                meeting_id, requested_reason, priority, status,
+                requested_at, next_attempt_at
+            )
+            VALUES (?, ?, ?, 'queued', ?, ?)
+            """,
+            (meeting_id, reason, priority, requested_at, requested_at),
+        )
+        conn.execute(
+            "UPDATE love_racing_meeting_details SET fetch_status = 'queued' WHERE meeting_id = ?",
+            (meeting_id,),
+        )
+    return True
+
+
+def claim_love_racing_detail_jobs(now: str, limit: int = 3) -> list[dict[str, object]]:
+    try:
+        stale_before = (
+            datetime.fromisoformat(now) - timedelta(minutes=30)
+        ).isoformat(timespec="seconds")
+    except ValueError:
+        stale_before = now
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            UPDATE love_racing_detail_jobs
+            SET status = 'queued', started_at = NULL,
+                last_error = 'Recovered after an interrupted fetch.'
+            WHERE status = 'fetching'
+              AND started_at IS NOT NULL
+              AND started_at <= ?
+            """,
+            (stale_before,),
+        )
+        rows = conn.execute(
+            """
+            SELECT jobs.*, details.meeting_url, details.meeting_date,
+                   details.canonical_venue_key, details.canonical_venue_label
+            FROM love_racing_detail_jobs jobs
+            JOIN love_racing_meeting_details details ON details.meeting_id = jobs.meeting_id
+            WHERE jobs.status = 'queued'
+              AND COALESCE(jobs.next_attempt_at, jobs.requested_at) <= ?
+            ORDER BY jobs.priority DESC, jobs.requested_at, jobs.id
+            LIMIT ?
+            """,
+            (now, limit),
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                """
+                UPDATE love_racing_detail_jobs
+                SET status = 'fetching', started_at = ?, attempts = attempts + 1
+                WHERE id = ?
+                """,
+                (now, int(row["id"])),
+            )
+            conn.execute(
+                "UPDATE love_racing_meeting_details SET fetch_status = 'fetching' WHERE meeting_id = ?",
+                (row["meeting_id"],),
+            )
+    return [dict(row) for row in rows]
+
+
+def finish_love_racing_detail_job(
+    job_id: int,
+    *,
+    status: str,
+    completed_at: str,
+    last_error: str = "",
+    next_attempt_at: str = "",
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE love_racing_detail_jobs
+            SET status = ?, completed_at = ?, last_error = ?,
+                next_attempt_at = NULLIF(?, '')
+            WHERE id = ?
+            """,
+            (status, completed_at, last_error[:500], next_attempt_at, job_id),
+        )
 
 
 def get_love_racing_snapshot(today: str | None = None) -> dict[str, object]:

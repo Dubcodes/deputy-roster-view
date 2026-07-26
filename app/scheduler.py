@@ -23,7 +23,11 @@ from .database import (
     write_sync_log,
 )
 from .deputy_web import sync_deputy_web_schedule
-from .planning_calendar import refresh_planning_calendar
+from .planning_calendar import (
+    queue_love_racing_after_roster_sync,
+    refresh_planning_calendar,
+    refresh_upcoming_race_times,
+)
 from .sync_ics import sync_deputy_calendar
 from .track_maps import refresh_track_maps_if_due
 from .user_credentials import settings_for_user
@@ -74,6 +78,14 @@ def start_scheduler(settings: Settings | None = None) -> BackgroundScheduler:
         refresh_planning_calendar,
         trigger=CronTrigger(day_of_week="mon", hour=4, minute=30, timezone=settings.timezone),
         id="weekly_planning_calendar",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        refresh_upcoming_race_times,
+        trigger=IntervalTrigger(minutes=15, timezone=settings.timezone),
+        id="love_racing_detail_runner",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
@@ -243,6 +255,16 @@ def sync_roster_sources(settings: Settings | None = None, user_id: int | None = 
         )
 
     status = _combined_sync_status(calendar_result, web_result)
+    love_racing_result: dict[str, object] = {"eligible": 0, "queued": 0}
+    if status == "ok":
+        try:
+            love_racing_result = queue_love_racing_after_roster_sync(settings)
+        except Exception as exc:
+            love_racing_result = {
+                "eligible": 0,
+                "queued": 0,
+                "error": f"{type(exc).__name__}: {str(exc)[:240]}",
+            }
     finished_at = _now(settings).isoformat()
     if calendar_result.get("status") == "skipped":
         write_sync_log(
@@ -262,6 +284,7 @@ def sync_roster_sources(settings: Settings | None = None, user_id: int | None = 
         "status": status,
         "calendar": calendar_result,
         "web": web_result,
+        "love_racing": love_racing_result,
         "user_id": user_id,
     }
 

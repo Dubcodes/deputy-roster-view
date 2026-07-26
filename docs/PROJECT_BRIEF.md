@@ -35,6 +35,7 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 - Keep a canonical crew directory for Deputy-only crew, app users, published assignees, and unambiguous aliases.
 - Mark New Zealand public holidays consistently on calendar, day, and timesheet dates without changing pay or roster hours.
 - Cache the best validated official Love Racing track-map candidate with its natural dimensions and source diagnostics.
+- Cache official Thoroughbred meeting programmes and fill only race-count/first-race/last-race fields missing from Deputy, without changing roster notes or change history.
 - Let admins upload a better map for any crew-known location, download the retained automatic image, and reset to automatic without losing either source.
 - Present maps by canonical racing venue: consolidate trial aliases, exclude operational locations, and let admins classify uncertain labels without rewriting roster history.
 - Let admins build race-day roster drafts, review changes against the last published version, and publish assignments to the selected crew as an early test of replacing Deputy.

@@ -279,6 +279,7 @@ def parse_love_racing_events(
             continue
         racecourse, racecourse_key = match
         club_name = str(event.get("Club") or event.get("MarketingName") or "").strip()
+        meeting_id, meeting_url = _meeting_identity_from_event(event)
         dedupe_key = (meeting_date.isoformat(), racecourse_key, calendar_location_key(club_name))
         if dedupe_key in seen:
             continue
@@ -290,12 +291,35 @@ def parse_love_racing_events(
                 "racecourse": racecourse,
                 "racecourse_key": racecourse_key,
                 "club_name": club_name,
+                "meeting_id": meeting_id,
+                "meeting_url": meeting_url,
+                "discovery_source": "Love Racing calendar" if meeting_id else "",
                 "source_url": LOVE_RACING_URL,
                 "source_hash": source_hash,
                 "raw_text": row_text,
             }
         )
     return meetings
+
+
+def _meeting_identity_from_event(event: dict[str, object]) -> tuple[str, str]:
+    meeting_id = ""
+    meeting_url = ""
+    for key in ("MeetingID", "MeetingId", "meeting_id", "EventID", "EventId", "id"):
+        value = str(event.get(key) or "").strip()
+        if value.isdigit():
+            meeting_id = value
+            break
+    for key in ("MeetingURL", "MeetingUrl", "URL", "Url", "url", "Link", "link"):
+        value = str(event.get(key) or "").strip()
+        match = re.search(r"/RaceInfo/(\d+)/Meeting-Overview\.aspx", value, re.IGNORECASE)
+        if match:
+            meeting_id = meeting_id or match.group(1)
+            meeting_url = value if value.startswith("http") else f"https://loveracing.nz{value}"
+            break
+    if meeting_id and not meeting_url:
+        meeting_url = f"https://loveracing.nz/RaceInfo/{meeting_id}/Meeting-Overview.aspx"
+    return meeting_id, meeting_url
 
 
 def _event_text(event: dict[str, object]) -> str:

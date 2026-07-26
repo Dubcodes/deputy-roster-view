@@ -146,6 +146,15 @@ The personal calendar remains the default. The global crew calendar groups share
 
 Love Racing data is public planning information only. Use it to show future race days at known worked locations, but do not treat it as a roster source.
 
+For Thoroughbred race days only, a cached official meeting programme may fill an individual race count, first-race time, or last-race time that is absent from the roster note.
+
+- Timing precedence is field by field: user timing override, Deputy roster note, Love Racing scheduled programme, then existing travel/default inference.
+- Preserve every valid Deputy-provided field. For example, Deputy's `8 races` can be combined with Love Racing first/last race times without replacing the count.
+- Love Racing enrichment must not rewrite raw Deputy notes, alter roster hours, produce Changed badges, or create shift-change audit rows.
+- Programme cache updates are monotonic: later blank or results-layout pages cannot erase confirmed scheduled starts.
+- Race 0, Race not found, elapsed result times, expanded duplicate rows, and conflicting duplicate starts are not valid scheduled programme evidence.
+- Harness, Greyhound, travel, training, office, and other operational shifts do not use Love Racing timing fallback.
+
 - Only location/date are useful.
 - Deputy rostered shifts and Deputy schedule rows are always higher priority.
 - Planning markers should look different from confirmed shifts and should use Love Racing gold plus the location colour.

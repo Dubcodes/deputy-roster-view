@@ -135,6 +135,7 @@ def render_day_template() -> None:
                 "source_link": "",
                 "race_day_summary": {
                     "has_items": True,
+                    "source_note": "Race count from Deputy · Race times from Love Racing",
                     "rows": [
                         {"label": "Clow Place", "value": "08:30"},
                         {"label": "On track", "value": "08:45"},
@@ -180,6 +181,8 @@ def render_day_template() -> None:
     )
     if "Race Day" not in html or "11:10 | 16:24" not in html:
         raise AssertionError("Day template did not render expected race-day content.")
+    if "Race count from Deputy · Race times from Love Racing" not in html:
+        raise AssertionError("Day template did not render compact Love Racing source evidence.")
     if "--shift-location-colour: var(--location-colour-8)" not in html:
         raise AssertionError("Day template did not render per-shift location colour style.")
     if 'src="/track-map/terapa"' not in html or 'alt="Te Rapa racecourse 2D track map"' not in html:
@@ -316,7 +319,7 @@ def render_timesheet_template() -> None:
                         "available": True, "complete": True, "start_label": "08:30",
                         "end_label": "18:45", "hours_label": "10h 15m",
                         "lines": SIMPLIFIED_CALCULATION_LINES,
-                        "formula": "Office / Clow Place to Te Rapa and return.",
+                        "formula": "Using the scheduled last race from Love Racing. Office / Clow Place to Te Rapa and return.",
                     }},
                 }, {
                     "track_label": "Unconfigured Track", "time_range": "09:30-", "display_hours_label": "Incomplete",
@@ -346,6 +349,8 @@ def render_timesheet_template() -> None:
         raise AssertionError("Timesheet holiday marker is not in reserved date-heading layout space.")
     if "Start · Office / Clow Place" not in html or "Finish · Office / Clow Place" not in html:
         raise AssertionError("Timesheet template did not render the shared simplified wording.")
+    if "Using the scheduled last race from Love Racing" not in html:
+        raise AssertionError("Timesheet template did not render cached Love Racing calculation evidence.")
     if "Deputy roster start" not in html:
         raise AssertionError("Timesheet template hid an operational timing discrepancy.")
     if "Return travel not configured" not in html:

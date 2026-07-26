@@ -32,6 +32,7 @@ Run this after changing account, settings, admin, or form-handling code. It crea
 ```powershell
 python scripts\smoke_route_flows.py
 python scripts\smoke_love_racing.py
+python scripts\smoke_love_racing_details.py
 python scripts\smoke_extended_features.py
 python scripts\smoke_roster_integrity.py
 python scripts\smoke_track_map_classification.py
@@ -74,6 +75,8 @@ After Portainer redeploy:
 - Refresh Track Maps and inspect the recorded dimensions/result. At phone width, confirm the map remains inside the page, keeps its aspect ratio, and is not enlarged beyond its natural width.
 - In Admin Track maps, confirm trial aliases appear only beneath their canonical venue, operational locations are absent, and uncertain locations stay in the collapsed classification subsection. Check the controls around 320px and 375px wide.
 - Confirm each user shows next planned sync and last sync status.
+- In Admin, use Refresh upcoming race times and confirm the action returns immediately while discovered meetings show queued, awaiting, partial, complete, or failed status.
+- On a Thoroughbred day with only a Deputy race count, confirm cached Love Racing first/last race times fill the missing fields and the source note stays compact. Confirm Harness/Greyhound and non-racing shifts are unchanged.
 - If using the temporary tunnel stack, confirm its `cloudflared` container logs show a `trycloudflare.com` URL.
 
 The route smoke also verifies that Office/Clow Place travel defaults collapse to one base, named hotels stay separate, `G Cambridge` aliases merge, generic contractor context is excluded, duplicate user copies count as one race-day sample, a preceding overnight travel shift can teach the next day's office-to-track duration, and admin diagnostics load on demand.
@@ -83,3 +86,4 @@ The route smoke also verifies that Office/Clow Place travel defaults collapse to
 - Integrity behavior is covered by a sanitized database smoke fixture rather than a live Deputy account.
 - Deputy web capture is hard to test without live credentials.
 - Live Deputy capture remains difficult to reproduce without credentials; parsing and database behavior are covered with sanitized fixtures.
+- Live Love Racing browser access can change independently of the app. Meeting discovery, programme parsing, cadence, monotonic cache merging, queue deduplication, and source precedence are covered by local HTML/SQLite smoke fixtures.

@@ -52,6 +52,12 @@ All users currently belong to one shared crew pool, `Northern Crew`. When a user
 
 These rows are intentionally not shifts. They have no crew, start time, or hours, and the month view suppresses a planning hint when the signed-in user's Deputy roster already has a shift for that same date/location. Deputy data always takes priority.
 
+Meeting discovery and race-programme details are separate. A browser pass resolves the official meeting ID and overview URL for each matched date/venue and stores that identity in `love_racing_meeting_details`. `app/love_racing_details.py` then parses only positive numbered `overview-info` race rows and their Scheduled Start cells. It ignores result elapsed times, race-zero placeholders, and expanded duplicate rows.
+
+`love_racing_detail_jobs` is a global queue keyed by meeting ID, so several users rostered at one meeting create one fetch. Incomplete programmes are checked more often as race day approaches: roughly six-hourly inside 72 hours, two-hourly inside 24 hours, and hourly on race morning. Complete programmes stop frequent polling, receive one race-morning confirmation where applicable, and are retained after the meeting. HTTP/browser failures use bounded backoff.
+
+Cached race count, first race, and last race are merged independently and monotonically. A blank or results-layout page cannot erase confirmed scheduled values. Ordinary day, month, settings, and timesheet rendering never contacts Love Racing; they bulk-read cached rows by date and canonical venue.
+
 Admins can include or ignore individual saved planning locations. The preference lives in `planning_location_preferences` and filters only Love Racing planning hints and counts; it never removes or changes Deputy roster data. Ignored public rows remain in the current planning snapshot so they can be restored immediately.
 
 ### Love Racing Track Maps
@@ -77,6 +83,8 @@ Race-day calculation resolves start origin and finish destination separately usi
 `user_sync_state` stores the next planned sync time, last result, and running flag for each active user with saved Deputy credentials.
 
 `scheduler.py` does not launch every account at once. Daily and pre-shift triggers call `plan_staggered_user_syncs`, which spreads users by `USER_SYNC_STAGGER_MINUTES` plus small deterministic jitter. `run_due_user_syncs` wakes every five minutes and processes up to `USER_SYNC_BATCH_SIZE` due accounts, default one.
+
+After a successful roster sync, upcoming Thoroughbred date/location pairs inside 72 hours can enqueue stale meeting details. A separate scheduler job services the global Love Racing detail queue, so the user-facing roster sync response does not wait for browser captures.
 
 ## Main Views
 

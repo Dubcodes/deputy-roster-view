@@ -121,6 +121,14 @@ Selecting a planning marker stays inside the app and opens that date's day view.
 
 The live Love Racing calendar endpoint may return HTTP 403 to server-side requests. Refresh therefore falls back to NZTR's official final calendar PDF, using its positioned weekly columns and thoroughbred club codes. Static aliases may identify a known location, but must not introduce locations the collected roster data has never seen. Refresh runs weekly and replaces the prior snapshot so schedule corrections remove stale markers without retaining downloaded files.
 
+## Love Racing Scheduled Timing Fallback
+
+Meeting discovery is stored separately from programme availability because official race numbers and scheduled starts may appear only a day or two before racing. Browser discovery saves the official meeting ID, overview URL, date, canonical venue, and club. A global meeting-detail cache can then progress through `discovered`, `awaiting_schedule`, `partial`, `complete`, `fetch_failed`, and `historical` without changing the planning match or any Deputy record.
+
+Programme refresh is keyed by meeting ID, not user. Incomplete meetings are revisited progressively inside 72 hours, with failure backoff and no normal-user warning for an unpublished programme. Confirmed nonblank fields are retained monotonically, including after the public page changes to results.
+
+Fallback is field-specific and Thoroughbred-only. User-entered timing overrides win, then Deputy notes, then cached Love Racing scheduled data, then existing inferred/default calculations. The cache never mutates raw Deputy notes, roster hours, change history, or Changed badges. Admins may queue a non-blocking refresh and inspect compact status diagnostics.
+
 Official 2D course maps are a separate, slower-changing cache. The app keeps a verified course-to-image catalog, downloads maps only for roster-known Thoroughbred locations, and checks them roughly monthly. Cached images are served internally on day pages; uncertain matches, Harness/Greyhound meetings, and failed downloads produce no map rather than an incorrect one.
 
 Course-page discovery evaluates all credible official image attributes and downloads candidates before choosing by decoded resolution. The chosen source and natural dimensions are persisted. Refresh reports upgraded, unchanged, unavailable, or failed and preserves the previous file on any failed/lower-quality replacement.

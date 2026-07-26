@@ -267,9 +267,14 @@
   <section class="table-panel love-racing-panel">
     <div class="section-heading">
       <h2>Planning Race Days</h2>
-      <form action="/admin/love-racing-refresh" method="post">
-        <button class="button button-secondary" type="submit">Refresh Planning Calendar</button>
-      </form>
+      <div class="settings-action-row">
+        <form action="/admin/love-racing-refresh" method="post">
+          <button class="button button-secondary" type="submit">Refresh Planning Calendar</button>
+        </form>
+        <form action="/admin/love-racing-times-refresh" method="post">
+          <button class="button button-secondary" type="submit">Refresh upcoming race times</button>
+        </form>
+      </div>
     </div>
     <p class="muted">Refreshes automatically every Monday at 04:30. Each successful scan replaces the previous planning snapshot.</p>
     <div class="stats-card-grid stats-card-grid-three">
@@ -317,6 +322,31 @@
     </div>
 
     <p class="muted planning-location-pointer">Choose which locations appear on the calendar and manage their travel times in Locations below.</p>
+    <details class="inline-diagnostics">
+      <summary>Upcoming race-time details</summary>
+      <ul class="compact-list">
+        {% for meeting in love_racing_detail_diagnostics %}
+          <li>
+            <strong>{{ meeting.canonical_venue_label }} · {{ meeting.meeting_date|datetime("%d %b") }}</strong>
+            <div>Meeting {{ meeting.meeting_id }}</div>
+            <div>
+              {{ meeting.lifecycle_status|replace("_", " ")|title }}
+              {% if meeting.race_count %} · {{ meeting.race_count }} races{% endif %}
+              {% if meeting.first_race_time or meeting.last_race_time %}
+                · {{ meeting.first_race_time or "?" }}–{{ meeting.last_race_time or "?" }}
+              {% endif %}
+            </div>
+            <div class="muted">
+              Checked {{ meeting.page_last_checked_at|datetime if meeting.page_last_checked_at else "not yet" }}
+              {% if meeting.queue_status in ["queued", "fetching"] %} · {{ meeting.queue_status }}{% endif %}
+              {% if meeting.fetch_status == "failed" %} · fetch failed{% endif %}
+            </div>
+          </li>
+        {% else %}
+          <li class="empty-state">No discovered thoroughbred meetings in the next seven days.</li>
+        {% endfor %}
+      </ul>
+    </details>
   </section>
   <details class="table-panel location-management-panel">
     <summary class="management-panel-summary">

@@ -191,6 +191,9 @@
                 </div>
               {% endfor %}
             </dl>
+            {% if shift.race_day_summary.source_note %}
+              <p class="muted">{{ shift.race_day_summary.source_note }}</p>
+            {% endif %}
           </section>
         {% elif shift.description_lines %}
           <section class="description-block">
