@@ -122,7 +122,7 @@ Show a small note in the app:
 - Add encrypted Deputy session storage. Credentials done; reusable Deputy browser session storage still future.
 - Add staggered per-user sync queue. Initial version done.
 - Add shared schedule capture coverage. Initial table exists; prioritization still future.
-- Add admin panel and override audit trail. Initial audit recording done; applying overrides still future.
+- Add admin panel and operational override audit trail. Timing corrections now apply by canonical date/venue, while replacement and disable preserve prior rows.
 - Add optional trycloudflared compose overlay. Done.
 - Test with the current user first.
 - Add a second test user.

@@ -96,12 +96,14 @@ After a successful roster sync, upcoming Thoroughbred date/location pairs inside
 - `/help`: user-facing explanation of screens, buttons, shortcuts, and admin contacts.
 - `/sync-now`: starts a background sync for the signed-in account and redirects/polls.
 - `/signup` and `/login`: one-time trusted-device flow.
-- `/admin`: user/sync health, per-user Deputy capture diagnostics, trusted devices, PIN/Deputy login maintenance, per-user sync, deactivate/reactivate controls, roster reset, error reports, and manual override audit.
+- `/admin`: user/sync health, per-user Deputy capture diagnostics, trusted devices, PIN/Deputy login maintenance, per-user sync, deactivate/reactivate controls, roster reset, error reports, and operational manual overrides with immutable audit history.
 - `/admin/roster-days/new` and `/admin/roster-days/{id}`: admin-only race-day draft builder and publish review.
 
 ## Local State
 
 User notes and timing overrides live in `shift_marks` and must survive every sync. Sync code should not overwrite marks.
+
+Admin timing corrections live in versioned `admin_overrides` rows. `target_date + target_track_key + field_key` identifies the active correction; replacement supersedes the previous row and disabling retains it for audit. The view layer loads active rows by date range and applies them in the shared timing enrichment pass before user marks, Deputy note fields, Love Racing cache fields, and travel/default inference. No source snapshot or shift-change record is rewritten, and views recalculate on their next request without a sync or process restart.
 
 Themes are stored per user in `app_users.display_theme`. The CSS theme system is variable-driven so open shift badges, notice banners, assigned shifts, and special location-colour accents remain readable without changing roster logic.
 

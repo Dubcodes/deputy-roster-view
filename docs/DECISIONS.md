@@ -129,7 +129,7 @@ Programme refresh is keyed by meeting ID, not user. Incomplete meetings are revi
 
 Admin preview is non-persistent and reconstructs an official meeting URL from its numeric ID, so supplied URLs cannot redirect browser capture to another host. Admin unresolved refresh is synchronous and limited to 120 days because it is an explicit diagnostic/backfill operation; ordinary automatic cadence and queue behaviour are unchanged.
 
-Fallback is field-specific and Thoroughbred-only. User-entered timing overrides win, then Deputy notes, then cached Love Racing scheduled data, then existing inferred/default calculations. The cache never mutates raw Deputy notes, roster hours, change history, or Changed badges. Admins may queue a non-blocking refresh and inspect compact status diagnostics.
+Fallback is field-specific and Thoroughbred-only. Active Admin timing corrections win, then user-entered timing overrides, Deputy notes, cached Love Racing scheduled data, and existing inferred/default calculations. Admin rows are versioned by exact local date, canonical venue, and stable field key; replacement supersedes and disable reveals the next source while preserving audit history. Neither correction nor cache mutates raw Deputy notes, roster hours, source history, or Changed badges. Admins may queue a non-blocking refresh and inspect compact status diagnostics.
 
 Official 2D course maps are a separate, slower-changing cache. The app keeps a verified course-to-image catalog, downloads maps only for roster-known Thoroughbred locations, and checks them roughly monthly. Cached images are served internally on day pages; uncertain matches, Harness/Greyhound meetings, and failed downloads produce no map rather than an incorrect one.
 

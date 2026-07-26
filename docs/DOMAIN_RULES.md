@@ -41,6 +41,10 @@ Default travel times are only a fallback. If the roster note gives both base and
 
 Manual override rules:
 
+- Active Admin timing overrides have highest precedence and are scoped to an exact Pacific/Auckland date plus canonical racecourse key.
+- Admin corrections never rewrite Deputy notes, Love Racing cache evidence, or source history, and they do not create Deputy Changed badges.
+- Replacing an Admin correction supersedes the previous audit row. Disabling it exposes the next available source without deleting history.
+- Historical locking does not block an explicit Admin correction because it changes only the effective display/calculation.
 - If "Finished/back at office" is entered, use that as the final end time and round up to the next 15 minutes.
 - If "Last race time changed" is entered, use that as the last race time and then apply the normal race-day maths.
 
@@ -148,7 +152,7 @@ Love Racing data is public planning information only. Use it to show future race
 
 For Thoroughbred race days only, a cached official meeting programme may fill an individual race count, first-race time, or last-race time that is absent from the roster note.
 
-- Timing precedence is field by field: user timing override, Deputy roster note, Love Racing scheduled programme, then existing travel/default inference.
+- Timing precedence is field by field: active Admin override, user timing override, Deputy roster note, Love Racing scheduled programme, then existing travel/default inference.
 - Preserve every valid Deputy-provided field. For example, Deputy's `8 races` can be combined with Love Racing first/last race times without replacing the count.
 - Love Racing enrichment must not rewrite raw Deputy notes, alter roster hours, produce Changed badges, or create shift-change audit rows.
 - Admin date-range backfill follows the same precedence and may fill only absent derived values. Completed-event locking does not block that safe fill, but existing historical cached values remain protected.

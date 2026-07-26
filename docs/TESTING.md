@@ -33,11 +33,14 @@ Run this after changing account, settings, admin, or form-handling code. It crea
 python scripts\smoke_route_flows.py
 python scripts\smoke_love_racing.py
 python scripts\smoke_love_racing_details.py
+python scripts\smoke_admin_overrides.py
 python scripts\smoke_extended_features.py
 python scripts\smoke_roster_integrity.py
 python scripts\smoke_track_map_classification.py
 python scripts\smoke_note_interpretation.py
 ```
+
+The Admin override smoke covers legacy-row migration, field/value normalization, active precedence, historical days, immediate recalculation, replacement, disable fallback, canonical venue scope, and Changed-badge isolation. For deployed-data migration confidence, run `init_db()` against a disposable database copy only; never point migration tests at the live file.
 
 ## Manual App Checks
 

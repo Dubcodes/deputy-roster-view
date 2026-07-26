@@ -26,8 +26,8 @@
     </article>
     <article class="settings-panel">
       <span class="summary-label">Manual overrides</span>
-      <strong>{{ overrides|length }}</strong>
-      <p class="muted">Overrides are recorded for audit first.</p>
+      <strong>{{ active_override_count }} active</strong>
+      <p class="muted">Active overrides take priority over Deputy and derived data. Every change is retained in the audit history.</p>
     </article>
     <article class="settings-panel">
       <span class="summary-label">Version</span>
@@ -846,25 +846,19 @@
           <input type="text" name="target_track" placeholder="Te Rapa">
         </label>
       </div>
-      <div class="form-grid-two">
-        <label class="form-row">
-          <span>Type</span>
-          <select name="override_type" required>
-            <option value="">Choose type</option>
-            <option value="timing">Timing</option>
-            <option value="position">Position</option>
-            <option value="vehicle">Vehicle</option>
-            <option value="note">Note</option>
-          </select>
-        </label>
-        <label class="form-row">
-          <span>Label</span>
-          <input type="text" name="label" placeholder="Last race / position / vehicle" required>
-        </label>
-      </div>
+      <input type="hidden" name="override_type" value="timing">
+      <label class="form-row">
+        <span>Timing field</span>
+        <select name="field_key" required>
+          <option value="">Choose field</option>
+          {% for field in override_fields %}
+            <option value="{{ field.key }}">{{ field.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
       <label class="form-row">
         <span>Value</span>
-        <input type="text" name="value" placeholder="16:45 / Jayden-lee / corrected vehicle" required>
+        <input type="text" name="value" placeholder="16:45, 8 races, or 30m" required>
       </label>
       <label class="form-row">
         <span>Note</span>
@@ -882,10 +876,43 @@
       <div class="admin-override-list">
         {% for item in overrides %}
           <article class="admin-override-row">
-            <strong>{{ item.target_date }}{% if item.target_track %} · {{ item.target_track }}{% endif %}</strong>
-            <p>{{ item.override_type }} · {{ item.label }} = {{ item.value }}</p>
+            <div class="section-heading">
+              <strong>{{ item.target_date }}{% if item.target_track %} · {{ item.target_track }}{% endif %}</strong>
+              <span class="badge{% if item.status == 'invalid' %} badge-warn{% endif %}">{{ item.status_display }}</span>
+            </div>
+            <p>{{ item.field_display }} = {{ item.value_display }}</p>
+            {% if item.original_value and item.original_value != item.normalized_value %}
+              <p class="muted">Entered as {{ item.original_value }}</p>
+            {% endif %}
             {% if item.note %}<p class="muted">{{ item.note }}</p>{% endif %}
+            {% if item.validation_error %}<p class="warning-text">{{ item.validation_error }}</p>{% endif %}
+            {% if item.superseded_by_id %}<p class="muted">Replaced by override #{{ item.superseded_by_id }}</p>{% endif %}
             <small>{{ item.created_at|datetime }} by {{ item.created_by_name or "Admin" }}</small>
+            {% if item.status == "active" %}
+              <div class="admin-inline-actions">
+                <details>
+                  <summary class="button button-secondary button-compact">Edit or replace</summary>
+                  <form class="marks-form admin-override-form" action="/admin/overrides" method="post">
+                    <input type="hidden" name="target_date" value="{{ item.target_date }}">
+                    <input type="hidden" name="target_track" value="{{ item.target_track }}">
+                    <input type="hidden" name="override_type" value="timing">
+                    <input type="hidden" name="field_key" value="{{ item.field_key }}">
+                    <label class="form-row">
+                      <span>{{ item.field_display }}</span>
+                      <input type="text" name="value" value="{{ item.value_display }}" required>
+                    </label>
+                    <label class="form-row">
+                      <span>Reason</span>
+                      <textarea name="note" rows="2">{{ item.note or "" }}</textarea>
+                    </label>
+                    <button class="button button-compact" type="submit">Save replacement</button>
+                  </form>
+                </details>
+                <form action="/admin/overrides/{{ item.id }}/disable" method="post">
+                  <button class="button button-secondary button-compact" type="submit">Disable override</button>
+                </form>
+              </div>
+            {% endif %}
           </article>
         {% endfor %}
       </div>

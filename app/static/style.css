@@ -4705,6 +4705,30 @@ th {
   gap: 8px;
 }
 
+.source-marker {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.admin-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.admin-inline-actions details {
+  min-width: min(100%, 18rem);
+}
+
+.admin-inline-actions details[open] {
+  flex: 1 1 22rem;
+}
+
 .track-map-admin-row {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) minmax(420px, 2fr);

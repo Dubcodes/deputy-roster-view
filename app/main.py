@@ -32,6 +32,7 @@ from .database import (
     create_app_user,
     create_error_report,
     create_trusted_device,
+    disable_admin_override,
     DEPUTY_AREA_OVERRIDES,
     ensure_user_sync_state,
     fetch_open_deputy_schedule_between,
@@ -75,6 +76,7 @@ from .database import (
     get_user_sync_state,
     init_db,
     list_admin_overrides,
+    list_active_admin_overrides_between,
     list_app_users,
     list_error_reports,
     list_planning_locations,
@@ -130,6 +132,11 @@ from .planning_calendar import (
     refresh_planning_calendar,
     run_love_racing_detail_jobs,
 )
+from .admin_overrides import (
+    DURATION_FIELDS,
+    FIELD_LABELS as ADMIN_OVERRIDE_FIELD_LABELS,
+    canonical_override_venue,
+)
 from .scheduler import get_pre_shift_status, shutdown_scheduler, start_scheduler, sync_roster_sources
 from .security import (
     SESSION_COOKIE_NAME,
@@ -158,7 +165,7 @@ from .public_holidays import holiday_for_date
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.26.3"
+APP_BUILD = "2026.07.26.4"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -802,7 +809,9 @@ def deputy_race_count(summary: dict[str, object]) -> int | None:
 def resolve_race_timing_fields(
     shift: dict[str, object],
     meeting_detail: dict[str, object] | None,
+    admin_overrides: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, object]:
+    admin_overrides = admin_overrides or {}
     summary = shift.get("roster_summary") if isinstance(shift.get("roster_summary"), dict) else {}
     timings = timing_lookup(summary)
     deputy_count = deputy_race_count(summary)
@@ -827,21 +836,43 @@ def resolve_race_timing_fields(
         love_first = clean_time_value(str(meeting_detail.get("first_race_time") or ""))
         love_last = clean_time_value(str(meeting_detail.get("last_race_time") or ""))
 
-    race_count = deputy_count if deputy_count is not None else love_count
-    first_race = deputy_first or love_first
-    last_race = user_last or deputy_last or love_last
+    admin_count = safe_int((admin_overrides.get("race_count") or {}).get("normalized_value"))
+    admin_first = clean_time_value(
+        str((admin_overrides.get("first_race") or {}).get("normalized_value") or "")
+    )
+    admin_last = clean_time_value(
+        str((admin_overrides.get("last_race") or {}).get("normalized_value") or "")
+    )
+    race_count = admin_count or deputy_count or love_count
+    first_race = admin_first or deputy_first or love_first
+    last_race = admin_last or user_last or deputy_last or love_last
     sources = {
-        "race_count": "Deputy" if deputy_count is not None else ("Love Racing" if love_count else ""),
-        "first_race_time": "Deputy" if deputy_first else ("Love Racing" if love_first else ""),
+        "race_count": (
+            "Admin override"
+            if admin_count
+            else ("Deputy" if deputy_count is not None else ("Love Racing" if love_count else ""))
+        ),
+        "first_race_time": (
+            "Admin override"
+            if admin_first
+            else ("Deputy" if deputy_first else ("Love Racing" if love_first else ""))
+        ),
         "last_race_time": (
-            "User"
-            if user_last
-            else ("Deputy" if deputy_last else ("Love Racing" if love_last else ""))
+            "Admin override"
+            if admin_last
+            else (
+                "User"
+                if user_last
+                else ("Deputy" if deputy_last else ("Love Racing" if love_last else ""))
+            )
         ),
     }
     love_fields = [field for field, source in sources.items() if source == "Love Racing"]
     source_note = ""
-    if love_fields:
+    admin_fields = [field for field, source in sources.items() if source == "Admin override"]
+    if admin_fields:
+        source_note = "Admin overrides take priority for the corrected race-day values."
+    elif love_fields:
         if (
             sources["race_count"] == "Deputy"
             and sources["first_race_time"] == "Love Racing"
@@ -859,6 +890,7 @@ def resolve_race_timing_fields(
         "sources": sources,
         "source_note": source_note,
         "meeting_id": str((meeting_detail or {}).get("meeting_id") or ""),
+        "admin_overrides": admin_overrides,
     }
 
 
@@ -874,16 +906,32 @@ def enrich_shifts_with_love_racing(
         ): dict(row)
         for row in fetch_love_racing_details_between(start_date, end_date)
     }
+    active_overrides: dict[tuple[str, str], dict[str, dict[str, object]]] = {}
+    for row in list_active_admin_overrides_between(start_date, end_date):
+        item = dict(row)
+        identity = (str(item.get("target_date") or ""), str(item.get("target_track_key") or ""))
+        active_overrides.setdefault(identity, {})[str(item.get("field_key") or "")] = item
+
     for shift in shifts:
-        if str(shift.get("race_type_label") or "") != "Thoroughbred racing":
+        venue_key, _venue_label = canonical_override_venue(
+            shift.get("track_label") or shift.get("location_label")
+        )
+        shift_overrides = active_overrides.get((str(shift.get("date") or ""), venue_key), {})
+        is_thoroughbred = str(shift.get("race_type_label") or "") == "Thoroughbred racing"
+        if not is_thoroughbred and not shift_overrides:
             continue
         detail = details.get(
             (
                 str(shift.get("date") or ""),
                 calendar_location_key(shift.get("track_label") or shift.get("location_label")),
             )
+        ) if is_thoroughbred else None
+        shift["admin_timing_overrides"] = shift_overrides
+        shift["effective_race_timing"] = resolve_race_timing_fields(
+            shift,
+            detail,
+            shift_overrides,
         )
-        shift["effective_race_timing"] = resolve_race_timing_fields(shift, detail)
         apply_timing_math(shift)
 
 
@@ -1647,9 +1695,24 @@ def duration_hours_between(start_text: str | None, end_text: str | None) -> floa
 def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     summary = shift.get("roster_summary") if isinstance(shift.get("roster_summary"), dict) else {}
     timings = timing_lookup(summary)
+    admin_overrides = (
+        shift.get("admin_timing_overrides")
+        if isinstance(shift.get("admin_timing_overrides"), dict)
+        else {}
+    )
+
+    def admin_value(field_key: str) -> str:
+        item = admin_overrides.get(field_key)
+        return str(item.get("normalized_value") or "") if isinstance(item, dict) else ""
+
     base_label = "Office" if timings.get("office") else "Clow Place"
     base_clock = timings.get("office") or timings.get("clow place")
-    on_track_clock = timings.get("on track")
+    admin_start_clock = clean_time_value(admin_value("start"))
+    admin_finish_clock = clean_time_value(admin_value("finish"))
+    admin_on_track_clock = clean_time_value(admin_value("on_track"))
+    on_track_clock = admin_on_track_clock or timings.get("on track")
+    if admin_start_clock:
+        base_clock = admin_start_clock
     adjustment_time = clean_time_value(str(shift.get("timing_adjustment_time") or ""))
     use_last_race_adjustment = bool(int(shift.get("timing_adjustment_last_race") or 0)) and adjustment_time
     use_finished_adjustment = bool(int(shift.get("timing_adjustment_day_finished") or 0)) and adjustment_time
@@ -1659,10 +1722,13 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
         else {}
     )
     last_race_clock = (
-        adjustment_time
-        if use_last_race_adjustment
-        else clean_time_value(str(effective_race_timing.get("last_race_time") or ""))
-        or timings.get("last race")
+        clean_time_value(admin_value("last_race"))
+        or (
+            adjustment_time
+            if use_last_race_adjustment
+            else clean_time_value(str(effective_race_timing.get("last_race_time") or ""))
+            or timings.get("last race")
+        )
     )
 
     result: dict[str, object] = {
@@ -1683,6 +1749,12 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
             outbound_default = travel_default_for_shift(shift, start_origin)
     default_travel_minutes = int(outbound_default["travel_minutes"]) if outbound_default else 0
     default_source = str(outbound_default.get("source") or "saved route") if outbound_default else ""
+    admin_outbound_minutes = safe_int(admin_value("outbound_travel"))
+    admin_return_minutes = safe_int(admin_value("return_travel"))
+    admin_packup_minutes = safe_int(admin_value("pack_up_duration"))
+    if admin_outbound_minutes:
+        default_travel_minutes = admin_outbound_minutes
+        default_source = "Admin override"
 
     roster_start_at = parse_iso_datetime(str(shift.get("start_at") or ""))
     start_at = clock_datetime_for_shift(shift, base_clock) if base_clock else None
@@ -1697,15 +1769,18 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     if start_at is None:
         return result
 
-    if use_finished_adjustment:
-        finished_at = clock_datetime_for_shift(shift, adjustment_time, start_at)
+    if admin_finish_clock or use_finished_adjustment:
+        finished_clock = admin_finish_clock or adjustment_time
+        finished_at = clock_datetime_for_shift(shift, finished_clock, start_at)
         if finished_at is None:
             return result
-        rounded_end = ceil_datetime_to_quarter(finished_at)
+        rounded_end = finished_at if admin_finish_clock else ceil_datetime_to_quarter(finished_at)
         hours = max(0.0, round((rounded_end - start_at).total_seconds() / 3600, 2))
+        finish_source = "an Admin override" if admin_finish_clock else "the changed finish time"
         result.update(
             {
                 "available": True,
+                "complete": True,
                 "source": "manual_finished",
                 "start_label": start_at.strftime("%H:%M"),
                 "end_label": rounded_end.strftime("%H:%M"),
@@ -1713,13 +1788,14 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
                 "hours_label": format_hours(hours),
                 "lines": [
                     {"label": f"Start · {start_origin}", "value": start_at.strftime("%H:%M")},
-                    {"label": "Finished/back", "value": finished_at.strftime("%H:%M")},
+                    {"label": f"Finish · {finish_destination}", "value": finished_at.strftime("%H:%M")},
                     {"label": "Rounded end", "value": rounded_end.strftime("%H:%M")},
                     {"label": "Calculated total", "value": format_hours(hours)},
                 ],
                 "formula": (
-                    f"{start_origin} {start_at.strftime('%H:%M')} to finished/back "
-                    f"{finished_at.strftime('%H:%M')}, rounded to {rounded_end.strftime('%H:%M')}."
+                    f"Finish {finished_at.strftime('%H:%M')} comes from {finish_source}. "
+                    f"{start_origin} {start_at.strftime('%H:%M')} to {finish_destination} "
+                    f"{rounded_end.strftime('%H:%M')} is {format_hours(hours)}."
                 ),
             }
         )
@@ -1730,6 +1806,24 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
         on_track_clock = on_track_at.strftime("%H:%M")
         inferred_on_track = True
 
+    admin_outbound_conflict = False
+    if admin_outbound_minutes and on_track_clock:
+        on_track_for_override = clock_datetime_for_shift(shift, on_track_clock, start_at)
+        if on_track_for_override is not None:
+            if admin_start_clock and admin_on_track_clock:
+                actual_minutes = max(
+                    0,
+                    int(round((on_track_for_override - start_at).total_seconds() / 60)),
+                )
+                admin_outbound_conflict = actual_minutes != admin_outbound_minutes
+            elif admin_start_clock:
+                on_track_for_override = start_at + timedelta(minutes=admin_outbound_minutes)
+                on_track_clock = on_track_for_override.strftime("%H:%M")
+            else:
+                start_at = on_track_for_override - timedelta(minutes=admin_outbound_minutes)
+                base_clock = start_at.strftime("%H:%M")
+                inferred_start = True
+
     if not on_track_clock or not last_race_clock:
         return result
 
@@ -1738,11 +1832,19 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     if on_track_at is None or last_race_at is None:
         return result
 
-    outbound_minutes = max(0, int(round((on_track_at - start_at).total_seconds() / 60)))
+    outbound_minutes = (
+        (None if admin_outbound_conflict else admin_outbound_minutes)
+        or max(0, int(round((on_track_at - start_at).total_seconds() / 60)))
+    )
     race_clear_at = ceil_datetime_to_quarter(last_race_at + timedelta(minutes=RACE_RUN_MINUTES))
-    packup_done_at = race_clear_at + timedelta(minutes=PACKUP_MINUTES)
+    packup_minutes = admin_packup_minutes or PACKUP_MINUTES
+    packup_done_at = race_clear_at + timedelta(minutes=packup_minutes)
     return_route = get_travel_route(track_label, finish_destination)
-    return_minutes = int(return_route["travel_minutes"]) if return_route else None
+    return_minutes = (
+        admin_return_minutes
+        if admin_return_minutes
+        else (int(return_route["travel_minutes"]) if return_route else None)
+    )
     calculated_end_at = packup_done_at + timedelta(minutes=return_minutes) if return_minutes is not None else None
     hours = max(0.0, round((calculated_end_at - start_at).total_seconds() / 3600, 2)) if calculated_end_at else None
     roster_start_conflict = bool(
@@ -1806,7 +1908,8 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
                 f"{start_origin} {start_at.strftime('%H:%M')} to {track_label} at {on_track_at.strftime('%H:%M')} "
                 f"uses {format_minutes_duration(outbound_minutes)} outbound travel. Last race "
                 f"{last_race_at.strftime('%H:%M')} + {RACE_RUN_MINUTES}m rounds to "
-                f"{race_clear_at.strftime('%H:%M')}; pack-up to {packup_done_at.strftime('%H:%M')}; "
+                f"{race_clear_at.strftime('%H:%M')}; {format_minutes_duration(packup_minutes)} pack-up "
+                f"to {packup_done_at.strftime('%H:%M')}; "
                 + (
                     f"{format_minutes_duration(return_minutes)} return travel to {finish_destination} gives {calculated_end_at.strftime('%H:%M')}."
                     if calculated_end_at is not None and return_minutes is not None
@@ -1815,12 +1918,43 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
             ),
         }
     )
-    if use_last_race_adjustment:
+    if effective_race_timing.get("sources", {}).get("last_race_time") == "Admin override":
+        result["formula"] = (
+            f"Last race {last_race_at.strftime('%H:%M')} comes from an Admin override. "
+            f"{result['formula']}"
+        )
+    elif use_last_race_adjustment:
         result["formula"] = f"Using changed last race time. {result['formula']}"
     elif (
         effective_race_timing.get("sources", {}).get("last_race_time") == "Love Racing"
     ):
         result["formula"] = f"Using the scheduled last race from Love Racing. {result['formula']}"
+    applied_admin_parts = []
+    for field_key in (
+        "start",
+        "on_track",
+        "pack_up_duration",
+        "outbound_travel",
+        "return_travel",
+    ):
+        value = admin_value(field_key)
+        if not value:
+            continue
+        display_value = (
+            format_minutes_duration(int(value))
+            if field_key in DURATION_FIELDS and value.isdigit()
+            else value
+        )
+        applied_admin_parts.append(
+            f"{ADMIN_OVERRIDE_FIELD_LABELS.get(field_key, field_key)} {display_value}"
+        )
+    if applied_admin_parts:
+        result["formula"] = f"Admin override applied: {', '.join(applied_admin_parts)}. {result['formula']}"
+    if admin_outbound_conflict:
+        result["formula"] = (
+            "Admin start, on-track, and outbound travel values conflict; the timeline keeps "
+            f"the two Admin clock times and shows their actual interval. {result['formula']}"
+        )
     if inferred_start or inferred_on_track:
         result["formula"] = f"Using {default_source or 'saved'} default travel time. {result['formula']}"
     if roster_start_conflict and roster_start_at:
@@ -1851,11 +1985,14 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
         re.IGNORECASE,
     )
 
-    def add_row(label: str, value: str) -> None:
+    def add_row(label: str, value: str, source: str = "") -> None:
         label_text = label.strip()
         value_text = value.strip()
-        if label_text and {"label": label_text, "value": value_text} not in rows:
-            rows.append({"label": label_text, "value": value_text})
+        row = {"label": label_text, "value": value_text}
+        if source:
+            row["source"] = source
+        if label_text and row not in rows:
+            rows.append(row)
 
     def display_label(label: str) -> str:
         label_key = re.sub(r"\s+", " ", label.strip().lower())
@@ -1938,15 +2075,55 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
         count = safe_int(effective.get("race_count"))
         first_race = clean_time_value(str(effective.get("first_race_time") or ""))
         last_race = clean_time_value(str(effective.get("last_race_time") or ""))
-        if count and first_race and last_race:
+        sources = effective.get("sources") if isinstance(effective.get("sources"), dict) else {}
+        has_admin_race_value = any(
+            sources.get(key) == "Admin override"
+            for key in ("race_count", "first_race_time", "last_race_time")
+        )
+        if count and first_race and last_race and not has_admin_race_value:
             add_row(f"{count} races", f"{first_race} | {last_race}")
         else:
             if count:
-                add_row(f"{count} races", "")
+                add_row(
+                    "Races",
+                    str(count),
+                    "Admin override" if sources.get("race_count") == "Admin override" else "",
+                )
             if first_race:
-                add_row("First race", first_race)
+                add_row(
+                    "First race",
+                    first_race,
+                    "Admin override" if sources.get("first_race_time") == "Admin override" else "",
+                )
             if last_race:
-                add_row("Last race", last_race)
+                add_row(
+                    "Last race",
+                    last_race,
+                    "Admin override" if sources.get("last_race_time") == "Admin override" else "",
+                )
+
+    admin_overrides = (
+        shift.get("admin_timing_overrides")
+        if isinstance(shift.get("admin_timing_overrides"), dict)
+        else {}
+    )
+    summary_fields = {
+        "on_track": "On track",
+        "records": "Records",
+        "on_air": "On air",
+        "first_cross": "First cross",
+        "start": "Start",
+        "finish": "Finish",
+    }
+    for field_key, label in summary_fields.items():
+        override = admin_overrides.get(field_key)
+        if not isinstance(override, dict):
+            continue
+        value = clean_time_value(str(override.get("normalized_value") or ""))
+        if not value:
+            continue
+        rows = [row for row in rows if str(row.get("label") or "").lower() != label.lower()]
+        add_row(label, value, "Admin override")
 
     return {
         "rows": rows,
@@ -4966,6 +5143,28 @@ def admin_page_context(
     planning_locations = list_planning_locations()
     location_rows = admin_location_rows(planning_locations, travel_defaults)
     track_map_data = track_map_admin_data()
+    override_rows = []
+    for row in list_admin_overrides():
+        item = dict(row)
+        item["field_display"] = ADMIN_OVERRIDE_FIELD_LABELS.get(
+            str(item.get("field_key") or ""),
+            str(item.get("label") or "Unknown field"),
+        )
+        item["status_display"] = {
+            "active": "Active",
+            "superseded": "Superseded",
+            "disabled": "Disabled",
+            "invalid": "Invalid / unapplied",
+        }.get(str(item.get("status") or ""), "Invalid / unapplied")
+        if str(item.get("field_key") or "") in DURATION_FIELDS and str(
+            item.get("normalized_value") or ""
+        ).isdigit():
+            item["value_display"] = format_minutes_duration(int(item["normalized_value"]))
+        else:
+            item["value_display"] = str(
+                item.get("normalized_value") or item.get("value") or ""
+            )
+        override_rows.append(item)
     return {
         "request": request,
         "notice": notice,
@@ -4976,7 +5175,14 @@ def admin_page_context(
         "app_build": APP_BUILD,
         "users": admin_user_rows(),
         "roster_days": list_roster_days(),
-        "overrides": list_admin_overrides(),
+        "overrides": override_rows,
+        "active_override_count": sum(
+            1 for item in override_rows if str(item.get("status") or "") == "active"
+        ),
+        "override_fields": [
+            {"key": key, "label": label}
+            for key, label in ADMIN_OVERRIDE_FIELD_LABELS.items()
+        ],
         "error_reports": format_error_reports(),
         "travel_defaults": travel_defaults,
         "love_racing_snapshot": love_racing_snapshot,
@@ -5269,21 +5475,46 @@ async def admin_create_override(request: Request) -> RedirectResponse:
     user = require_admin_user(request)
     form = await request.form()
     target_date = str(form.get("target_date") or "").strip()
-    override_type = str(form.get("override_type") or "").strip()
-    label = str(form.get("label") or "").strip()
+    override_type = str(form.get("override_type") or "timing").strip()
+    label = str(form.get("field_key") or form.get("label") or "").strip()
     value = str(form.get("value") or "").strip()
-    if not target_date or not override_type or not label or not value:
-        return RedirectResponse(url=notice_url("/admin", "Date, type, label, and value are required."), status_code=303)
-    create_admin_override(
-        created_by_user_id=int(user["id"]),
-        target_date=target_date,
-        target_track=str(form.get("target_track") or "").strip(),
-        override_type=override_type,
-        label=label,
-        value=value,
-        note=str(form.get("note") or "").strip(),
+    target_track = str(form.get("target_track") or "").strip()
+    if not target_date or not target_track or not label or not value:
+        return RedirectResponse(
+            url=notice_url("/admin", "Date, track, field, and value are required."),
+            status_code=303,
+        )
+    try:
+        create_admin_override(
+            created_by_user_id=int(user["id"]),
+            target_date=target_date,
+            target_track=target_track,
+            override_type=override_type,
+            label=label,
+            value=value,
+            note=str(form.get("note") or "").strip(),
+        )
+    except ValueError as exc:
+        return RedirectResponse(
+            url=notice_url("/admin", f"Admin override could not be applied: {exc}"),
+            status_code=303,
+        )
+    return RedirectResponse(
+        url=notice_url("/admin", "Admin override recorded and applied."),
+        status_code=303,
     )
-    return RedirectResponse(url=notice_url("/admin", "Admin override recorded."), status_code=303)
+
+
+@app.post("/admin/overrides/{override_id}/disable")
+async def admin_disable_override(request: Request, override_id: int) -> RedirectResponse:
+    user = require_admin_user(request)
+    disabled = disable_admin_override(override_id, disabled_by_user_id=int(user["id"]))
+    message = (
+        "Admin override disabled. The day now uses the next available timing source."
+        if disabled
+        else "That override is no longer active."
+    )
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
 @app.get("/month")

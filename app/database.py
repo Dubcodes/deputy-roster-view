@@ -9,6 +9,12 @@ from datetime import datetime, timedelta
 from typing import Iterable
 
 from .config import Settings, get_settings
+from .admin_overrides import (
+    canonical_override_venue,
+    normalise_override_field,
+    normalise_override_value,
+    validate_override_date,
+)
 
 
 DEFAULT_CREW_POOL_NAME = "Northern Crew"
@@ -162,6 +168,15 @@ def init_db(settings: Settings | None = None) -> None:
                 value TEXT,
                 note TEXT,
                 active INTEGER DEFAULT 1,
+                target_track_key TEXT,
+                field_key TEXT,
+                normalized_value TEXT,
+                original_value TEXT,
+                status TEXT DEFAULT 'active',
+                validation_error TEXT,
+                superseded_by_id INTEGER,
+                disabled_at TEXT,
+                disabled_by_user_id INTEGER,
                 FOREIGN KEY (created_by_user_id) REFERENCES app_users(id) ON DELETE SET NULL
             );
 
@@ -684,6 +699,15 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "shift_marks", "timing_adjustment_time", "TEXT")
         _ensure_column(conn, "shift_marks", "timing_adjustment_last_race", "INTEGER DEFAULT 0")
         _ensure_column(conn, "shift_marks", "timing_adjustment_day_finished", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "admin_overrides", "target_track_key", "TEXT")
+        _ensure_column(conn, "admin_overrides", "field_key", "TEXT")
+        _ensure_column(conn, "admin_overrides", "normalized_value", "TEXT")
+        _ensure_column(conn, "admin_overrides", "original_value", "TEXT")
+        _ensure_column(conn, "admin_overrides", "status", "TEXT")
+        _ensure_column(conn, "admin_overrides", "validation_error", "TEXT")
+        _ensure_column(conn, "admin_overrides", "superseded_by_id", "INTEGER")
+        _ensure_column(conn, "admin_overrides", "disabled_at", "TEXT")
+        _ensure_column(conn, "admin_overrides", "disabled_by_user_id", "INTEGER")
         _ensure_column(conn, "deputy_schedule_shifts", "area_name", "TEXT")
         _ensure_column(conn, "deputy_schedule_shifts", "area_location_id", "INTEGER")
         _ensure_column(conn, "deputy_schedule_shifts", "area_roster_sort_order", "INTEGER")
@@ -746,6 +770,20 @@ def init_db(settings: Settings | None = None) -> None:
         _migrate_travel_defaults_to_routes(conn)
         _sync_crew_directory(conn)
         _reclassify_legacy_shift_changes(conn)
+        _migrate_admin_overrides(conn)
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_admin_overrides_effective
+            ON admin_overrides(target_date, target_track_key, field_key, status)
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_overrides_one_active
+            ON admin_overrides(target_date, target_track_key, field_key)
+            WHERE status = 'active' AND active = 1
+            """
+        )
     recover_historical_schedule_from_captures(settings=settings)
     with get_connection(settings) as maintenance_conn:
         lock_completed_events(maintenance_conn)
@@ -758,6 +796,60 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
     }
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _migrate_admin_overrides(conn: sqlite3.Connection) -> None:
+    rows = [
+        dict(row)
+        for row in conn.execute("SELECT * FROM admin_overrides ORDER BY created_at, id").fetchall()
+    ]
+    active_by_identity: dict[tuple[str, str, str], list[int]] = {}
+    for row in rows:
+        current_status = str(row.get("status") or "").strip().lower()
+        if current_status in {"disabled", "superseded"}:
+            continue
+        target_date, date_error = validate_override_date(row.get("target_date"))
+        track_key, _track_label = canonical_override_venue(row.get("target_track"))
+        field_key, field_error = normalise_override_field(row.get("override_type"), row.get("label"))
+        normalised_value, value_error = normalise_override_value(field_key, row.get("value")) if field_key else ("", "")
+        error = date_error or ("Track must identify a racecourse." if not track_key else "") or field_error or value_error
+        status = "invalid" if error else ("active" if int(row.get("active") or 0) else "disabled")
+        conn.execute(
+            """
+            UPDATE admin_overrides
+            SET target_date = COALESCE(NULLIF(?, ''), target_date),
+                target_track_key = ?, field_key = ?, normalized_value = ?,
+                original_value = COALESCE(original_value, value),
+                status = ?, validation_error = ?, active = ?
+            WHERE id = ?
+            """,
+            (
+                target_date,
+                track_key,
+                field_key,
+                normalised_value,
+                status,
+                error,
+                1 if status == "active" else 0,
+                int(row["id"]),
+            ),
+        )
+        if status == "active":
+            active_by_identity.setdefault((target_date, track_key, field_key), []).append(int(row["id"]))
+
+    for row_ids in active_by_identity.values():
+        if len(row_ids) < 2:
+            continue
+        latest_id = row_ids[-1]
+        for old_id in row_ids[:-1]:
+            conn.execute(
+                """
+                UPDATE admin_overrides
+                SET active = 0, status = 'superseded', superseded_by_id = ?
+                WHERE id = ?
+                """,
+                (latest_id, old_id),
+            )
 
 
 def _reclassify_legacy_shift_changes(conn: sqlite3.Connection) -> None:
@@ -1959,19 +2051,111 @@ def create_admin_override(
     label: str,
     value: str,
     note: str,
-) -> None:
+) -> sqlite3.Row:
     now = datetime.now().isoformat(timespec="seconds")
+    target_date, date_error = validate_override_date(target_date)
+    target_track_key, canonical_track = canonical_override_venue(target_track)
+    field_key, field_error = normalise_override_field(override_type, label)
+    normalized_value, value_error = normalise_override_value(field_key, value) if field_key else ("", "")
+    error = date_error or ("Track must identify a racecourse." if not target_track_key else "") or field_error or value_error
+    if error:
+        raise ValueError(error)
     with get_connection() as conn:
-        conn.execute(
+        previous_rows = conn.execute(
+            """
+            SELECT id
+            FROM admin_overrides
+            WHERE target_date = ? AND target_track_key = ? AND field_key = ?
+              AND status = 'active' AND active = 1
+            ORDER BY created_at DESC, id DESC
+            """,
+            (target_date, target_track_key, field_key),
+        ).fetchall()
+        for previous in previous_rows:
+            conn.execute(
+                """
+                UPDATE admin_overrides
+                SET active = 0, status = 'superseded_pending'
+                WHERE id = ?
+                """,
+                (int(previous["id"]),),
+            )
+        cursor = conn.execute(
             """
             INSERT INTO admin_overrides (
                 created_at, created_by_user_id, target_date, target_track,
-                override_type, label, value, note, active
+                override_type, label, value, note, active,
+                target_track_key, field_key, normalized_value, original_value,
+                status, validation_error
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 'active', '')
             """,
-            (now, created_by_user_id, target_date, target_track, override_type, label, value, note),
+            (
+                now,
+                created_by_user_id,
+                target_date,
+                canonical_track,
+                "timing",
+                label,
+                normalized_value,
+                note,
+                target_track_key,
+                field_key,
+                normalized_value,
+                value,
+            ),
         )
+        new_id = int(cursor.lastrowid)
+        for previous in previous_rows:
+            conn.execute(
+                """
+                UPDATE admin_overrides
+                SET active = 0, status = 'superseded', superseded_by_id = ?
+                WHERE id = ?
+                """,
+                (new_id, int(previous["id"])),
+            )
+        return conn.execute(
+            """
+            SELECT o.*, u.display_name AS created_by_name
+            FROM admin_overrides o
+            LEFT JOIN app_users u ON u.id = o.created_by_user_id
+            WHERE o.id = ?
+            """,
+            (new_id,),
+        ).fetchone()
+
+
+def disable_admin_override(override_id: int, *, disabled_by_user_id: int) -> bool:
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE admin_overrides
+            SET active = 0, status = 'disabled', disabled_at = ?,
+                disabled_by_user_id = ?
+            WHERE id = ? AND status = 'active' AND active = 1
+            """,
+            (now, disabled_by_user_id, int(override_id)),
+        )
+        return cursor.rowcount > 0
+
+
+def list_active_admin_overrides_between(start_date: str, end_date: str) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT o.*, u.display_name AS created_by_name
+            FROM admin_overrides o
+            LEFT JOIN app_users u ON u.id = o.created_by_user_id
+            WHERE o.target_date BETWEEN ? AND ?
+              AND o.status = 'active' AND o.active = 1
+              AND o.target_track_key <> '' AND o.field_key <> ''
+              AND o.normalized_value <> ''
+            ORDER BY o.target_date, o.target_track_key, o.field_key, o.id DESC
+            """,
+            (start_date, end_date),
+        ).fetchall()
 
 
 def list_admin_overrides(limit: int = 40) -> list[sqlite3.Row]:

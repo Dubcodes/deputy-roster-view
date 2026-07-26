@@ -814,6 +814,51 @@ def main() -> None:
         or "/admin/love-racing-unresolved-refresh" not in admin_page.text
     ):
         raise AssertionError("Expected admin page to render Love Racing preview and unresolved refresh tools.")
+    if "Active overrides take priority over Deputy" not in admin_page.text:
+        raise AssertionError("Expected Admin to explain operational override precedence.")
+    applied_override = client.post(
+        "/admin/overrides",
+        data={
+            "target_date": "2026-07-25",
+            "target_track": "Te Rapa",
+            "override_type": "timing",
+            "field_key": "last_race",
+            "value": "4:38 pm",
+            "note": "Route smoke",
+        },
+        follow_redirects=False,
+    )
+    assert_redirect(applied_override, "Admin+override+recorded+and+applied")
+    override_admin_page = client.get("/admin")
+    if (
+        "Last race = 16:38" not in override_admin_page.text
+        or "Edit or replace" not in override_admin_page.text
+        or "Disable override" not in override_admin_page.text
+    ):
+        raise AssertionError("Expected active override audit and management controls to render.")
+    invalid_override = client.post(
+        "/admin/overrides",
+        data={
+            "target_date": "2026-07-25",
+            "target_track": "Te Rapa",
+            "override_type": "timing",
+            "field_key": "mystery_time",
+            "value": "16:38",
+        },
+        follow_redirects=False,
+    )
+    assert_redirect(invalid_override, "Admin+override+could+not+be+applied")
+    with get_connection() as override_conn:
+        override_id = int(
+            override_conn.execute(
+                "SELECT id FROM admin_overrides WHERE status = 'active' ORDER BY id DESC LIMIT 1"
+            ).fetchone()["id"]
+        )
+    disabled_override = client.post(
+        f"/admin/overrides/{override_id}/disable",
+        follow_redirects=False,
+    )
+    assert_redirect(disabled_override, "Admin+override+disabled")
     original_preview = main_module.preview_love_racing_meeting
     try:
         main_module.preview_love_racing_meeting = lambda *_args, **_kwargs: {
