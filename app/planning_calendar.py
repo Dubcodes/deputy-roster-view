@@ -18,6 +18,7 @@ from .database import (
     merge_love_racing_programme,
     queue_love_racing_detail_job,
     save_love_racing_meetings,
+    upsert_love_racing_meeting_detail_identity,
     update_app_settings,
 )
 from .love_racing import fetch_love_racing_meetings, parse_love_racing_events
@@ -25,12 +26,16 @@ from .love_racing_details import (
     capture_calendar_months,
     capture_meeting_pages,
     failure_backoff,
+    parse_meeting_page_metadata,
     parse_meeting_programme,
     programme_refresh_due,
 )
 
 
 DETAIL_REFRESH_WINDOW_DAYS = 7
+MEETING_REFERENCE_RE = re.compile(
+    r"(?i)(?:/raceinfo/)?(?P<meeting_id>\d+)(?:/meeting-overview\.aspx)?"
+)
 
 
 def refresh_planning_calendar(settings: Settings | None = None) -> dict[str, object]:
@@ -297,6 +302,239 @@ def run_love_racing_detail_jobs(
         )
         completed += 1
     return {"processed": len(jobs), "completed": completed, "failed": failed}
+
+
+def preview_love_racing_meeting(
+    reference: str,
+    *,
+    expected_date: str = "",
+    expected_venue: str = "",
+) -> dict[str, object]:
+    reference = str(reference or "").strip()
+    match = MEETING_REFERENCE_RE.search(reference)
+    if not match:
+        return {
+            "ok": False,
+            "error": "Enter a Love Racing meeting-overview URL or numeric meeting ID.",
+        }
+    meeting_id = match.group("meeting_id")
+    meeting_url = (
+        f"https://loveracing.nz/raceinfo/{meeting_id}/meeting-overview.aspx"
+    )
+    try:
+        captured = capture_meeting_pages(
+            [{"meeting_id": meeting_id, "meeting_url": meeting_url}]
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "meeting_id": meeting_id,
+            "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+        }
+    page = captured[0] if captured else {}
+    if page.get("error") or not page.get("html"):
+        return {
+            "ok": False,
+            "meeting_id": meeting_id,
+            "error": str(page.get("error") or "Meeting page returned no HTML.")[:500],
+        }
+    html = str(page["html"])
+    programme = parse_meeting_programme(html)
+    metadata = parse_meeting_page_metadata(html)
+    canonical_label = _canonical_preview_venue(metadata.raw_course_label)
+    expected_date = str(expected_date or "").strip()
+    expected_venue = str(expected_venue or "").strip()
+    date_matches = (
+        None if not expected_date else metadata.meeting_date == expected_date
+    )
+    venue_matches = (
+        None
+        if not expected_venue
+        else calendar_location_key(canonical_label)
+        == calendar_location_key(expected_venue)
+    )
+    errors = [*metadata.diagnostics, *programme.diagnostics]
+    if date_matches is False:
+        errors.append(
+            f"Expected date {expected_date}, but the page shows "
+            f"{metadata.meeting_date or 'no date'}."
+        )
+    if venue_matches is False:
+        errors.append(
+            f"Expected venue {expected_venue}, but the page shows "
+            f"{canonical_label or metadata.raw_course_label or 'no venue'}."
+        )
+    return {
+        "ok": bool(programme.races) and date_matches is not False and venue_matches is not False,
+        "meeting_title": metadata.meeting_title,
+        "meeting_id": meeting_id,
+        "meeting_date": metadata.meeting_date,
+        "raw_course_label": metadata.raw_course_label,
+        "canonical_venue_label": canonical_label,
+        "race_count": programme.race_count,
+        "first_race_time": programme.first_race_time,
+        "last_race_time": programme.last_race_time,
+        "races": programme.races,
+        "duplicate_rows": programme.duplicate_rows,
+        "rejected_rows": programme.rejected_rows,
+        "diagnostics": errors,
+        "date_matches": date_matches,
+        "venue_matches": venue_matches,
+        "lifecycle_status": programme.lifecycle_status,
+    }
+
+
+def refresh_unresolved_race_days(
+    candidates: list[dict[str, object]],
+    *,
+    checked_at: datetime | None = None,
+) -> list[dict[str, object]]:
+    if not candidates:
+        return []
+    settings = get_settings()
+    now = (checked_at or datetime.now(settings.timezone)).replace(microsecond=0)
+    checked_text = now.isoformat(timespec="seconds")
+    keyed_candidates = {
+        (str(item["date"]), str(item["venue_key"])): dict(item)
+        for item in candidates
+    }
+    details = {
+        (str(row["meeting_date"]), str(row["canonical_venue_key"])): dict(row)
+        for row in fetch_love_racing_details_between(
+            min(key[0] for key in keyed_candidates),
+            max(key[0] for key in keyed_candidates),
+        )
+    }
+    unresolved_keys = [key for key in keyed_candidates if key not in details]
+    discovery_errors: dict[tuple[str, str], str] = {}
+    if unresolved_keys:
+        months = sorted(
+            {
+                (meeting_day.year, meeting_day.month)
+                for date_text, _venue_key in unresolved_keys
+                if (meeting_day := _date_from_text(date_text)) is not None
+            }
+        )
+        try:
+            identities = capture_calendar_months(months)
+        except Exception as exc:
+            identities = []
+            error = f"Calendar discovery failed: {type(exc).__name__}: {str(exc)[:240]}"
+            discovery_errors.update({key: error for key in unresolved_keys})
+        for key in unresolved_keys:
+            date_text, venue_key = key
+            matches = [
+                identity
+                for identity in identities
+                if str(identity.get("DateISO") or "") == date_text
+                and calendar_location_key(identity.get("Racecourse")) == venue_key
+            ]
+            if len(matches) != 1:
+                if key not in discovery_errors:
+                    discovery_errors[key] = (
+                        "No exact Love Racing date/venue match was found."
+                        if not matches
+                        else f"{len(matches)} Love Racing meetings matched; no meeting was guessed."
+                    )
+                continue
+            identity = matches[0]
+            upsert_love_racing_meeting_detail_identity(
+                meeting_id=str(identity["meeting_id"]),
+                meeting_date=date_text,
+                canonical_venue_key=venue_key,
+                canonical_venue_label=str(identity.get("Racecourse") or ""),
+                club=str(identity.get("Club") or ""),
+                meeting_url=str(identity.get("meeting_url") or ""),
+                discovered_at=checked_text,
+            )
+            details[key] = dict(
+                get_love_racing_meeting_detail(str(identity["meeting_id"])) or {}
+            )
+
+    meetings_to_fetch = {
+        str(detail["meeting_id"]): detail
+        for key, detail in details.items()
+        if key in keyed_candidates and detail.get("meeting_id")
+    }
+    pages: dict[str, dict[str, object]] = {}
+    if meetings_to_fetch:
+        try:
+            pages = {
+                str(item.get("meeting_id") or ""): item
+                for item in capture_meeting_pages(list(meetings_to_fetch.values()))
+            }
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {str(exc)[:300]}"
+            pages = {
+                meeting_id: {"meeting_id": meeting_id, "html": "", "error": error}
+                for meeting_id in meetings_to_fetch
+            }
+
+    results: list[dict[str, object]] = []
+    for key, candidate in keyed_candidates.items():
+        detail = details.get(key)
+        if not detail:
+            results.append(
+                {
+                    **candidate,
+                    "match_status": "Unmatched",
+                    "error": discovery_errors.get(
+                        key,
+                        "No exact Love Racing date/venue match was found.",
+                    ),
+                }
+            )
+            continue
+        meeting_id = str(detail.get("meeting_id") or "")
+        page = pages.get(meeting_id, {})
+        error = str(page.get("error") or "")
+        if error or not page.get("html"):
+            results.append(
+                {
+                    **candidate,
+                    "meeting_id": meeting_id,
+                    "match_status": "Fetch failed",
+                    "error": error or "Meeting page returned no HTML.",
+                }
+            )
+            continue
+        programme = parse_meeting_programme(str(page["html"]))
+        merge_love_racing_programme(
+            meeting_id,
+            {
+                "lifecycle_status": programme.lifecycle_status,
+                "races": programme.races,
+                "race_count": programme.race_count,
+                "first_race_time": programme.first_race_time,
+                "last_race_time": programme.last_race_time,
+                "diagnostics": programme.diagnostics,
+                "content_hash": programme.content_hash,
+            },
+            checked_text,
+        )
+        cached = dict(get_love_racing_meeting_detail(meeting_id) or {})
+        results.append(
+            {
+                **candidate,
+                "meeting_id": meeting_id,
+                "match_status": (
+                    "Matched"
+                    if programme.lifecycle_status in {"partial", "complete"}
+                    else "Awaiting schedule"
+                ),
+                "love_race_count": cached.get("race_count"),
+                "love_first_race": str(cached.get("first_race_time") or ""),
+                "love_last_race": str(cached.get("last_race_time") or ""),
+                "error": "; ".join(programme.diagnostics),
+            }
+        )
+    return results
+
+
+def _canonical_preview_venue(value: object) -> str:
+    label = re.sub(r"\s+", " ", str(value or "").strip(" -|–—:"))
+    label = re.sub(r"(?i)^racing\s+(?:at\s+)?", "", label).strip()
+    return label
 
 
 def refresh_upcoming_race_times(

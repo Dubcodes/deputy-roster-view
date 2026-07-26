@@ -2610,6 +2610,46 @@ def get_love_racing_meeting_detail(meeting_id: str) -> sqlite3.Row | None:
         ).fetchone()
 
 
+def upsert_love_racing_meeting_detail_identity(
+    *,
+    meeting_id: str,
+    meeting_date: str,
+    canonical_venue_key: str,
+    canonical_venue_label: str,
+    club: str,
+    meeting_url: str,
+    discovered_at: str,
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO love_racing_meeting_details (
+                meeting_id, meeting_date, canonical_venue_key,
+                canonical_venue_label, club, meeting_url,
+                lifecycle_status, fetch_status, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 'discovered', 'ready', ?, ?)
+            ON CONFLICT(meeting_id) DO UPDATE SET
+                meeting_date = excluded.meeting_date,
+                canonical_venue_key = excluded.canonical_venue_key,
+                canonical_venue_label = excluded.canonical_venue_label,
+                club = excluded.club,
+                meeting_url = excluded.meeting_url,
+                updated_at = excluded.updated_at
+            """,
+            (
+                meeting_id,
+                meeting_date,
+                canonical_venue_key,
+                canonical_venue_label,
+                club,
+                meeting_url,
+                discovered_at,
+                discovered_at,
+            ),
+        )
+
+
 def list_love_racing_detail_diagnostics(
     start_date: str,
     end_date: str,

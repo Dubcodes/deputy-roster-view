@@ -151,6 +151,7 @@ For Thoroughbred race days only, a cached official meeting programme may fill an
 - Timing precedence is field by field: user timing override, Deputy roster note, Love Racing scheduled programme, then existing travel/default inference.
 - Preserve every valid Deputy-provided field. For example, Deputy's `8 races` can be combined with Love Racing first/last race times without replacing the count.
 - Love Racing enrichment must not rewrite raw Deputy notes, alter roster hours, produce Changed badges, or create shift-change audit rows.
+- Admin date-range backfill follows the same precedence and may fill only absent derived values. Completed-event locking does not block that safe fill, but existing historical cached values remain protected.
 - Programme cache updates are monotonic: later blank or results-layout pages cannot erase confirmed scheduled starts.
 - Race 0, Race not found, elapsed result times, expanded duplicate rows, and conflicting duplicate starts are not valid scheduled programme evidence.
 - Harness, Greyhound, travel, training, office, and other operational shifts do not use Love Racing timing fallback.

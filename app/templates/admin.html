@@ -346,6 +346,131 @@
           <li class="empty-state">No discovered thoroughbred meetings in the next seven days.</li>
         {% endfor %}
       </ul>
+
+      <details class="inline-diagnostics" {% if love_racing_preview %}open{% endif %}>
+        <summary>Preview Love Racing meeting</summary>
+        <form class="marks-form admin-override-form" action="/admin/love-racing-preview" method="post">
+          <div class="form-grid-two">
+            <label class="form-row">
+              <span>Meeting URL or ID</span>
+              <input type="text" name="meeting_reference" placeholder="55034 or meeting-overview URL" required>
+            </label>
+            <label class="form-row">
+              <span>Expected date <small>optional</small></span>
+              <input type="date" name="expected_date">
+            </label>
+            <label class="form-row">
+              <span>Expected canonical venue <small>optional</small></span>
+              <input type="text" name="expected_venue" placeholder="Te Aroha">
+            </label>
+          </div>
+          <button class="button button-secondary" type="submit">Preview meeting</button>
+        </form>
+        {% if love_racing_preview %}
+          <div class="planning-scan-status{% if not love_racing_preview.ok %} is-error{% endif %}">
+            {% if love_racing_preview.error %}
+              <strong>Preview failed</strong>
+              <p>{{ love_racing_preview.error }}</p>
+            {% else %}
+              <strong>{{ love_racing_preview.meeting_title or "Love Racing meeting" }}</strong>
+              <p>
+                Meeting {{ love_racing_preview.meeting_id }} ·
+                {{ love_racing_preview.meeting_date or "Date unavailable" }} ·
+                {{ love_racing_preview.raw_course_label or "Course unavailable" }}
+              </p>
+              <p>
+                Canonical venue: {{ love_racing_preview.canonical_venue_label or "Unresolved" }} ·
+                {{ love_racing_preview.race_count or "?" }} races ·
+                {{ love_racing_preview.first_race_time or "?" }}–{{ love_racing_preview.last_race_time or "?" }}
+              </p>
+              {% if love_racing_preview.date_matches is not none %}
+                <p>Date expectation: {{ "Match" if love_racing_preview.date_matches else "Mismatch" }}</p>
+              {% endif %}
+              {% if love_racing_preview.venue_matches is not none %}
+                <p>Venue expectation: {{ "Match" if love_racing_preview.venue_matches else "Mismatch" }}</p>
+              {% endif %}
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Race</th><th>Scheduled start</th></tr></thead>
+                  <tbody>
+                    {% for race in love_racing_preview.races %}
+                      <tr><td>{{ race.number }}</td><td>{{ race.scheduled_start or "Not published" }}</td></tr>
+                    {% else %}
+                      <tr><td colspan="2">No valid numbered race rows were found.</td></tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              {% if love_racing_preview.duplicate_rows or love_racing_preview.rejected_rows or love_racing_preview.diagnostics %}
+                <details class="inline-diagnostics">
+                  <summary>Parser diagnostics</summary>
+                  <ul class="compact-list">
+                    {% for item in love_racing_preview.duplicate_rows %}<li>{{ item }}</li>{% endfor %}
+                    {% for item in love_racing_preview.rejected_rows %}<li>{{ item }}</li>{% endfor %}
+                    {% for item in love_racing_preview.diagnostics %}<li>{{ item }}</li>{% endfor %}
+                  </ul>
+                </details>
+              {% endif %}
+            {% endif %}
+          </div>
+        {% endif %}
+      </details>
+
+      <details class="inline-diagnostics" {% if love_racing_backfill %}open{% endif %}>
+        <summary>Refresh unresolved race times</summary>
+        <form class="marks-form admin-override-form" action="/admin/love-racing-unresolved-refresh" method="post">
+          <div class="form-grid-two">
+            <label class="form-row">
+              <span>Start date</span>
+              <input type="date" name="start_date" value="{{ backfill_start }}" required>
+            </label>
+            <label class="form-row">
+              <span>End date</span>
+              <input type="date" name="end_date" value="{{ backfill_end }}" required>
+            </label>
+          </div>
+          <p class="muted">Checks only Thoroughbred days still missing a race count, first race, or last race. Deputy and user-entered values remain unchanged and keep priority.</p>
+          <button class="button button-secondary" type="submit">Refresh unresolved race times</button>
+        </form>
+        {% if love_racing_backfill %}
+          <div class="planning-scan-status">
+            <strong>{{ love_racing_backfill.message }}</strong>
+          </div>
+          {% if love_racing_backfill.rows %}
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th><th>Venue</th><th>Meeting</th><th>Match</th>
+                    <th>Deputy count</th><th>Deputy first</th><th>Deputy last</th>
+                    <th>Love Racing count</th><th>Love Racing first</th><th>Love Racing last</th>
+                    <th>Filled</th><th>Preserved</th><th>Errors</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in love_racing_backfill.rows %}
+                    <tr>
+                      <td>{{ row.date }}</td>
+                      <td>{{ row.venue_label }}</td>
+                      <td>{{ row.meeting_id or "—" }}</td>
+                      <td>{{ row.match_status }}</td>
+                      <td>{{ row.deputy_race_count if row.deputy_race_count is not none else "—" }}</td>
+                      <td>{{ row.deputy_first_race or "—" }}</td>
+                      <td>{{ row.deputy_last_race or "—" }}</td>
+                      <td>{{ row.love_race_count or "—" }}</td>
+                      <td>{{ row.love_first_race or "—" }}</td>
+                      <td>{{ row.love_last_race or "—" }}</td>
+                      <td>{{ row.fields_filled }}</td>
+                      <td>{{ row.fields_preserved }}</td>
+                      <td>{{ row.error or "—" }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% endif %}
+        {% endif %}
+      </details>
     </details>
   </section>
   <details class="table-panel location-management-panel">

@@ -13,6 +13,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 
 from .auth import clear_trusted_device, current_user, require_admin_user, trusted_device_middleware
@@ -123,7 +124,9 @@ from .deputy_api import test_deputy_roster_api
 from .deputy_web import capture_and_save_deputy_web, format_capture_payload
 from .love_racing import LOVE_RACING_URL
 from .planning_calendar import (
+    preview_love_racing_meeting,
     queue_due_love_racing_details,
+    refresh_unresolved_race_days,
     refresh_planning_calendar,
     run_love_racing_detail_jobs,
 )
@@ -155,7 +158,7 @@ from .public_holidays import holiday_for_date
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.26.2"
+APP_BUILD = "2026.07.26.3"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -4945,9 +4948,16 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
     )
 
 
-@app.get("/admin")
-def admin_view(request: Request, notice: str | None = None) -> object:
-    user = require_admin_user(request)
+def admin_page_context(
+    request: Request,
+    user: dict[str, object],
+    *,
+    notice: str | None = None,
+    love_racing_preview: dict[str, object] | None = None,
+    love_racing_backfill: dict[str, object] | None = None,
+    backfill_start: str = "",
+    backfill_end: str = "",
+) -> dict[str, object]:
     settings = get_settings()
     today = datetime.now(settings.timezone).date()
     travel_defaults = travel_default_rows()
@@ -4956,43 +4966,53 @@ def admin_view(request: Request, notice: str | None = None) -> object:
     planning_locations = list_planning_locations()
     location_rows = admin_location_rows(planning_locations, travel_defaults)
     track_map_data = track_map_admin_data()
+    return {
+        "request": request,
+        "notice": notice,
+        "header_mode": "settings",
+        "current_user": user,
+        "settings": settings,
+        "app_version": APP_VERSION,
+        "app_build": APP_BUILD,
+        "users": admin_user_rows(),
+        "roster_days": list_roster_days(),
+        "overrides": list_admin_overrides(),
+        "error_reports": format_error_reports(),
+        "travel_defaults": travel_defaults,
+        "love_racing_snapshot": love_racing_snapshot,
+        "love_racing_status": love_racing_status,
+        "love_racing_detail_diagnostics": list_love_racing_detail_diagnostics(
+            (today - timedelta(days=14)).isoformat(),
+            (today + timedelta(days=30)).isoformat(),
+        ),
+        "love_racing_preview": love_racing_preview,
+        "love_racing_backfill": love_racing_backfill,
+        "backfill_start": backfill_start or (today - timedelta(days=14)).isoformat(),
+        "backfill_end": backfill_end or (today + timedelta(days=30)).isoformat(),
+        "love_racing_url": LOVE_RACING_URL,
+        "planning_locations": planning_locations,
+        "location_rows": location_rows,
+        "track_maps": track_map_data["venues"],
+        "unclassified_track_map_locations": track_map_data["unclassified"],
+        "track_map_classification_decisions": track_map_data["decisions"],
+        "track_map_migration_warnings": track_map_data["warnings"],
+        "travel_routes": [dict(row) for row in list_travel_routes()],
+        "known_places": list_known_place_labels(),
+        "crew_people": list_crew_people(),
+        "app_users": [dict(item) for item in list_app_users()],
+        "planning_location_enabled_count": sum(
+            1 for location in planning_locations if int(location.get("is_enabled") or 0)
+        ),
+        "integrity": get_roster_integrity_diagnostics(),
+    }
+
+
+@app.get("/admin")
+def admin_view(request: Request, notice: str | None = None) -> object:
+    user = require_admin_user(request)
     return templates.TemplateResponse(
         "admin.html",
-        {
-            "request": request,
-            "notice": notice,
-            "header_mode": "settings",
-            "current_user": user,
-            "settings": settings,
-            "app_version": APP_VERSION,
-            "app_build": APP_BUILD,
-            "users": admin_user_rows(),
-            "roster_days": list_roster_days(),
-            "overrides": list_admin_overrides(),
-            "error_reports": format_error_reports(),
-            "travel_defaults": travel_defaults,
-            "love_racing_snapshot": love_racing_snapshot,
-            "love_racing_status": love_racing_status,
-            "love_racing_detail_diagnostics": list_love_racing_detail_diagnostics(
-                today.isoformat(),
-                (today + timedelta(days=7)).isoformat(),
-            ),
-            "love_racing_url": LOVE_RACING_URL,
-            "planning_locations": planning_locations,
-            "location_rows": location_rows,
-            "track_maps": track_map_data["venues"],
-            "unclassified_track_map_locations": track_map_data["unclassified"],
-            "track_map_classification_decisions": track_map_data["decisions"],
-            "track_map_migration_warnings": track_map_data["warnings"],
-            "travel_routes": [dict(row) for row in list_travel_routes()],
-            "known_places": list_known_place_labels(),
-            "crew_people": list_crew_people(),
-            "app_users": [dict(item) for item in list_app_users()],
-            "planning_location_enabled_count": sum(
-                1 for location in planning_locations if int(location.get("is_enabled") or 0)
-            ),
-            "integrity": get_roster_integrity_diagnostics(),
-        },
+        admin_page_context(request, user, notice=notice),
     )
 
 
@@ -6154,6 +6174,209 @@ def admin_refresh_love_racing_calendar(request: Request) -> RedirectResponse:
     return RedirectResponse(url=notice_url("/admin", str(result["message"])), status_code=303)
 
 
+def unresolved_race_day_candidates(
+    start_date: str,
+    end_date: str,
+) -> tuple[list[dict[str, object]], int, int]:
+    details = {
+        (str(row["meeting_date"]), str(row["canonical_venue_key"])): dict(row)
+        for row in fetch_love_racing_details_between(start_date, end_date)
+    }
+    grouped: dict[tuple[str, str], dict[str, object]] = {}
+    for row in fetch_shifts_between(start_date, end_date, owner_user_id=None):
+        shift = decorate_shift(row)
+        if str(shift.get("race_type_label") or "") != "Thoroughbred racing":
+            continue
+        venue_label = str(
+            shift.get("track_label") or shift.get("location_label") or ""
+        ).strip()
+        venue_key = calendar_location_key(venue_label)
+        shift_date = str(shift.get("date") or "")
+        if not shift_date or not venue_key:
+            continue
+        summary = shift.get("roster_summary") if isinstance(shift.get("roster_summary"), dict) else {}
+        timings = timing_lookup(summary)
+        deputy_count = deputy_race_count(summary)
+        deputy_first = timings.get("first race", "")
+        deputy_last = timings.get("last race", "")
+        user_last = (
+            clean_time_value(str(shift.get("timing_adjustment_time") or ""))
+            if int(shift.get("timing_adjustment_last_race") or 0)
+            else ""
+        )
+        key = (shift_date, venue_key)
+        item = grouped.setdefault(
+            key,
+            {
+                "date": shift_date,
+                "venue_key": venue_key,
+                "venue_label": venue_label,
+                "deputy_race_count": None,
+                "deputy_first_race": "",
+                "deputy_last_race": "",
+                "user_last_race": "",
+            },
+        )
+        if item["deputy_race_count"] is None and deputy_count is not None:
+            item["deputy_race_count"] = deputy_count
+        item["deputy_first_race"] = item["deputy_first_race"] or deputy_first
+        item["deputy_last_race"] = item["deputy_last_race"] or deputy_last
+        item["user_last_race"] = item["user_last_race"] or user_last
+
+    candidates: list[dict[str, object]] = []
+    already_complete = 0
+    for key, item in sorted(grouped.items()):
+        detail = details.get(key, {})
+        count = item["deputy_race_count"] or safe_int(detail.get("race_count"))
+        first_race = item["deputy_first_race"] or str(detail.get("first_race_time") or "")
+        last_race = (
+            item["user_last_race"]
+            or item["deputy_last_race"]
+            or str(detail.get("last_race_time") or "")
+        )
+        if count and first_race and last_race:
+            already_complete += 1
+        else:
+            candidates.append(item)
+    return candidates, len(grouped), already_complete
+
+
+def format_race_time_backfill(
+    rows: list[dict[str, object]],
+    *,
+    checked: int,
+    already_complete: int,
+) -> dict[str, object]:
+    enriched = 0
+    unmatched = 0
+    for row in rows:
+        filled: list[str] = []
+        preserved: list[str] = []
+        if row.get("deputy_race_count") is not None:
+            preserved.append("Deputy race count")
+        elif row.get("love_race_count"):
+            filled.append("Race count")
+        if row.get("deputy_first_race"):
+            preserved.append("Deputy first race")
+        elif row.get("love_first_race"):
+            filled.append("First race")
+        if row.get("user_last_race"):
+            preserved.append("User last race")
+        elif row.get("deputy_last_race"):
+            preserved.append("Deputy last race")
+        elif row.get("love_last_race"):
+            filled.append("Last race")
+        row["fields_filled"] = ", ".join(filled) or "None"
+        row["fields_preserved"] = ", ".join(preserved) or "None"
+        if filled:
+            enriched += 1
+        if row.get("match_status") in {"Unmatched", "Fetch failed"}:
+            unmatched += 1
+    return {
+        "rows": rows,
+        "checked": checked,
+        "already_complete": already_complete,
+        "enriched": enriched,
+        "unmatched": unmatched,
+        "message": (
+            f"Checked {checked} meeting{'s' if checked != 1 else ''} · "
+            f"{already_complete} already complete · {enriched} enriched · "
+            f"{unmatched} unmatched"
+            if checked
+            else "No thoroughbred meetings were found in the selected date range."
+        ),
+    }
+
+
+@app.post("/admin/love-racing-preview")
+async def admin_preview_love_racing_meeting(request: Request) -> object:
+    user = require_admin_user(request)
+    form = await request.form()
+    reference = str(form.get("meeting_reference") or "").strip()
+    expected_date = str(form.get("expected_date") or "").strip()
+    expected_venue = str(form.get("expected_venue") or "").strip()
+    preview = await run_in_threadpool(
+        preview_love_racing_meeting,
+        reference,
+        expected_date=expected_date,
+        expected_venue=expected_venue,
+    )
+    return templates.TemplateResponse(
+        "admin.html",
+        admin_page_context(
+            request,
+            user,
+            love_racing_preview=preview,
+        ),
+    )
+
+
+@app.post("/admin/love-racing-unresolved-refresh")
+async def admin_refresh_unresolved_race_times(request: Request) -> object:
+    user = require_admin_user(request)
+    form = await request.form()
+    start_text = str(form.get("start_date") or "").strip()
+    end_text = str(form.get("end_date") or "").strip()
+    try:
+        start_day = date.fromisoformat(start_text)
+        end_day = date.fromisoformat(end_text)
+    except ValueError:
+        return templates.TemplateResponse(
+            "admin.html",
+            admin_page_context(
+                request,
+                user,
+                notice="Choose a valid start and end date.",
+                backfill_start=start_text,
+                backfill_end=end_text,
+            ),
+        )
+    if end_day < start_day or (end_day - start_day).days > 120:
+        return templates.TemplateResponse(
+            "admin.html",
+            admin_page_context(
+                request,
+                user,
+                notice="Choose a date range of no more than 120 days, with the start before the end.",
+                backfill_start=start_text,
+                backfill_end=end_text,
+            ),
+        )
+    candidates, checked, already_complete = unresolved_race_day_candidates(
+        start_text,
+        end_text,
+    )
+    refreshed = (
+        await run_in_threadpool(refresh_unresolved_race_days, candidates)
+        if candidates
+        else []
+    )
+    report = format_race_time_backfill(
+        refreshed,
+        checked=checked,
+        already_complete=already_complete,
+    )
+    if checked and not candidates:
+        report["message"] = (
+            f"Checked {checked} meeting{'s' if checked != 1 else ''} · "
+            f"{already_complete} already complete · 0 enriched · 0 unmatched"
+        )
+    elif not candidates:
+        report["message"] = (
+            "No unresolved thoroughbred meetings were found in the selected date range."
+        )
+    return templates.TemplateResponse(
+        "admin.html",
+        admin_page_context(
+            request,
+            user,
+            love_racing_backfill=report,
+            backfill_start=start_text,
+            backfill_end=end_text,
+        ),
+    )
+
+
 @app.post("/admin/love-racing-times-refresh")
 def admin_refresh_love_racing_times(
     request: Request,
@@ -6172,7 +6395,7 @@ def admin_refresh_love_racing_times(
             f"meeting{'s' if queued['eligible'] != 1 else ''}."
         )
     else:
-        message = "No discovered upcoming thoroughbred meetings need race-time refresh."
+        message = "No unresolved thoroughbred meetings were found in the selected date range."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 

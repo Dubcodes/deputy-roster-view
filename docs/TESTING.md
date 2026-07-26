@@ -76,6 +76,8 @@ After Portainer redeploy:
 - In Admin Track maps, confirm trial aliases appear only beneath their canonical venue, operational locations are absent, and uncertain locations stay in the collapsed classification subsection. Check the controls around 320px and 375px wide.
 - Confirm each user shows next planned sync and last sync status.
 - In Admin, use Refresh upcoming race times and confirm the action returns immediately while discovered meetings show queued, awaiting, partial, complete, or failed status.
+- In Admin, preview meeting `55034` with expected date `2026-07-26` and venue `Te Aroha`; confirm it shows 9 races and 11:34-16:35 without saving a cache row.
+- Run Refresh unresolved race times across a recent range. Confirm the result distinguishes preserved Deputy values from Love Racing-filled fields and reports an unmatched date/venue without guessing.
 - On a Thoroughbred day with only a Deputy race count, confirm cached Love Racing first/last race times fill the missing fields and the source note stays compact. Confirm Harness/Greyhound and non-racing shifts are unchanged.
 - If using the temporary tunnel stack, confirm its `cloudflared` container logs show a `trycloudflare.com` URL.
 

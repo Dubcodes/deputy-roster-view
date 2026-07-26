@@ -15,6 +15,11 @@ DATE_CELL_RE = re.compile(
     r"\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2})\s+([A-Za-z]+)\b",
     re.IGNORECASE,
 )
+FULL_DATE_RE = re.compile(
+    r"\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?\s*"
+    r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})\b",
+    re.IGNORECASE,
+)
 CLOCK_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})(?:\s*([ap])\.?m\.?)?\s*$", re.IGNORECASE)
 MONTHS = {
     name.lower(): index
@@ -48,6 +53,16 @@ class ProgrammeParseResult:
     last_race_time: str
     diagnostics: tuple[str, ...]
     content_hash: str
+    duplicate_rows: tuple[str, ...] = ()
+    rejected_rows: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MeetingPageMetadata:
+    meeting_title: str
+    meeting_date: str
+    raw_course_label: str
+    diagnostics: tuple[str, ...]
 
 
 class _TableParser(HTMLParser):
@@ -103,6 +118,51 @@ class _TableParser(HTMLParser):
             self._stack[-1]["_cell"]["text"].append(data)
 
 
+class _PageMetadataParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.title_parts: list[str] = []
+        self.headings: list[str] = []
+        self.text_parts: list[str] = []
+        self.meta_titles: list[str] = []
+        self._capture_title = False
+        self._heading_tag = ""
+        self._heading_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_dict = {key.lower(): value or "" for key, value in attrs}
+        if tag == "title":
+            self._capture_title = True
+        elif tag in {"h1", "h2"}:
+            self._heading_tag = tag
+            self._heading_parts = []
+        elif tag == "meta":
+            name = (attrs_dict.get("property") or attrs_dict.get("name") or "").lower()
+            content = attrs_dict.get("content", "").strip()
+            if name in {"og:title", "twitter:title"} and content:
+                self.meta_titles.append(content)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "title":
+            self._capture_title = False
+        elif tag == self._heading_tag:
+            heading = " ".join("".join(self._heading_parts).split())
+            if heading:
+                self.headings.append(heading)
+            self._heading_tag = ""
+            self._heading_parts = []
+
+    def handle_data(self, data: str) -> None:
+        text = " ".join(data.split())
+        if not text:
+            return
+        self.text_parts.append(text)
+        if self._capture_title:
+            self.title_parts.append(text)
+        if self._heading_tag:
+            self._heading_parts.append(text)
+
+
 def _tables(html: str) -> list[dict[str, object]]:
     parser = _TableParser()
     parser.feed(html)
@@ -124,6 +184,67 @@ def normalise_scheduled_clock(value: object) -> str:
         if meridiem == "p":
             hour += 12
     return f"{hour:02d}:{minute:02d}"
+
+
+def parse_meeting_page_metadata(html: str) -> MeetingPageMetadata:
+    parser = _PageMetadataParser()
+    parser.feed(html)
+    title = " ".join(parser.meta_titles[:1] or parser.title_parts).strip()
+    visible_text = " ".join(parser.text_parts)
+    date_match = FULL_DATE_RE.search(visible_text)
+    meeting_date = ""
+    if date_match:
+        month = MONTHS.get(date_match.group(2).lower())
+        if month:
+            try:
+                meeting_date = date(
+                    int(date_match.group(3)),
+                    month,
+                    int(date_match.group(1)),
+                ).isoformat()
+            except ValueError:
+                meeting_date = ""
+
+    raw_course = ""
+    generic = {
+        "raceinfo",
+        "meeting overview",
+        "meeting-overview",
+        "loveracing.nz",
+        "loveracing",
+    }
+    for candidate in [*parser.headings, title]:
+        cleaned = re.sub(FULL_DATE_RE, "", candidate)
+        parts = [
+            part.strip(" -|–—:")
+            for part in re.split(r"\s*[|–—]\s*", cleaned)
+            if part.strip(" -|–—:")
+        ]
+        for part in parts:
+            key = part.lower()
+            if key in generic or "meeting overview" in key or "loveracing" in key:
+                continue
+            if re.search(r"\brace\s+\d+\b", part, re.IGNORECASE):
+                continue
+            if 2 <= len(part) <= 80:
+                raw_course = part
+                break
+        if raw_course:
+            break
+
+    diagnostics: list[str] = []
+    if not title:
+        diagnostics.append("Meeting title was not found.")
+    if not meeting_date:
+        diagnostics.append("Meeting date was not found.")
+    if not raw_course:
+        diagnostics.append("Racecourse label was not found.")
+    return MeetingPageMetadata(
+        meeting_title=title,
+        meeting_date=meeting_date,
+        raw_course_label=raw_course,
+        diagnostics=tuple(diagnostics),
+    )
 
 
 def parse_meeting_programme(html: str) -> ProgrammeParseResult:
@@ -150,6 +271,8 @@ def parse_meeting_programme(html: str) -> ProgrammeParseResult:
     candidates: dict[int, list[str]] = {}
     numbered_rows: set[int] = set()
     diagnostics: list[str] = []
+    rejected_rows: list[str] = []
+    duplicate_rows: list[str] = []
     if has_race_header:
         for table in tables:
             if "overview-info" not in str(table.get("class") or "").split():
@@ -159,7 +282,11 @@ def parse_meeting_programme(html: str) -> ProgrammeParseResult:
                 if len(cells) < 2:
                     continue
                 race_text = str(cells[0].get("text") or "").strip()
-                if not race_text.isdigit() or int(race_text) <= 0:
+                if not race_text.isdigit():
+                    rejected_rows.append(f"Rejected row with race label {race_text or '(blank)'}.")
+                    continue
+                if int(race_text) <= 0:
+                    rejected_rows.append(f"Rejected Race {race_text}.")
                     continue
                 race_number = int(race_text)
                 numbered_rows.add(race_number)
@@ -170,6 +297,10 @@ def parse_meeting_programme(html: str) -> ProgrammeParseResult:
     conflicting: set[int] = set()
     for race_number in sorted(numbered_rows):
         nonblank = {value for value in candidates.get(race_number, []) if value}
+        if len(candidates.get(race_number, [])) > 1:
+            duplicate_rows.append(
+                f"Race {race_number} appeared {len(candidates[race_number])} times."
+            )
         if len(nonblank) > 1:
             conflicting.add(race_number)
             diagnostics.append(f"Race {race_number} has conflicting scheduled starts.")
@@ -212,6 +343,8 @@ def parse_meeting_programme(html: str) -> ProgrammeParseResult:
         last_race_time=last_race_time,
         diagnostics=tuple(diagnostics),
         content_hash=hashlib.sha256(html.encode("utf-8", errors="replace")).hexdigest(),
+        duplicate_rows=tuple(duplicate_rows),
+        rejected_rows=tuple(rejected_rows),
     )
 
 

@@ -78,6 +78,7 @@ def main() -> None:
         upsert_travel_time_default,
         upsert_track_map,
     )
+    import app.main as main_module
     from app.main import (
         apply_schedule_role_context,
         apply_vehicle_carryover_from_people,
@@ -808,6 +809,42 @@ def main() -> None:
         raise AssertionError("Expected unified locations to show canonical office and custom hotel bases.")
     if "/admin/love-racing-refresh" not in admin_page.text or "Refresh Planning Calendar" not in admin_page.text:
         raise AssertionError("Expected admin page to render the planning refresh control.")
+    if (
+        "/admin/love-racing-preview" not in admin_page.text
+        or "/admin/love-racing-unresolved-refresh" not in admin_page.text
+    ):
+        raise AssertionError("Expected admin page to render Love Racing preview and unresolved refresh tools.")
+    original_preview = main_module.preview_love_racing_meeting
+    try:
+        main_module.preview_love_racing_meeting = lambda *_args, **_kwargs: {
+            "ok": True,
+            "meeting_title": "Te Aroha",
+            "meeting_id": "55034",
+            "meeting_date": "2026-07-26",
+            "raw_course_label": "Te Aroha",
+            "canonical_venue_label": "Te Aroha",
+            "race_count": 9,
+            "first_race_time": "11:34",
+            "last_race_time": "16:35",
+            "races": [{"number": 1, "scheduled_start": "11:34"}],
+            "duplicate_rows": (),
+            "rejected_rows": (),
+            "diagnostics": (),
+            "date_matches": True,
+            "venue_matches": True,
+        }
+        preview_page = client.post(
+            "/admin/love-racing-preview",
+            data={
+                "meeting_reference": "55034",
+                "expected_date": "2026-07-26",
+                "expected_venue": "Te Aroha",
+            },
+        )
+        if preview_page.status_code != 200 or "11:34–16:35" not in preview_page.text:
+            raise AssertionError("Expected the Admin meeting preview to render parsed race times.")
+    finally:
+        main_module.preview_love_racing_meeting = original_preview
     if "/admin/track-maps-refresh" not in admin_page.text or "Refresh Track Maps" not in admin_page.text:
         raise AssertionError("Expected admin page to render the track-map refresh control.")
     if "Manual upload" not in admin_page.text or "/admin/track-maps/tearoha/reset" not in admin_page.text:

@@ -56,6 +56,8 @@ Meeting discovery and race-programme details are separate. A browser pass resolv
 
 `love_racing_detail_jobs` is a global queue keyed by meeting ID, so several users rostered at one meeting create one fetch. Incomplete programmes are checked more often as race day approaches: roughly six-hourly inside 72 hours, two-hourly inside 24 hours, and hourly on race morning. Complete programmes stop frequent polling, receive one race-morning confirmation where applicable, and are retained after the meeting. HTTP/browser failures use bounded backoff.
 
+Admin has two explicit verification paths. Meeting preview fetches and parses one official meeting page without saving it. Date-range unresolved refresh discovers exact date/venue identities and updates only the monotonic Love Racing cache for Thoroughbred days that still lack derived race fields. Neither path writes Deputy shifts or change history.
+
 Cached race count, first race, and last race are merged independently and monotonically. A blank or results-layout page cannot erase confirmed scheduled values. Ordinary day, month, settings, and timesheet rendering never contacts Love Racing; they bulk-read cached rows by date and canonical venue.
 
 Admins can include or ignore individual saved planning locations. The preference lives in `planning_location_preferences` and filters only Love Racing planning hints and counts; it never removes or changes Deputy roster data. Ignored public rows remain in the current planning snapshot so they can be restored immediately.
