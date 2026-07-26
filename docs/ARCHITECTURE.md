@@ -129,6 +129,10 @@ Own shift changes are stored in `shift_changes`. Schedule row changes are summar
 
 Durable connected crew changes are stored in `deputy_schedule_event_changes`. A successful authoritative schedule window captures the effective crew snapshot before updating/pruning rows, rebuilds the effective snapshot afterwards, and compares assignments by date, Deputy location, and overlapping event period. The resulting grouped records describe replacements, moves, Sound/VT merges/splits, and open/filled positions without depending on stable Deputy shift IDs. Existing `deputy_schedule_assignment_history` rows remain available for older changes.
 
+The day view groups those audit records by `group_id` for presentation. Canonical crew identities are applied before constructing the grouped text, so a move plus replacement plus opened position is shown once without discarding the underlying rows.
+
+Roster-note timing extraction is line-oriented and passes every recognized clock through one validated token parser. `apply_timing_math` creates a `display_window` object containing the selected source, start, finish, duration, and range. Day, month/list, Next Up, and timesheet summaries consume that object instead of choosing fields independently.
+
 Crew visible change badges should only appear for assignment changes:
 
 - person changed

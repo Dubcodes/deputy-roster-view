@@ -949,7 +949,7 @@ def main() -> None:
     start_rows = [person for person in people if person["position_label"] == "Start"]
     if len(start_rows) != 1 or start_rows[0]["employee_name"] != "Elliot":
         raise AssertionError(f"Expected stale Start assignment to collapse to Elliot, got {start_rows!r}")
-    if not start_rows[0]["changed"] or "Campbell Stephens -> Elliot" not in str(start_rows[0]["change_summary"]):
+    if not start_rows[0]["changed"] or "Campbell Stephens → Elliot" not in str(start_rows[0]["change_summary"]):
         raise AssertionError(f"Expected replacement change summary on Start row, got {start_rows[0]!r}")
     if any(person["employee_name"] == "Campbell Stephens" for person in people):
         raise AssertionError(f"Expected vehicle-only Campbell row to be hidden, got {people!r}")
@@ -1171,7 +1171,7 @@ def main() -> None:
     moved_side_two = next((person for person in moved_people if person["position_label"] == "Side 2"), None)
     if moved_side_one is None or moved_side_two is None:
         raise AssertionError(f"Expected both moved production rows, got {moved_people!r}")
-    if moved_side_one["change_summary"] != "Side 1: Nate -> Leger":
+    if moved_side_one["change_summary"] != "Side 1: Nate → Leger":
         raise AssertionError(f"Expected person-focused Side 1 change, got {moved_side_one!r}")
     if moved_side_two["vehicle_label"] != "685":
         raise AssertionError(f"Expected generic Vehicles label to be removed, got {moved_side_two!r}")

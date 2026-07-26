@@ -142,7 +142,7 @@
                   <strong class="shift-track">{{ shift.track_label }}</strong>
                   <span class="shift-mini">
                     <span class="shift-mini-role">{{ shift.role_chain_label or shift.role_label or shift.title or "Shift" }}</span>
-                    <span class="shift-mini-time">{{ shift.start_label }}</span>
+                    <span class="shift-mini-time">{{ shift.display_start_label or shift.start_label }}</span>
                   </span>
                   {% if day.shifts|length == 1 %}
                     <span class="shift-meta">{{ shift.display_hours_label }}</span>
@@ -200,7 +200,7 @@
             <a class="upcoming-card" href="/day/{{ shift.date }}" style="{{ shift.colour_style }}">
               <span>{{ shift.start_at|day_short }}</span>
               <strong>{{ shift.track_label }}</strong>
-              <span>{{ shift.role_chain_label or shift.role_label or shift.title or "Shift" }} · {{ shift.start_label }}{% if shift.race_type_label %} · {{ shift.race_type_label }}{% endif %}</span>
+              <span>{{ shift.role_chain_label or shift.role_label or shift.title or "Shift" }} · {{ shift.display_start_label or shift.start_label }}{% if shift.race_type_label %} · {{ shift.race_type_label }}{% endif %}</span>
             </a>
           {% endfor %}
         </div>

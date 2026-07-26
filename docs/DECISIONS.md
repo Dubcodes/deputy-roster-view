@@ -154,3 +154,11 @@ Future personal removal uses two complete independent absences because Deputy's 
 Historical repair is a one-time additive replay from retained successful diagnostics. It restores only archived rows carrying stable Deputy shift, date, location, and production-position identities. Existing populated data wins, conflicts are counted, and missing archive evidence is never guessed.
 
 Change alerts describe meaningful work changes, not improvements in imported context. Enrichment, normalization, derived duplicates, and parser reinterpretation remain technical records with `user_visible = 0`. Locking a completed event clears active badges while preserving genuine visible history.
+
+## Note Timing And Display Windows
+
+All roster-note clocks use one strict token parser. Dotted AM/PM forms are valid time tokens, but isolated numeric fragments are not. The parser preserves the source note and a parser-only reinterpretation is never a user-visible Deputy change.
+
+When race-day maths is complete, the heading uses the calculated start, calculated finish, and calculated duration as one set. Otherwise it uses the complete Deputy roster set. A shared `display_window` object enforces that choice across views.
+
+Crew event audit rows remain granular in SQLite, but user-facing history is grouped by event group. Names are canonicalized before the message is generated so aliases do not produce duplicate-looking changes.

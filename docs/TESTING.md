@@ -35,6 +35,7 @@ python scripts\smoke_love_racing.py
 python scripts\smoke_extended_features.py
 python scripts\smoke_roster_integrity.py
 python scripts\smoke_track_map_classification.py
+python scripts\smoke_note_interpretation.py
 ```
 
 ## Manual App Checks

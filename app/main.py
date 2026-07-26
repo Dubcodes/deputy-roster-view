@@ -149,7 +149,7 @@ from .public_holidays import holiday_for_date
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.07.22.2"
+APP_BUILD = "2026.07.26.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -346,24 +346,38 @@ CHANGE_FIELD_LABELS = {
     "role": "Role",
 }
 HIDDEN_CHANGE_FIELDS = {"break_minutes", "paid_hours"}
+ROSTER_TIME_TOKEN_PATTERN = (
+    r"(?<![\d.])(?:"
+    r"\d{1,2}[.:]\d{2}\s*(?:am|pm)?|"
+    r"\d{1,2}\s+\d{2}\s*(?:am|pm)?|"
+    r"\d{3,4}\s*(?:am|pm)?|"
+    r"\d{1,2}\s*(?:am|pm)"
+    r")(?![\d.])"
+)
+ROSTER_TIME_TOKEN_RE = re.compile(ROSTER_TIME_TOKEN_PATTERN, re.IGNORECASE)
 TIMING_LINE_PATTERNS = (
     ("Trucks", re.compile(r"^trucks?\s+(.+)$", re.IGNORECASE)),
     ("Office", re.compile(r"^office\s+(.+)$", re.IGNORECASE)),
     ("Clow Place", re.compile(r"^clow\s+(?:place|pl)\s+(.+)$", re.IGNORECASE)),
     ("On track", re.compile(r"^on\s+track\s+(.+)$", re.IGNORECASE)),
     ("First cross", re.compile(r"^first\s+cross\s+(.+)$", re.IGNORECASE)),
+    ("Records", re.compile(r"^records?\s+(.+)$", re.IGNORECASE)),
+    ("On Air", re.compile(r"^on\s+air\s+(.+)$", re.IGNORECASE)),
+    ("Live", re.compile(r"^live\s+(.+)$", re.IGNORECASE)),
 )
 TIME_FIRST_TIMING_RE = re.compile(
-    r"^([0-9: ]{3,5}\s*(?:am|pm)?)\s+(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+cross|fx)\b(?:\s+(.+))?$",
+    rf"^({ROSTER_TIME_TOKEN_PATTERN})\s+"
+    r"(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+cross|fx|records?|on\s+air|live)"
+    r"\b(?:\s+(.+))?$",
     re.IGNORECASE,
 )
 INLINE_TIMING_RE = re.compile(
-    r"\b(first race|last race|first cross|live)\s+([0-9: ]{3,5}\s*(?:am|pm)?)",
+    rf"\b(first race|last race|first cross|records?|on\s+air|live)\s+({ROSTER_TIME_TOKEN_PATTERN})",
     re.IGNORECASE,
 )
 RACE_COUNT_RE = re.compile(r"\b(\d+)\s+races?\b", re.IGNORECASE)
 RACE_COUNT_WITH_TIMES_RE = re.compile(
-    r"\b(\d+)\s+races?\s+([0-9: ]{3,5}\s*(?:am|pm)?)\s*(?:[-–]|\|)\s*([0-9: ]{3,5}\s*(?:am|pm)?)",
+    rf"\b(\d+)\s+races?\s+({ROSTER_TIME_TOKEN_PATTERN})\s*(?:[-–]|\|)\s*({ROSTER_TIME_TOKEN_PATTERN})",
     re.IGNORECASE,
 )
 CREW_LINE_RE = re.compile(r"^([A-Za-z]{1,8}\d{0,3}|\d{3,4})\s+(.+)$")
@@ -379,6 +393,10 @@ TIMING_LABELS = {
     "on track": "On track",
     "first cross": "First cross",
     "fx": "FX",
+    "record": "Records",
+    "records": "Records",
+    "on air": "On air",
+    "live": "Live",
     "first race": "First race",
     "last race": "Last race",
 }
@@ -698,10 +716,10 @@ def description_lines(description: str) -> list[str]:
     return lines
 
 
-def normalise_roster_time(value: str) -> str:
-    cleaned = re.sub(r"\s+", "", value.strip().lower().replace(".", ""))
+def parse_roster_time_token(value: str) -> str:
+    cleaned = re.sub(r"\s+", "", str(value or "").strip().lower().rstrip(".,"))
     if not cleaned:
-        return value.strip()
+        return ""
     meridiem = ""
     if cleaned.endswith(("am", "pm")):
         meridiem = cleaned[-2:]
@@ -709,32 +727,47 @@ def normalise_roster_time(value: str) -> str:
 
     hour = ""
     minute = ""
-    if ":" in cleaned:
-        hour, minute = cleaned.split(":", 1)
+    if ":" in cleaned or "." in cleaned:
+        separator = ":" if ":" in cleaned else "."
+        hour, minute = cleaned.split(separator, 1)
     elif len(cleaned) <= 2:
         hour, minute = cleaned, "00"
     elif len(cleaned) == 3:
         hour, minute = cleaned[:1], cleaned[1:]
-    else:
+    elif len(cleaned) == 4:
         hour, minute = cleaned[:2], cleaned[2:4]
+    else:
+        return ""
 
     if not hour.isdigit() or not minute.isdigit():
-        return value.strip()
+        return ""
     hour_int = int(hour)
     minute_int = int(minute)
+    if meridiem and not 1 <= hour_int <= 12:
+        return ""
     if meridiem == "pm" and hour_int < 12:
         hour_int += 12
     elif meridiem == "am" and hour_int == 12:
         hour_int = 0
     if hour_int > 23 or minute_int > 59:
-        return value.strip()
+        return ""
     return f"{hour_int:02d}:{minute_int:02d}"
 
 
+def extract_roster_time_token(value: str) -> str:
+    text = str(value or "").strip()
+    if not text or re.fullmatch(r"\d+\s+races?", text, re.IGNORECASE):
+        return ""
+    match = ROSTER_TIME_TOKEN_RE.search(text)
+    return parse_roster_time_token(match.group(0)) if match else ""
+
+
+def normalise_roster_time(value: str) -> str:
+    return parse_roster_time_token(value)
+
+
 def clean_timing_value(value: str) -> str:
-    value = value.strip().rstrip(".,")
-    match = re.search(r"([0-9: ]{2,5}\s*(?:am|pm)?)", value, flags=re.IGNORECASE)
-    return normalise_roster_time(match.group(1)) if match else value
+    return extract_roster_time_token(value)
 
 
 def timing_lookup(summary: dict[str, object]) -> dict[str, str]:
@@ -999,6 +1032,8 @@ def parse_roster_summary(lines: list[str]) -> dict[str, object]:
     def add_timing(label: str, value: str) -> None:
         label = TIMING_LABELS.get(label.strip().lower(), label.strip())
         time_value = clean_timing_value(value)
+        if not time_value:
+            return
         if not any(item["label"].lower() == label.lower() and item["time"] == time_value for item in timings):
             timings.append({"label": label, "time": time_value})
 
@@ -1349,12 +1384,12 @@ def role_chain_label(segments: list[dict[str, str]]) -> str:
         if "->" in role:
             role_parts = [part.strip() for part in role.split("->") if part.strip()]
             real_parts = [part for part in role_parts if not role_is_context_only(part)]
-            role = " -> ".join(real_parts or role_parts) or "Shift"
+            role = " → ".join(real_parts or role_parts) or "Shift"
         if not labels or labels[-1] != role:
             labels.append(role)
     if not labels:
         labels = [segment.get("role") or "Shift" for segment in segments]
-    return " -> ".join(labels)
+    return " → ".join(labels)
 
 
 def role_is_vehicleish(role_label: str | None) -> bool:
@@ -1409,12 +1444,25 @@ def format_change_value(field_name: str, value: str | None) -> str:
     return value
 
 
+def compact_change_time_values(old_value: object, new_value: object) -> tuple[str, str] | None:
+    old_at = parse_iso_datetime(str(old_value or ""))
+    new_at = parse_iso_datetime(str(new_value or ""))
+    if not old_at or not new_at or old_at.date() != new_at.date():
+        return None
+    return old_at.strftime("%H:%M"), new_at.strftime("%H:%M")
+
+
 def decorate_change(row: object) -> dict[str, object]:
     change = dict(row)
     field_name = str(change.get("field_name") or "")
     change["field_label"] = CHANGE_FIELD_LABELS.get(field_name, field_name.replace("_", " ").title())
     change["old_display"] = format_change_value(field_name, str(change.get("old_value") or ""))
     change["new_display"] = format_change_value(field_name, str(change.get("new_value") or ""))
+    if field_name in {"start_at", "end_at"}:
+        change["field_label"] = "Start time" if field_name == "start_at" else "Finish time"
+        compact_values = compact_change_time_values(change.get("old_value"), change.get("new_value"))
+        if compact_values:
+            change["old_display"], change["new_display"] = compact_values
     return change
 
 
@@ -1441,8 +1489,28 @@ def merge_description_change_lines(shift: dict[str, object]) -> None:
     shift["race_day_calculation"] = build_race_day_calculation(shift)
 
 def build_shift_change_summary(changes: list[dict[str, object]]) -> str:
-    parts = []
-    for change in changes[:4]:
+    parts: list[str] = []
+    time_changes: dict[str, dict[str, object]] = {}
+    for change in changes:
+        field_name = str(change.get("field_name") or "")
+        if field_name in {"start_at", "end_at"}:
+            time_changes.setdefault(field_name, change)
+    compact_times = []
+    for field_name, label in (("start_at", "Start"), ("end_at", "Finish")):
+        change = time_changes.get(field_name)
+        if change:
+            compact_times.append(
+                f"{label} {change.get('old_display') or 'blank'} → {change.get('new_display') or 'blank'}"
+            )
+    if compact_times:
+        parts.append(" · ".join(compact_times))
+
+    remaining = [
+        change for change in changes
+        if str(change.get("field_name") or "") not in {"start_at", "end_at"}
+    ]
+    visible_limit = max(0, 4 - len(time_changes))
+    for change in remaining[:visible_limit]:
         label = str(change.get("field_label") or "Change")
         field_name = str(change.get("field_name") or "")
         old_value = str(change.get("old_display") or "blank")
@@ -1453,8 +1521,9 @@ def build_shift_change_summary(changes: list[dict[str, object]]) -> str:
             parts.append(f"{label} changed")
         else:
             parts.append(f"{label}: {old_value} → {new_value}")
-    if len(changes) > 4:
-        parts.append(f"+{len(changes) - 4} more")
+    shown_count = len(time_changes) + min(len(remaining), visible_limit)
+    if len(changes) > shown_count:
+        parts.append(f"+{len(changes) - shown_count} more")
     return "; ".join(parts)
 
 
@@ -1647,22 +1716,26 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
 def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object]) -> dict[str, object]:
     rows: list[dict[str, str]] = []
     wanted_patterns = (
-        re.compile(r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+cross|fx)\b", re.IGNORECASE),
-        re.compile(r"\b(records|live|first race|last race|\d+\s+races?)\b", re.IGNORECASE),
+        re.compile(
+            r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+cross|fx|records?|on\s+air|live)\b",
+            re.IGNORECASE,
+        ),
+        re.compile(r"\b(records?|on\s+air|live|first race|last race|\d+\s+races?)\b", re.IGNORECASE),
     )
     simple_timing_re = re.compile(
-        r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+cross|fx)\s+(.+)$",
+        r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+cross|fx|records?|on\s+air|live)\s+(.+)$",
         re.IGNORECASE,
     )
     paired_timing_re = re.compile(
-        r"\b(records|live|first\s+cross|first\s+race|last\s+race|fx)\s+([0-9: ]{2,5}\s*(?:am|pm)?)",
+        rf"\b(records?|on\s+air|live|first\s+cross|first\s+race|last\s+race|fx)\s+"
+        rf"({ROSTER_TIME_TOKEN_PATTERN})",
         re.IGNORECASE,
     )
 
     def add_row(label: str, value: str) -> None:
         label_text = label.strip()
         value_text = value.strip()
-        if label_text and value_text and {"label": label_text, "value": value_text} not in rows:
+        if label_text and {"label": label_text, "value": value_text} not in rows:
             rows.append({"label": label_text, "value": value_text})
 
     def display_label(label: str) -> str:
@@ -1677,7 +1750,9 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
             "first cross": "First cross",
             "first race": "First race",
             "last race": "Last race",
+            "record": "Records",
             "records": "Records",
+            "on air": "On air",
             "live": "Live",
             "fx": "FX",
         }.get(label_key, label.strip())
@@ -1695,26 +1770,39 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
             continue
         if not any(pattern.search(line_text) for pattern in wanted_patterns):
             continue
-        if re.match(r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track)\b", line_text, re.IGNORECASE):
+        if re.match(
+            r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track)\b",
+            line_text,
+            re.IGNORECASE,
+        ):
             line_text = re.split(r"\s+[-–]\s+", line_text, maxsplit=1)[0].strip()
 
         race_times = RACE_COUNT_WITH_TIMES_RE.search(line_text)
         if race_times:
-            add_row(
-                f"{race_times.group(1)} races",
-                f"{display_time(race_times.group(2))} | {display_time(race_times.group(3))}",
-            )
+            first_race = display_time(race_times.group(2))
+            last_race = display_time(race_times.group(3))
+            if first_race and last_race:
+                add_row(f"{race_times.group(1)} races", f"{first_race} | {last_race}")
+            continue
+
+        race_count = RACE_COUNT_RE.search(line_text)
+        if race_count:
+            add_row(f"{race_count.group(1)} races", "")
             continue
 
         paired_timings = list(paired_timing_re.finditer(line_text))
         if paired_timings:
             for match in paired_timings:
-                add_row(display_label(match.group(1)), display_time(match.group(2)))
+                value = display_time(match.group(2))
+                if value:
+                    add_row(display_label(match.group(1)), value)
             continue
 
         simple_timing = simple_timing_re.match(line_text)
         if simple_timing:
-            add_row(display_label(simple_timing.group(1)), display_time(simple_timing.group(2)))
+            value = display_time(simple_timing.group(2))
+            if value:
+                add_row(display_label(simple_timing.group(1)), value)
 
     return {
         "rows": rows,
@@ -1724,6 +1812,11 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
 
 def apply_timing_math(shift: dict[str, object]) -> None:
     break_minutes = int(shift.get("break_minutes") or 0)
+    roster_start_label = str(shift.get("start_label") or "")
+    roster_end_label = str(shift.get("end_label") or "")
+    roster_time_range = str(shift.get("time_range") or "")
+    roster_hours = shift.get("raw_hours")
+    roster_hours_label = str(shift.get("raw_label") or format_hours(roster_hours))
     segments = []
     for segment in shift.get("role_segments") or []:
         if not isinstance(segment, dict):
@@ -1744,18 +1837,46 @@ def apply_timing_math(shift: dict[str, object]) -> None:
     if race_day.get("available") and race_day.get("complete", True):
         shift["calculated_hours"] = race_day.get("hours")
         shift["calculated_label"] = race_day.get("hours_label")
-        shift["display_hours"] = race_day.get("hours")
-        shift["display_hours_label"] = race_day.get("hours_label")
+        display_window = {
+            "source": "calculated",
+            "start_label": str(race_day.get("start_label") or ""),
+            "end_label": str(race_day.get("end_label") or ""),
+            "hours": race_day.get("hours"),
+            "hours_label": str(race_day.get("hours_label") or ""),
+        }
     else:
         shift["calculated_hours"] = None
         shift["calculated_label"] = ""
-        shift["display_hours"] = shift.get("paid_hours")
-        shift["display_hours_label"] = shift.get("paid_label") or format_hours(shift.get("paid_hours"))
+        display_window = {
+            "source": "roster",
+            "start_label": roster_start_label,
+            "end_label": roster_end_label,
+            "hours": roster_hours,
+            "hours_label": roster_hours_label,
+        }
+    display_time_range = (
+        f"{display_window['start_label']}–{display_window['end_label']}"
+        if display_window["start_label"] and display_window["end_label"]
+        else roster_time_range
+    )
+    if (
+        display_window["source"] == "roster"
+        and roster_time_range.endswith(" +1d")
+        and not display_time_range.endswith(" +1d")
+    ):
+        display_time_range += " +1d"
+    display_window["time_range"] = display_time_range
+    shift["display_window"] = display_window
+    shift["display_start_label"] = display_window["start_label"]
+    shift["display_end_label"] = display_window["end_label"]
+    shift["time_range"] = display_time_range
+    shift["display_hours"] = display_window["hours"]
+    shift["display_hours_label"] = display_window["hours_label"]
     shift["timing_math"] = {
         "segments": segments,
-        "start_label": shift.get("start_label") or "",
-        "end_label": shift.get("end_label") or "",
-        "raw_label": shift.get("raw_label") or format_hours(shift.get("raw_hours")),
+        "start_label": roster_start_label,
+        "end_label": roster_end_label,
+        "raw_label": roster_hours_label,
         "paid_label": shift.get("paid_label") or format_hours(shift.get("paid_hours")),
         "break_minutes": break_minutes,
         "formula": formula,
@@ -2319,7 +2440,7 @@ def person_focused_schedule_changes(items: list[dict[str, object]]) -> None:
         if old_name and old_name.lower() != current_name.lower():
             item["assignment_changed"] = True
             item["changed"] = True
-            item["assignment_change_summary"] = f"{position}: {old_name} -> {current_name}"
+            item["assignment_change_summary"] = f"{position}: {old_name} → {current_name}"
         elif item.get("assignment_changed") and str(item.get("assignment_change_summary") or "").startswith("Position:"):
             item["assignment_change_summary"] = f"{position}: now {current_name}"
 
@@ -2500,7 +2621,7 @@ def replacement_change_summary(old_item: dict[str, object], new_item: dict[str, 
     area_label = str(new_item.get("area_display") or old_item.get("area_display") or "Position").strip()
     if old_name == new_name:
         return str(new_item.get("assignment_change_summary") or old_item.get("assignment_change_summary") or "Changed")
-    return f"{area_label}: {old_name} -> {new_name}"
+    return f"{area_label}: {old_name} → {new_name}"
 
 
 def dedupe_schedule_items(items: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -2886,8 +3007,64 @@ def reconcile_personal_assignment_evidence(
     ))
 
 
+def canonical_crew_name(
+    name: object,
+    employee_id: object = None,
+    identities: list[dict[str, object]] | None = None,
+) -> str:
+    display_name = re.sub(r"\s+", " ", str(name or "").strip())
+    if not display_name:
+        return "TBC"
+    identity_rows = identities if identities is not None else crew_identity_records()
+    employee_id_value = safe_int(employee_id)
+    name_key = role_display_key(display_name)
+    matches = []
+    for record in identity_rows:
+        record_names = {
+            role_display_key(str(record.get("canonical_display_name") or "")),
+            role_display_key(str(record.get("current_deputy_name") or "")),
+            *{
+                role_display_key(str(alias or ""))
+                for alias in list(record.get("aliases") or [])
+            },
+        }
+        if (
+            employee_id_value is not None
+            and safe_int(record.get("deputy_employee_id")) == employee_id_value
+        ) or (employee_id_value is None and name_key and name_key in record_names):
+            matches.append(record)
+    if len(matches) == 1:
+        return str(matches[0].get("canonical_display_name") or display_name)
+    return display_name
+
+
+def event_change_position(change: dict[str, object], field_name: str) -> str:
+    return next(
+        (
+            str(position).strip()
+            for position in list(change.get(field_name) or [])
+            if str(position).strip()
+        ),
+        "",
+    )
+
+
+def event_change_display_line(change: dict[str, object]) -> str:
+    change_type = str(change.get("change_type") or "")
+    old_position = event_change_position(change, "old_positions")
+    new_position = event_change_position(change, "new_positions")
+    old_name = str(change.get("old_employee_name") or "TBC")
+    new_name = str(change.get("new_employee_name") or "TBC")
+    if change_type == "move":
+        return f"{new_name} moved {old_position} → {new_position}"
+    if change_type in {"replacement", "opened", "filled"}:
+        return f"{new_position or old_position or 'Position'} — {old_name} → {new_name}"
+    return str(change.get("display_summary") or "Crew assignment changed.")
+
+
 def decorate_event_changes(rows: list[object]) -> list[dict[str, object]]:
     changes = []
+    identities = crew_identity_records()
     for row in rows:
         item = dict(row)
         for field_name in ("old_positions", "new_positions"):
@@ -2896,58 +3073,163 @@ def decorate_event_changes(rows: list[object]) -> list[dict[str, object]]:
             except (TypeError, ValueError, json.JSONDecodeError):
                 values = []
             item[field_name] = [str(value) for value in values if str(value).strip()]
+        item["old_employee_name"] = canonical_crew_name(
+            item.get("old_employee_name"), item.get("old_employee_id"), identities
+        )
+        item["new_employee_name"] = canonical_crew_name(
+            item.get("new_employee_name"), item.get("new_employee_id"), identities
+        )
+        item["inline_summary"] = str(item.get("inline_summary") or "").replace(" -> ", " → ")
+        item["display_summary"] = event_change_display_line(item)
         item["changed_at_label"] = format_datetime(str(item.get("changed_at") or ""), "%d %b %H:%M")
         changes.append(item)
     return changes
 
 
+def group_event_changes(changes: list[dict[str, object]]) -> list[dict[str, object]]:
+    grouped: dict[str, list[dict[str, object]]] = {}
+    order: list[str] = []
+    for index, change in enumerate(changes):
+        group_id = str(change.get("group_id") or f"legacy-{index}")
+        if group_id not in grouped:
+            grouped[group_id] = []
+            order.append(group_id)
+        grouped[group_id].append(change)
+
+    presentations: list[dict[str, object]] = []
+    for group_id in order:
+        rows = grouped[group_id]
+        consumed: set[int] = set()
+        lines: list[str] = []
+        inline_changes: list[dict[str, str]] = []
+        moves = [
+            (index, change)
+            for index, change in enumerate(rows)
+            if str(change.get("change_type") or "") == "move"
+        ]
+        for move_index, move in moves:
+            moved_name = str(move.get("new_employee_name") or move.get("old_employee_name") or "Crew member")
+            old_position = event_change_position(move, "old_positions")
+            new_position = event_change_position(move, "new_positions")
+            replacement_index = next(
+                (
+                    index
+                    for index, change in enumerate(rows)
+                    if index not in consumed
+                    and str(change.get("change_type") or "") == "replacement"
+                    and schedule_label_key(event_change_position(change, "new_positions"))
+                    == schedule_label_key(new_position)
+                    and schedule_label_key(str(change.get("new_employee_name") or ""))
+                    == schedule_label_key(moved_name)
+                ),
+                None,
+            )
+            opened_index = next(
+                (
+                    index
+                    for index, change in enumerate(rows)
+                    if index not in consumed
+                    and str(change.get("change_type") or "") == "opened"
+                    and schedule_label_key(event_change_position(change, "old_positions"))
+                    == schedule_label_key(old_position)
+                    and schedule_label_key(str(change.get("old_employee_name") or ""))
+                    == schedule_label_key(moved_name)
+                ),
+                None,
+            )
+            replaced_name = (
+                str(rows[replacement_index].get("old_employee_name") or "")
+                if replacement_index is not None
+                else ""
+            )
+            move_line = f"{moved_name} moved {old_position} → {new_position}"
+            if replaced_name and schedule_label_key(replaced_name) not in {"tbc", "openshift"}:
+                move_line += f", replacing {replaced_name}"
+            lines.append(move_line)
+            target_summary = f"{moved_name} moved from {old_position}"
+            if replaced_name and schedule_label_key(replaced_name) not in {"tbc", "openshift"}:
+                target_summary += f", replacing {replaced_name}"
+            inline_changes.append(
+                {"position_key": schedule_label_key(new_position), "summary": target_summary}
+            )
+            source_summary = f"{moved_name} moved to {new_position}"
+            if opened_index is not None:
+                lines.append(f"{old_position} is now TBC")
+                source_summary += "; position now TBC"
+            inline_changes.append(
+                {"position_key": schedule_label_key(old_position), "summary": source_summary}
+            )
+            consumed.add(move_index)
+            if replacement_index is not None:
+                consumed.add(replacement_index)
+            if opened_index is not None:
+                consumed.add(opened_index)
+
+        for index, change in enumerate(rows):
+            if index not in consumed:
+                display_line = event_change_display_line(change)
+                append_unique(lines, display_line)
+                positions = list(change.get("new_positions") or []) or list(
+                    change.get("old_positions") or []
+                )
+                inline_summary = str(change.get("inline_summary") or "").strip()
+                if not inline_summary:
+                    inline_summary = display_line.split(" — ", 1)[-1]
+                for position in positions:
+                    position_key = schedule_label_key(str(position or ""))
+                    if not position_key or any(
+                        item.get("position_key") == position_key
+                        for item in inline_changes
+                    ):
+                        continue
+                    inline_changes.append(
+                        {"position_key": position_key, "summary": inline_summary}
+                    )
+
+        changed_at = latest_iso_datetime(*(change.get("changed_at") for change in rows))
+        presentations.append(
+            {
+                "group_id": group_id,
+                "changed_at": changed_at,
+                "changed_at_label": format_datetime(changed_at, "%d %b %H:%M"),
+                "changed_since_viewed": any(
+                    bool(int(change.get("changed_since_viewed") or 0)) for change in rows
+                ),
+                "lines": lines,
+                "inline_changes": inline_changes,
+            }
+        )
+    return presentations
+
+
 def apply_event_changes_to_schedule_people(
     people: list[dict[str, object]],
-    changes: list[dict[str, object]],
+    change_groups: list[dict[str, object]],
 ) -> None:
-    for change in changes:
-        if not bool(int(change.get("changed_since_viewed") or 0)):
+    for change_group in change_groups:
+        if not bool(change_group.get("changed_since_viewed")):
             continue
-        new_employee_id = safe_int(change.get("new_employee_id"))
-        new_name_key = schedule_label_key(str(change.get("new_employee_name") or ""))
-        new_positions = {
-            schedule_label_key(position)
-            for position in list(change.get("new_positions") or [])
-            if position
-        }
-        change_type = str(change.get("change_type") or "")
-        for person in people:
-            person_positions = {
-                schedule_label_key(position)
-                for position in str(person.get("position_label") or "").split(",")
-                if position.strip()
-            }
-            same_person = (
-                new_employee_id is not None
-                and safe_int(person.get("employee_id")) == new_employee_id
-            ) or (
-                new_employee_id is None
-                and new_name_key
-                and schedule_label_key(str(person.get("employee_name") or "")) == new_name_key
-            )
-            if change_type == "opened":
-                matches = bool(person_positions & new_positions) and (
-                    bool(person.get("placeholder"))
-                    or schedule_label_key(str(person.get("employee_name") or "")) in {"tbc", "openshift"}
-                )
-            else:
-                matches = same_person and (not new_positions or bool(person_positions & new_positions))
-            if not matches:
+        for inline_change in list(change_group.get("inline_changes") or []):
+            position_key = str(inline_change.get("position_key") or "")
+            if not position_key:
                 continue
-            person["changed"] = True
-            summaries = [part.strip() for part in str(person.get("change_summary") or "").split(";") if part.strip()]
-            append_unique(summaries, str(change.get("inline_summary") or change.get("display_summary") or "Changed"))
-            person["change_summary"] = "; ".join(summaries)
-            person["change_time_label"] = format_datetime(
-                latest_iso_datetime(person.get("last_changed_at"), change.get("changed_at")),
-                "%d %b %H:%M",
-            )
-            break
+            for person in people:
+                person_positions = {
+                    schedule_label_key(position)
+                    for position in str(person.get("position_label") or "").split(",")
+                    if position.strip()
+                }
+                if position_key not in person_positions:
+                    continue
+                person["changed"] = True
+                person["change_summary"] = str(inline_change.get("summary") or "Changed")
+                person["change_time_label"] = format_datetime(
+                    latest_iso_datetime(
+                        person.get("last_changed_at"), change_group.get("changed_at")
+                    ),
+                    "%d %b %H:%M",
+                )
+                break
 
 def shifts_are_vehicle_travel_context(shifts: list[dict[str, object]]) -> bool:
     visible_shifts = [shift for shift in shifts if not int(shift.get("deleted_from_source") or 0)]
@@ -5215,6 +5497,7 @@ def day_view(
                 "deputy_schedule_changed": False,
                 "deputy_schedule_changes": [],
                 "deputy_event_changes": [],
+                "deputy_event_change_groups": [],
                 "deputy_assignment_history": [],
                 "day_total": 0,
                 "has_changed": False,
@@ -5323,19 +5606,25 @@ def day_view(
             location_ids=schedule_location_ids or None,
         )
     )
+    deputy_event_change_groups = group_event_changes(deputy_event_changes)
     if deputy_schedule_rows:
-        apply_event_changes_to_schedule_people(deputy_schedule_people, deputy_event_changes)
+        apply_event_changes_to_schedule_people(deputy_schedule_people, deputy_event_change_groups)
     for shift in shifts:
         if str(shift.get("header_vehicle_label") or "").strip():
             continue
         shift["header_vehicle_label"] = vehicle_for_user_from_schedule(deputy_schedule_people, user, shift)
     deputy_schedule_changed = any(bool(person.get("changed")) for person in deputy_schedule_people)
     deputy_schedule_changes = [person for person in deputy_schedule_people if person.get("changed")]
+    change_identities = crew_identity_records()
     deputy_assignment_history = [
         {
             "position_label": str(row["position_label"] or "Position"),
-            "old_employee_name": str(row["old_employee_name"] or "TBC"),
-            "new_employee_name": str(row["new_employee_name"] or "TBC"),
+            "old_employee_name": canonical_crew_name(
+                row["old_employee_name"], identities=change_identities
+            ),
+            "new_employee_name": canonical_crew_name(
+                row["new_employee_name"], identities=change_identities
+            ),
             "changed_at": row["changed_at"],
             "changed_at_label": format_datetime(row["changed_at"], "%d %b %H:%M"),
         }
@@ -5402,6 +5691,7 @@ def day_view(
             "deputy_schedule_changed": deputy_schedule_changed,
             "deputy_schedule_changes": deputy_schedule_changes,
             "deputy_event_changes": deputy_event_changes,
+            "deputy_event_change_groups": deputy_event_change_groups,
             "deputy_assignment_history": deputy_assignment_history,
             "day_total": day_total,
             "has_changed": has_changed,

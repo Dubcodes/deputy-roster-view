@@ -83,6 +83,8 @@ When parsing vehicle allocations from roster notes, three-digit tokens such as `
 
 Roster notes can put the clock before the timing label, for example `0845 Trucks`, `0900 Clow Place`, or `0930 On track`. These are timing rows, not vehicle rows, even if extra people or vehicle allocations appear later in the same line.
 
+Roster-note clocks use one validated parser. It accepts dotted or colon-separated 12-hour values (`8.15am`, `8:15 am`), compact values (`815am`, `0815`, `1635`), spaced values (`8 15 am`), and ordinary 24-hour values (`16:15`). A dotted token is parsed whole before any digits are considered. Impossible clocks, race counts, vehicle numbers, addresses, and partial fragments are not timings. Parsing never rewrites the raw Deputy note.
+
 Crew changed badges should only mean the person/position/open-slot assignment changed. Do not badge timing-only crew schedule changes.
 
 Crew change text should be position-centred but person-focused, for example `Side 1: Nate -> Leger`. When Deputy reports a chain of position moves, use those moves to reconstruct who previously occupied each current position instead of showing only `Position: Head On -> Side 1`.
@@ -90,6 +92,8 @@ Crew change text should be position-centred but person-focused, for example `Sid
 Persist assignment changes separately from the current schedule row. A later sync must not erase the previous person's name from `old person -> new person` history.
 
 Authoritative crew captures are compared as complete event snapshots by date, Deputy location, and overlapping production window. Use employee ID first, then the canonical crew directory or a unique normalized name. This comparison must preserve connected moves, replacements, open/filled positions, and Sound/VT merge or split changes even when Deputy recreates rows with different shift IDs. Repeating the same effective snapshot must not create another history event.
+
+Resolve crew aliases to the canonical identity before creating user-facing change text. Related move, replacement, and opened-position records in one event group should read as one operational story, while the individual audit rows remain stored.
 
 Generic schedule labels such as `Vehicle` or `Vehicles` are context, not vehicle names. If a specific allocation such as `684`, `Rav91`, or `OB` is known, show only that specific vehicle.
 
@@ -110,6 +114,8 @@ One complete own-roster capture that omits a future shift marks it possibly miss
 Completed events lock after the latest known finish plus six hours in Pacific/Auckland, or early the following morning when no finish is known. A locked day keeps its personal shifts, people, vehicles, notes, calculations, and history. Later blank fields may be enriched, but missing rows cannot prune it and conflicting nonblank data becomes a historical discrepancy rather than rewriting the snapshot. Locking clears active alert badges, not stored history.
 
 Visible changes are operational facts: substantive track, role, start, finish, assignment, cancellation, existing-note, or confirmed vehicle changes. Initial enrichment, Web-to-real context, spelling/presentation normalization, parser reinterpretation, and duplicate derived-hours changes remain technical audit only.
+
+The visible shift heading uses one time source. A complete calculated race-day window supplies its start, finish, and duration together. If calculation is incomplete or unavailable, all three values come from the Deputy roster window. Never mix a calculated duration with a roster finish. Parser reinterpretation of an unchanged raw note remains technical and must not set a Changed badge.
 
 If Deputy has known schedule areas for the user's race-day location but no current employee row for one of the normal production positions, show a muted `TBC` placeholder row. This makes likely contractor/unknown slots visible without pretending the person is known. Keep this inferred from Deputy's area list for now; do not add a heavy manual region/default-position UI yet.
 

@@ -247,16 +247,21 @@
           </section>
         {% endif %}
 
-        {% if shift.changes or (loop.first and (deputy_schedule_changes or deputy_event_changes or deputy_assignment_history)) %}
+        {% if shift.changes or (loop.first and (deputy_schedule_changes or deputy_event_change_groups or deputy_assignment_history)) %}
           <details class="change-panel">
             <summary>Change History</summary>
             <ul class="change-lines">
-              {% if loop.first and deputy_event_changes %}
-                {% for change in deputy_event_changes %}
+              {% if loop.first and deputy_event_change_groups %}
+                {% for change_group in deputy_event_change_groups %}
                   <li>
-                    <span><strong>{{ change.display_summary }}</strong></span>
-                    <small>{{ change.changed_at_label }}</small>
+                    <span><strong>Crew changes</strong></span>
+                    <small>{{ change_group.changed_at_label }}</small>
                   </li>
+                  {% for line in change_group.lines %}
+                    <li>
+                      <span><strong>{{ line }}</strong></span>
+                    </li>
+                  {% endfor %}
                 {% endfor %}
               {% endif %}
               {% if loop.first and deputy_schedule_changes %}
@@ -287,7 +292,7 @@
                 <li>
                   <span>
                     <strong>{{ change.field_label }}</strong>
-                    {{ change.old_display }} -> {{ change.new_display }}
+                    — {{ change.old_display }} → {{ change.new_display }}
                   </span>
                   <small>{{ change.changed_at|datetime }}</small>
                 </li>
@@ -299,7 +304,7 @@
         <details class="maths-panel maths-panel-compact">
           <summary>
             {% if shift.timing_math.race_day.available and shift.timing_math.race_day.complete %}
-              Start {{ shift.timing_math.race_day.start_label }}, finish {{ shift.timing_math.race_day.end_label }} = {{ shift.timing_math.race_day.hours_label }}
+              Start {{ shift.display_window.start_label }}, finish {{ shift.display_window.end_label }} = {{ shift.display_window.hours_label }}
             {% elif shift.timing_math.race_day.available %}
               Partial race-day calculation · {{ shift.timing_math.race_day.warning }}
             {% else %}

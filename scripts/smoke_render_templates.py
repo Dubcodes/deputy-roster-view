@@ -33,16 +33,16 @@ THEME_VALUES = {
 }
 
 SIMPLIFIED_CALCULATION_LINES = [
-    {"label": "Start · Office / Clow Place", "value": "09:30"},
-    {"label": "On track", "value": "10:00"},
-    {"label": "Outbound travel", "value": "0h 30m"},
-    {"label": "Deputy roster start", "value": "10:00"},
-    {"label": "Last race", "value": "16:24"},
-    {"label": "Race cleared", "value": "16:30"},
-    {"label": "Pack-up done", "value": "17:30"},
-    {"label": "Return travel", "value": "0h 30m"},
-    {"label": "Finish · Office / Clow Place", "value": "18:00"},
-    {"label": "Calculated total", "value": "8h 30m"},
+    {"label": "Start · Office / Clow Place", "value": "08:30"},
+    {"label": "On track", "value": "09:30"},
+    {"label": "Outbound travel", "value": "1h"},
+    {"label": "Deputy roster start", "value": "09:30"},
+    {"label": "Last race", "value": "16:35"},
+    {"label": "Race cleared", "value": "16:45"},
+    {"label": "Pack-up done", "value": "17:45"},
+    {"label": "Return travel", "value": "1h"},
+    {"label": "Finish · Office / Clow Place", "value": "18:45"},
+    {"label": "Calculated total", "value": "10h 15m"},
 ]
 
 
@@ -88,6 +88,13 @@ def render_day_template() -> None:
         deputy_schedule_people=[],
         deputy_schedule_changes=[],
         deputy_event_changes=[],
+        deputy_event_change_groups=[{
+            "changed_at_label": "25 Jul 20:45",
+            "lines": [
+                "Nate moved CCU2 → Head On, replacing Campbell Stephens",
+                "CCU2 is now TBC",
+            ],
+        }],
         deputy_assignment_history=[],
         deputy_schedule_label="Deputy Schedule",
         track_maps=[
@@ -104,7 +111,13 @@ def render_day_template() -> None:
                 "id": 1,
                 "deleted_from_source": 0,
                 "colour_style": "--shift-location-colour: var(--location-colour-8); --location-colour: var(--location-colour-8);",
-                "time_range": "08:30-17:45",
+                "time_range": "08:30–18:45",
+                "display_window": {
+                    "source": "calculated",
+                    "start_label": "08:30",
+                    "end_label": "18:45",
+                    "hours_label": "10h 15m",
+                },
                 "role_chain_label": "Sound/VT",
                 "role_full_label": "Sound/VT",
                 "role_label": "SVT",
@@ -113,12 +126,12 @@ def render_day_template() -> None:
                 "race_type_label": "Thoroughbred racing",
                 "location": "12 Sir Tristram Avenue",
                 "changed_since_viewed": 1,
-                "change_summary_text": "Rostered hours changed",
+                "change_summary_text": "Start 09:00 → 09:30 · Finish 18:00 → 18:30",
                 "source_status": "",
                 "timing_adjustment_labels": [],
                 "start_at": "2026-06-13T08:30:00+12:00",
                 "end_at": "2026-06-13T17:45:00+12:00",
-                "display_hours_label": "9h 15m",
+                "display_hours_label": "10h 15m",
                 "source_link": "",
                 "race_day_summary": {
                     "has_items": True,
@@ -132,7 +145,20 @@ def render_day_template() -> None:
                 },
                 "description_lines": ["10 races 1110 | 1624"],
                 "roster_summary": {"has_structured": True},
-                "changes": [],
+                "changes": [
+                    {
+                        "field_label": "Start time",
+                        "old_display": "09:00",
+                        "new_display": "09:30",
+                        "changed_at": "2026-07-25T20:45:00+12:00",
+                    },
+                    {
+                        "field_label": "Finish time",
+                        "old_display": "18:00",
+                        "new_display": "18:30",
+                        "changed_at": "2026-07-25T20:45:00+12:00",
+                    },
+                ],
                 "timing_math": {
                     "segments": [],
                     "start_label": "08:30",
@@ -164,6 +190,18 @@ def render_day_template() -> None:
         raise AssertionError("Day template did not render simplified start/finish wording.")
     if "Deputy roster start" not in html:
         raise AssertionError("Day template hid an operational timing discrepancy.")
+    if "Nate moved CCU2 → Head On, replacing Campbell Stephens" not in html or "CCU2 is now TBC" not in html:
+        raise AssertionError("Day template did not render grouped crew-change history.")
+    if (
+        "Start 09:00 → 09:30 · Finish 18:00 → 18:30" not in html
+        or "Start time" not in html
+        or "09:00 → 09:30" not in html
+        or "Finish time" not in html
+        or "18:00 → 18:30" not in html
+    ):
+        raise AssertionError("Day template did not render compact personal roster changes.")
+    if "08:30–18:45" not in html or "10h 15m" not in html:
+        raise AssertionError("Day template did not render one consistent calculated display window.")
     if any(label in html for label in ("Start origin evidence", "Finish destination evidence", "roster base timing")):
         raise AssertionError("Day template rendered internal timeline evidence labels.")
 
@@ -189,9 +227,10 @@ def render_month_template() -> None:
         "role_chain_label": "Sound/VT",
         "role_label": "SVT",
         "title": "[TRAP-T] SVT",
-        "start_label": "08:30",
-        "time_range": "08:30-17:45",
-        "display_hours_label": "9h 15m",
+        "start_label": "09:30",
+        "display_start_label": "08:30",
+        "time_range": "08:30–18:45",
+        "display_hours_label": "10h 15m",
         "race_type_label": "Thoroughbred racing",
     }
     day = {
@@ -230,6 +269,16 @@ def render_month_template() -> None:
         raise AssertionError("Month date should render exactly one holiday marker regardless of shift count.")
     if 'class="calendar-date-heading"' not in html:
         raise AssertionError("Month holiday marker is not in reserved date-heading layout space.")
+    if (
+        "10h 15m" not in html
+        or html.count("08:30") < 2
+        or "Sound/VT · 08:30" not in html
+    ):
+        raise AssertionError(
+            f"Month/list/Next Up mixed roster and calculated display sources: "
+            f"08:30={html.count('08:30')}, hours={'10h 15m' in html}, "
+            f"next={'Sound/VT · 08:30' in html}"
+        )
 
     list_html = template.render(
         request=SimpleNamespace(url=SimpleNamespace(path="/month", query="scope=global"), cookies={}),
@@ -242,6 +291,8 @@ def render_month_template() -> None:
         raise AssertionError("Shared/global month list did not render the holiday marker.")
     if 'class="list-day-heading"' not in list_html:
         raise AssertionError("List holiday marker is not in reserved date-heading layout space.")
+    if "08:30–18:45" not in list_html or "10h 15m" not in list_html:
+        raise AssertionError("List view mixed roster and calculated display sources.")
 
 
 def render_timesheet_template() -> None:
@@ -256,15 +307,23 @@ def render_timesheet_template() -> None:
                 "iso": "2026-02-06", "date_label": "Fri 06 Feb", "total": 8.5,
                 "locations": "Te Rapa", "notes": [],
                 "shifts": [{
-                    "track_label": "Te Rapa", "time_range": "09:30-18:00", "display_hours_label": "8h 30m",
+                    "track_label": "Te Rapa", "time_range": "08:30–18:45", "display_hours_label": "10h 15m",
+                    "display_window": {
+                        "source": "calculated", "start_label": "08:30",
+                        "end_label": "18:45", "hours_label": "10h 15m",
+                    },
                     "timing_math": {"race_day": {
-                        "available": True, "complete": True, "start_label": "09:30",
-                        "end_label": "18:00", "hours_label": "8h 30m",
+                        "available": True, "complete": True, "start_label": "08:30",
+                        "end_label": "18:45", "hours_label": "10h 15m",
                         "lines": SIMPLIFIED_CALCULATION_LINES,
                         "formula": "Office / Clow Place to Te Rapa and return.",
                     }},
                 }, {
                     "track_label": "Unconfigured Track", "time_range": "09:30-", "display_hours_label": "Incomplete",
+                    "display_window": {
+                        "source": "roster", "start_label": "09:30",
+                        "end_label": "", "hours_label": "Incomplete",
+                    },
                     "timing_math": {"race_day": {
                         "available": True, "complete": False, "start_label": "09:30",
                         "end_label": "", "hours_label": "Incomplete",
