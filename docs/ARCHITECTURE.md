@@ -175,3 +175,11 @@ Admin workday drafts use `roster_days` for event metadata, `workday_assignments`
 The builder supports race, office, travel, training, and other work days. Race-only timing, Love Racing, and map behavior is guarded by `day_type == 'race_day'`. `published_rosters_by_date()` is the shared projection used by personal and global calendars, day pages, Next Up, and timesheets. It also normalizes historical snapshots that predate structured transport.
 
 Legacy `roster_day_assignments` rows migrate once into `workday_assignments`, retaining their source row ID for idempotency. New saves never write the legacy table. Manual events retain their own ID and provenance and are never merged with Deputy rows merely because their date matches.
+
+## Canonical Crew Identity
+
+`app_users` owns authentication, credentials, trusted devices, sync state, and the account header name. `crew_people` owns the roster identity, Deputy employee ID, canonical crew name, aliases, and manual assignments. `app_user_deputy_identity` records the employee ID established by that account's authenticated personal capture; shared schedule captures are never ownership evidence.
+
+An unambiguous employee-ID match may link the account directly or merge an account-only synthetic person into the Deputy-backed canonical person. Merges are transactional, audited in `crew_identity_merge_audit`, and retire the source through `merged_into_person_id` rather than deleting it. Runtime assignment reads follow that redirect, while immutable published JSON snapshots remain untouched.
+
+`workday_user_visibility` materializes personal access for published manual workdays from canonical assignment people and their linked active app users. It is rebuilt after publication, identity repair, and later account linking. This lets existing workdays become visible without republishing or creating a content change.

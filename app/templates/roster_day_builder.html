@@ -11,7 +11,7 @@
         <select name="assignee" data-person-select>
           <option value="">Choose a person</option>
           {% for person in crew_options %}
-            <option value="{{ person.value }}"{% if assignment.person_id == person.person_id or (not assignment.person_id and assignment.user_id == person.user_id) %} selected{% endif %}>{{ person.label }}{% if not person.user_id %} · no app account{% endif %}</option>
+            <option value="{{ person.value }}"{% if assignment.person_id == person.person_id or (not assignment.person_id and assignment.user_id == person.user_id) %} selected{% endif %}>{{ person.label }} · {{ person.meta }}</option>
           {% endfor %}
         </select>
       </label>
@@ -91,6 +91,12 @@
         <div><dt>Open roles</dt><dd>{{ review_summary.open_count }}</dd></div>
         <div><dt>Transport</dt><dd>{% if review_summary.vehicles %}{{ review_summary.vehicles|join(', ') }}{% endif %}{% if review_summary.self_travel_count %}{% if review_summary.vehicles %} · {% endif %}{{ review_summary.self_travel_count }} making own way{% endif %}{% if not review_summary.vehicles and not review_summary.self_travel_count %}No assigned vehicles{% endif %}</dd></div>
       </dl>
+      {% if review_summary.unlinked_names %}
+        <div class="notice builder-account-warning">
+          <strong>{{ review_summary.unlinked_names|length }} attendee{% if review_summary.unlinked_names|length != 1 %}s{% endif %} do not have an app login and will not receive personal calendar access.</strong>
+          <details><summary>Show names</summary><p>{{ review_summary.unlinked_names|join(', ') }}</p></details>
+        </div>
+      {% endif %}
     </section>
   {% endif %}
 
@@ -183,6 +189,7 @@
       <div class="workday-assignment-list" data-assignment-list>
         {% for assignment in assignment_rows %}{{ assignment_row(assignment, loop.index0) }}{% endfor %}
       </div>
+      <p class="muted">People without an app login remain on the crew list. Their assignment will gain personal calendar access automatically if an account is linked later.</p>
       <div class="workday-add-actions"><button class="button button-secondary" type="button" data-add-person>Add person</button><button class="button button-secondary" type="button" data-add-open>Add open role</button></div>
       <template data-assignment-template>{{ assignment_row({}, '__INDEX__') }}</template>
     </section>

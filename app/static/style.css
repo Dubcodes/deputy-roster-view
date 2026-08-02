@@ -4832,10 +4832,48 @@ th {
 
 .travel-route-list,
 .crew-directory-list,
+.identity-diagnostic-list,
 .track-map-diagnostics,
 .track-map-admin-list {
   display: grid;
   gap: 8px;
+}
+
+.identity-diagnostic-list article {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.1fr) repeat(3, minmax(130px, 1fr)) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.identity-diagnostic-list article span:not(.badge) {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.crew-directory-list > details > summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.crew-directory-list > details > summary span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.builder-account-warning {
+  margin-top: 10px;
+}
+
+.builder-account-warning details {
+  margin-top: 6px;
 }
 
 .source-marker {
@@ -5029,6 +5067,7 @@ th {
 
 @media (max-width: 760px) {
   .travel-route-row,
+  .identity-diagnostic-list article,
   .crew-directory-row > summary,
   .track-map-diagnostics > div,
   .track-map-admin-row,

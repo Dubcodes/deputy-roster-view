@@ -175,3 +175,9 @@ Crew event audit rows remain granular in SQLite, but user-facing history is grou
 ## Generalize the Race-Day Draft into a Manual Workday Model
 
 The existing `roster_days` publication/version boundary remains, while assignments move from one fixed position per row to dynamic `workday_assignments`. This preserves old drafts and snapshots while allowing office days, roleless attendees, custom roles, explicit vacancies, and structured transport. A shared role catalogue supplies convenient defaults without constraining an individual event. Manual events keep independent identity and provenance; date overlap with Deputy never causes an automatic merge.
+
+## Link Accounts By Authenticated Deputy Identity
+
+An account's profile name is not a crew identity key. Successful personal Deputy captures provide the authoritative employee ID, which links the app user to the existing Deputy-backed `crew_people` row. This avoids duplicate choices such as a full account name beside a shorter Deputy name without hard-coding individual mappings.
+
+Account-only duplicates are retired through an audited redirect. Published snapshots stay immutable and are resolved through that redirect at read/visibility time. A separate materialized visibility table is rebuilt from canonical published assignments, allowing identity fixes and later account links to repair personal access without a new roster version. Conflicting evidence is deliberately held for Admin review.

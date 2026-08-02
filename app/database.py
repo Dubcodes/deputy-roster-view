@@ -307,6 +307,45 @@ def init_db(settings: Settings | None = None) -> None:
                 FOREIGN KEY (person_id) REFERENCES crew_people(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS app_user_deputy_identity (
+                app_user_id INTEGER PRIMARY KEY,
+                deputy_employee_id INTEGER,
+                canonical_person_id INTEGER,
+                first_confirmed_at TEXT,
+                last_confirmed_at TEXT,
+                evidence_capture_id INTEGER,
+                confidence_source TEXT DEFAULT 'authenticated_personal_capture',
+                status TEXT DEFAULT 'confirmed',
+                conflict_details TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (app_user_id) REFERENCES app_users(id) ON DELETE CASCADE,
+                FOREIGN KEY (canonical_person_id) REFERENCES crew_people(id) ON DELETE SET NULL,
+                FOREIGN KEY (evidence_capture_id) REFERENCES deputy_web_captures(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS crew_identity_merge_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_person_id INTEGER NOT NULL,
+                target_person_id INTEGER NOT NULL,
+                app_user_id INTEGER,
+                merged_at TEXT NOT NULL,
+                merged_by_user_id INTEGER,
+                merge_reason TEXT,
+                affected_counts TEXT DEFAULT '{}',
+                FOREIGN KEY (source_person_id) REFERENCES crew_people(id) ON DELETE RESTRICT,
+                FOREIGN KEY (target_person_id) REFERENCES crew_people(id) ON DELETE RESTRICT,
+                FOREIGN KEY (app_user_id) REFERENCES app_users(id) ON DELETE SET NULL,
+                FOREIGN KEY (merged_by_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS identity_reconciliation_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_at TEXT NOT NULL,
+                applied INTEGER DEFAULT 0,
+                trigger_source TEXT,
+                report TEXT DEFAULT '{}'
+            );
+
             CREATE TABLE IF NOT EXISTS deputy_schedule_areas (
                 area_id INTEGER PRIMARY KEY,
                 name TEXT,
@@ -680,6 +719,19 @@ def init_db(settings: Settings | None = None) -> None:
                 FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS workday_user_visibility (
+                roster_day_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                canonical_person_id INTEGER,
+                source TEXT DEFAULT 'canonical_assignment',
+                created_at TEXT,
+                updated_at TEXT,
+                PRIMARY KEY (roster_day_id, user_id),
+                FOREIGN KEY (roster_day_id) REFERENCES roster_days(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE,
+                FOREIGN KEY (canonical_person_id) REFERENCES crew_people(id) ON DELETE SET NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_shifts_date ON shifts(date);
             CREATE INDEX IF NOT EXISTS idx_shifts_start_at ON shifts(start_at);
             CREATE INDEX IF NOT EXISTS idx_shifts_changed ON shifts(changed_since_viewed);
@@ -711,6 +763,8 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_roster_day_versions_day ON roster_day_versions(roster_day_id, version_number DESC);
             CREATE INDEX IF NOT EXISTS idx_workday_assignments_day ON workday_assignments(roster_day_id, sort_order);
             CREATE INDEX IF NOT EXISTS idx_workday_assignments_user ON workday_assignments(user_id, roster_day_id);
+            CREATE INDEX IF NOT EXISTS idx_workday_visibility_user ON workday_user_visibility(user_id, roster_day_id);
+            CREATE INDEX IF NOT EXISTS idx_identity_deputy_employee ON app_user_deputy_identity(deputy_employee_id);
             """
         )
         _ensure_default_crew_pool(conn)
@@ -773,6 +827,10 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "roster_days", "linked_deputy_event_id", "TEXT")
         _ensure_column(conn, "roster_days", "duplicate_resolution", "TEXT DEFAULT 'keep_separate'")
         _ensure_column(conn, "roster_days", "canonical_location_key", "TEXT")
+        _ensure_column(conn, "crew_people", "merged_into_person_id", "INTEGER")
+        _ensure_column(conn, "crew_people", "merged_at", "TEXT")
+        _ensure_column(conn, "crew_people", "merged_by_user_id", "INTEGER")
+        _ensure_column(conn, "crew_people", "merge_reason", "TEXT")
         conn.execute(
             """
             UPDATE roster_days
@@ -826,6 +884,7 @@ def init_db(settings: Settings | None = None) -> None:
         _migrate_admin_overrides(conn)
         _seed_workday_role_catalogue(conn)
         _migrate_legacy_roster_assignments(conn)
+        _reconcile_authenticated_identities_conn(conn, apply=True, trigger_source="startup")
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_admin_overrides_effective
@@ -1298,7 +1357,7 @@ def _crew_person_candidates(conn: sqlite3.Connection, name: object) -> list[sqli
     if not key:
         return []
     return [
-        row for row in conn.execute("SELECT * FROM crew_people WHERE is_active = 1").fetchall()
+        row for row in conn.execute("SELECT * FROM crew_people WHERE is_active = 1 AND merged_into_person_id IS NULL").fetchall()
         if key in {
             normalise_person_identity(row["canonical_display_name"]),
             normalise_person_identity(row["current_deputy_name"]),
@@ -1388,7 +1447,14 @@ def _sync_crew_directory(conn: sqlite3.Connection) -> None:
 
     manual_names: list[str] = [
         str(row["assignee_label"] or "").strip()
-        for row in conn.execute("SELECT assignee_label FROM roster_day_assignments").fetchall()
+        for row in conn.execute(
+            """
+            SELECT legacy.assignee_label
+            FROM roster_day_assignments legacy
+            LEFT JOIN workday_assignments current ON current.legacy_assignment_id=legacy.id
+            WHERE current.id IS NULL
+            """
+        ).fetchall()
         if str(row["assignee_label"] or "").strip() and str(row["assignee_label"] or "").strip().lower() != "tbc"
     ]
     for row in conn.execute("SELECT published_snapshot FROM roster_days").fetchall():
@@ -1400,6 +1466,11 @@ def _sync_crew_directory(conn: sqlite3.Connection) -> None:
             continue
         for assignment in snapshot.get("assignments", []):
             if not isinstance(assignment, dict):
+                continue
+            if (
+                _optional_int(assignment.get("person_id")) is not None
+                or _optional_int(assignment.get("user_id")) is not None
+            ):
                 continue
             label = str(assignment.get("assignee_label") or "").strip()
             if label and label.lower() != "tbc":
@@ -1414,7 +1485,7 @@ def _sync_crew_directory(conn: sqlite3.Connection) -> None:
     for alias, target_first_name in (("Cambo", "campbell"), ("Josh", "joshua")):
         alias_key = normalise_person_identity(alias)
         matches = [
-            row for row in conn.execute("SELECT * FROM crew_people WHERE is_active = 1").fetchall()
+            row for row in conn.execute("SELECT * FROM crew_people WHERE is_active = 1 AND merged_into_person_id IS NULL").fetchall()
             if normalise_person_identity(row["canonical_display_name"]).startswith(target_first_name)
         ]
         name_conflicts = [
@@ -2333,9 +2404,9 @@ def get_roster_day(roster_day_id: int) -> sqlite3.Row | None:
         ).fetchone()
 
 
-def get_roster_day_assignments(roster_day_id: int) -> list[sqlite3.Row]:
+def get_roster_day_assignments(roster_day_id: int) -> list[dict[str, object]]:
     with get_connection() as conn:
-        return conn.execute(
+        rows = [dict(row) for row in conn.execute(
             """
             SELECT a.*, u.display_name, u.deputy_email,
                    p.canonical_display_name AS person_display_name
@@ -2346,7 +2417,22 @@ def get_roster_day_assignments(roster_day_id: int) -> list[sqlite3.Row]:
             ORDER BY a.sort_order, LOWER(a.role_label), a.id
             """,
             (roster_day_id,),
-        ).fetchall()
+        ).fetchall()]
+        for item in rows:
+            resolved_id = _canonical_person_id_conn(conn, _optional_int(item.get("person_id")))
+            if resolved_id is None:
+                continue
+            person = conn.execute(
+                "SELECT canonical_display_name,app_user_id FROM crew_people WHERE id=?",
+                (resolved_id,),
+            ).fetchone()
+            if person is None:
+                continue
+            item["person_id"] = resolved_id
+            item["person_display_name"] = str(person["canonical_display_name"] or "")
+            item["assignee_label"] = str(person["canonical_display_name"] or item.get("assignee_label") or "")
+            item["user_id"] = _optional_int(person["app_user_id"])
+        return rows
 
 
 def list_roster_day_versions(roster_day_id: int) -> list[sqlite3.Row]:
@@ -2515,6 +2601,18 @@ def save_roster_day(
 
         conn.execute("DELETE FROM workday_assignments WHERE roster_day_id = ?", (saved_id,))
         for assignment in assignments:
+            person_id = _canonical_person_id_conn(conn, _optional_int(assignment.get("person_id")))
+            canonical_user_id = _optional_int(assignment.get("user_id"))
+            canonical_label = str(assignment.get("assignee_label") or "").strip()
+            if person_id is not None:
+                person = conn.execute(
+                    "SELECT canonical_display_name,app_user_id FROM crew_people WHERE id=? AND is_active=1",
+                    (person_id,),
+                ).fetchone()
+                if person is None:
+                    continue
+                canonical_user_id = _optional_int(person["app_user_id"])
+                canonical_label = str(person["canonical_display_name"] or canonical_label)
             conn.execute(
                 """
                 INSERT INTO workday_assignments (
@@ -2527,9 +2625,9 @@ def save_roster_day(
                 """,
                 (
                     saved_id,
-                    assignment.get("person_id"),
-                    assignment.get("user_id"),
-                    str(assignment.get("assignee_label") or "").strip(),
+                    person_id,
+                    canonical_user_id,
+                    canonical_label,
                     str(assignment.get("role_key") or "").strip(),
                     str(assignment.get("role_label") or "").strip(),
                     str(assignment.get("assignment_state") or "assigned").strip(),
@@ -2575,7 +2673,45 @@ def publish_roster_day(roster_day_id: int, snapshot: str, published_by_user_id: 
             """,
             (roster_day_id, version_number, snapshot, published_by_user_id, now),
         )
+        _rebuild_workday_visibility_conn(conn)
     return version_number
+
+
+def visible_workday_ids_for_user(start_date: str, end_date: str, user_id: int) -> set[int]:
+    with get_connection() as conn:
+        return {
+            int(row["roster_day_id"])
+            for row in conn.execute(
+                """
+                SELECT v.roster_day_id
+                FROM workday_user_visibility v
+                JOIN roster_days d ON d.id=v.roster_day_id
+                WHERE v.user_id=? AND d.roster_date BETWEEN ? AND ?
+                """,
+                (user_id, start_date, end_date),
+            ).fetchall()
+        }
+
+
+def resolve_workday_snapshot_assignments(assignments: list[object]) -> list[dict[str, object]]:
+    resolved: list[dict[str, object]] = []
+    with get_connection() as conn:
+        for raw in assignments:
+            if not isinstance(raw, dict):
+                continue
+            item = dict(raw)
+            person_id = _canonical_person_id_conn(conn, _optional_int(item.get("person_id")))
+            if person_id is not None:
+                person = conn.execute(
+                    "SELECT canonical_display_name,app_user_id FROM crew_people WHERE id=?",
+                    (person_id,),
+                ).fetchone()
+                if person is not None:
+                    item["person_id"] = person_id
+                    item["user_id"] = _optional_int(person["app_user_id"])
+                    item["assignee_label"] = str(person["canonical_display_name"] or item.get("assignee_label") or "")
+            resolved.append(item)
+    return resolved
 
 
 def fetch_published_roster_days_between(start_date: str, end_date: str) -> list[sqlite3.Row]:
@@ -3594,7 +3730,402 @@ def refresh_crew_directory() -> None:
         _sync_crew_directory(conn)
 
 
-def list_crew_people() -> list[dict[str, object]]:
+def _canonical_person_id_conn(conn: sqlite3.Connection, person_id: int | None) -> int | None:
+    current = _optional_int(person_id)
+    seen: set[int] = set()
+    while current is not None and current not in seen:
+        seen.add(current)
+        row = conn.execute(
+            "SELECT merged_into_person_id FROM crew_people WHERE id = ?",
+            (current,),
+        ).fetchone()
+        if row is None:
+            return None
+        target = _optional_int(row["merged_into_person_id"])
+        if target is None:
+            return current
+        current = target
+    return None
+
+
+def canonical_person_id(person_id: int | None) -> int | None:
+    with get_connection() as conn:
+        return _canonical_person_id_conn(conn, person_id)
+
+
+def _published_visibility_map_conn(conn: sqlite3.Connection) -> dict[int, dict[int, int | None]]:
+    visibility: dict[int, dict[int, int | None]] = {}
+    rows = conn.execute(
+        "SELECT id, published_snapshot FROM roster_days WHERE TRIM(COALESCE(published_snapshot, '')) != ''"
+    ).fetchall()
+    for row in rows:
+        try:
+            snapshot = json.loads(str(row["published_snapshot"] or ""))
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(snapshot, dict):
+            continue
+        day_users: dict[int, int | None] = {}
+        for assignment in snapshot.get("assignments", []):
+            if not isinstance(assignment, dict) or str(assignment.get("assignment_state") or "assigned") == "open":
+                continue
+            source_person_id = _optional_int(assignment.get("person_id"))
+            person_id = _canonical_person_id_conn(conn, source_person_id)
+            user_id = None
+            if person_id is not None:
+                person = conn.execute(
+                    "SELECT app_user_id FROM crew_people WHERE id = ? AND is_active = 1",
+                    (person_id,),
+                ).fetchone()
+                user_id = _optional_int(person["app_user_id"] if person is not None else None)
+            if user_id is None and source_person_id is None:
+                user_id = _optional_int(assignment.get("user_id"))
+            if user_id is not None:
+                active = conn.execute(
+                    "SELECT 1 FROM app_users WHERE id = ? AND is_active = 1",
+                    (user_id,),
+                ).fetchone()
+                if active is not None:
+                    day_users[user_id] = person_id
+        for hotel in snapshot.get("hotel_assignments", []):
+            if not isinstance(hotel, dict):
+                continue
+            user_id = _optional_int(hotel.get("user_id"))
+            if user_id is not None:
+                person = conn.execute(
+                    "SELECT id FROM crew_people WHERE app_user_id = ? AND is_active = 1 AND merged_into_person_id IS NULL",
+                    (user_id,),
+                ).fetchone()
+                day_users[user_id] = _optional_int(person["id"] if person else None)
+        visibility[int(row["id"])] = day_users
+    return visibility
+
+
+def _rebuild_workday_visibility_conn(conn: sqlite3.Connection) -> dict[str, int]:
+    before = {
+        (int(row["roster_day_id"]), int(row["user_id"]))
+        for row in conn.execute("SELECT roster_day_id, user_id FROM workday_user_visibility").fetchall()
+    }
+    desired = _published_visibility_map_conn(conn)
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    conn.execute("DELETE FROM workday_user_visibility")
+    for roster_day_id, users in desired.items():
+        for user_id, person_id in users.items():
+            conn.execute(
+                """
+                INSERT INTO workday_user_visibility (
+                    roster_day_id, user_id, canonical_person_id, source, created_at, updated_at
+                ) VALUES (?, ?, ?, 'canonical_assignment', ?, ?)
+                """,
+                (roster_day_id, user_id, person_id, now, now),
+            )
+    after = {(day_id, user_id) for day_id, users in desired.items() for user_id in users}
+    changed_days = {day_id for day_id, _user_id in before.symmetric_difference(after)}
+    return {
+        "visibility_rows": len(after),
+        "visibility_rows_added": len(after - before),
+        "visibility_rows_removed": len(before - after),
+        "published_workdays_repaired": len(changed_days),
+    }
+
+
+def rebuild_workday_visibility() -> dict[str, int]:
+    with get_connection() as conn:
+        return _rebuild_workday_visibility_conn(conn)
+
+
+def _merge_crew_people_conn(
+    conn: sqlite3.Connection,
+    source_person_id: int,
+    target_person_id: int,
+    *,
+    merged_by_user_id: int | None,
+    reason: str,
+) -> dict[str, int]:
+    source_id = _canonical_person_id_conn(conn, source_person_id)
+    target_id = _canonical_person_id_conn(conn, target_person_id)
+    if source_id is None or target_id is None:
+        raise ValueError("Crew identity was not found.")
+    if source_id == target_id:
+        return {"already_merged": 1}
+    source = conn.execute("SELECT * FROM crew_people WHERE id = ?", (source_id,)).fetchone()
+    target = conn.execute("SELECT * FROM crew_people WHERE id = ?", (target_id,)).fetchone()
+    if source is None or target is None:
+        raise ValueError("Crew identity was not found.")
+    if source["deputy_employee_id"] is not None:
+        raise ValueError("Only an account-only duplicate can be merged automatically.")
+    source_user_id = _optional_int(source["app_user_id"])
+    target_user_id = _optional_int(target["app_user_id"])
+    if source_user_id is not None and target_user_id not in (None, source_user_id):
+        raise ValueError("The canonical crew identity is already linked to a different app account.")
+    counts = {
+        "draft_assignments": int(conn.execute(
+            "SELECT COUNT(*) n FROM workday_assignments a JOIN roster_days d ON d.id=a.roster_day_id WHERE a.person_id=? AND TRIM(COALESCE(d.published_snapshot,''))=''",
+            (source_id,),
+        ).fetchone()["n"]),
+        "published_assignments": int(conn.execute(
+            "SELECT COUNT(*) n FROM workday_assignments a JOIN roster_days d ON d.id=a.roster_day_id WHERE a.person_id=? AND TRIM(COALESCE(d.published_snapshot,''))!=''",
+            (source_id,),
+        ).fetchone()["n"]),
+        "personal_evidence": int(conn.execute(
+            "SELECT COUNT(*) n FROM deputy_personal_assignment_evidence WHERE canonical_person_id=?",
+            (source_id,),
+        ).fetchone()["n"]),
+        "aliases": int(conn.execute(
+            "SELECT COUNT(*) n FROM crew_aliases WHERE person_id=?",
+            (source_id,),
+        ).fetchone()["n"]),
+    }
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    if source_user_id is not None:
+        conn.execute("UPDATE crew_people SET app_user_id=NULL WHERE id=?", (source_id,))
+        conn.execute("UPDATE crew_people SET app_user_id=?, updated_at=? WHERE id=?", (source_user_id, now, target_id))
+    conn.execute("UPDATE workday_assignments SET person_id=?, user_id=COALESCE(?, user_id), updated_at=? WHERE person_id=?", (target_id, source_user_id, now, source_id))
+    conn.execute("UPDATE deputy_personal_assignment_evidence SET canonical_person_id=? WHERE canonical_person_id=?", (target_id, source_id))
+    conn.execute("UPDATE app_user_deputy_identity SET canonical_person_id=? WHERE canonical_person_id=?", (target_id, source_id))
+    target_aliases = {
+        str(row["normalized_alias"])
+        for row in conn.execute("SELECT normalized_alias FROM crew_aliases WHERE person_id=?", (target_id,)).fetchall()
+    }
+    for alias in conn.execute("SELECT * FROM crew_aliases WHERE person_id=?", (source_id,)).fetchall():
+        key = str(alias["normalized_alias"] or "")
+        conflict = conn.execute("SELECT 1 FROM crew_aliases WHERE normalized_alias=? AND person_id NOT IN (?,?)", (key, source_id, target_id)).fetchone()
+        if key and key not in target_aliases and conflict is None:
+            conn.execute("UPDATE crew_aliases SET person_id=?, updated_at=? WHERE id=?", (target_id, now, int(alias["id"])))
+            target_aliases.add(key)
+        else:
+            conn.execute("DELETE FROM crew_aliases WHERE id=?", (int(alias["id"]),))
+    combined_note = "\n".join(filter(None, [str(target["admin_note"] or "").strip(), str(source["admin_note"] or "").strip()]))
+    conn.execute(
+        """
+        UPDATE crew_people
+        SET is_active=0, app_user_id=NULL, merged_into_person_id=?, merged_at=?,
+            merged_by_user_id=?, merge_reason=?, updated_at=?
+        WHERE id=?
+        """,
+        (target_id, now, merged_by_user_id, reason[:500], now, source_id),
+    )
+    if combined_note != str(target["admin_note"] or ""):
+        conn.execute("UPDATE crew_people SET admin_note=?, updated_at=? WHERE id=?", (combined_note, now, target_id))
+    counts.update(_rebuild_workday_visibility_conn(conn))
+    conn.execute(
+        """
+        INSERT INTO crew_identity_merge_audit (
+            source_person_id,target_person_id,app_user_id,merged_at,merged_by_user_id,
+            merge_reason,affected_counts
+        ) VALUES (?,?,?,?,?,?,?)
+        """,
+        (source_id,target_id,source_user_id,now,merged_by_user_id,reason[:500],json.dumps(counts,sort_keys=True)),
+    )
+    return counts
+
+
+def merge_crew_people(source_person_id: int, target_person_id: int, *, merged_by_user_id: int | None, reason: str) -> dict[str, int]:
+    with get_connection() as conn:
+        return _merge_crew_people_conn(conn, source_person_id, target_person_id, merged_by_user_id=merged_by_user_id, reason=reason)
+
+
+def crew_link_change_preview(person_id: int, app_user_id: int) -> dict[str, object] | None:
+    with get_connection() as conn:
+        target_id = _canonical_person_id_conn(conn, person_id)
+        if target_id is None:
+            return None
+        target = conn.execute("SELECT * FROM crew_people WHERE id=?", (target_id,)).fetchone()
+        user = conn.execute("SELECT id,display_name,deputy_email FROM app_users WHERE id=?", (app_user_id,)).fetchone()
+        source = conn.execute(
+            "SELECT * FROM crew_people WHERE app_user_id=? AND merged_into_person_id IS NULL AND id!=?",
+            (app_user_id, target_id),
+        ).fetchone()
+        if target is None or user is None or source is None:
+            return None
+        counts = {
+            "draft_assignments": int(conn.execute(
+                "SELECT COUNT(*) n FROM workday_assignments a JOIN roster_days d ON d.id=a.roster_day_id WHERE a.person_id=? AND TRIM(COALESCE(d.published_snapshot,''))=''",
+                (int(source["id"]),),
+            ).fetchone()["n"]),
+            "published_assignments": int(conn.execute(
+                "SELECT COUNT(*) n FROM workday_assignments a JOIN roster_days d ON d.id=a.roster_day_id WHERE a.person_id=? AND TRIM(COALESCE(d.published_snapshot,''))!=''",
+                (int(source["id"]),),
+            ).fetchone()["n"]),
+            "visibility_records": int(conn.execute("SELECT COUNT(*) n FROM workday_user_visibility WHERE user_id=?", (app_user_id,)).fetchone()["n"]),
+            "aliases": int(conn.execute("SELECT COUNT(*) n FROM crew_aliases WHERE person_id=?", (int(source["id"]),)).fetchone()["n"]),
+            "personal_evidence": int(conn.execute("SELECT COUNT(*) n FROM deputy_personal_assignment_evidence WHERE canonical_person_id=?", (int(source["id"]),)).fetchone()["n"]),
+        }
+        return {
+            "app_user_id": app_user_id,
+            "app_user_name": str(user["display_name"] or user["deputy_email"] or "App user"),
+            "source_person_id": int(source["id"]),
+            "source_name": str(source["canonical_display_name"] or "Crew identity"),
+            "source_is_account_only": source["deputy_employee_id"] is None,
+            "target_person_id": target_id,
+            "target_name": str(target["canonical_display_name"] or "Crew identity"),
+            "target_employee_id": _optional_int(target["deputy_employee_id"]),
+            "counts": counts,
+        }
+
+
+def transfer_app_user_link(app_user_id: int, target_person_id: int) -> dict[str, int]:
+    with get_connection() as conn:
+        target_id = _canonical_person_id_conn(conn, target_person_id)
+        if target_id is None:
+            raise ValueError("Crew identity was not found.")
+        target = conn.execute("SELECT app_user_id FROM crew_people WHERE id=?", (target_id,)).fetchone()
+        if target is None or target["app_user_id"] not in (None, app_user_id):
+            raise ValueError("The proposed crew identity is linked to another account.")
+        now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+        conn.execute("UPDATE crew_people SET app_user_id=NULL,updated_at=? WHERE app_user_id=? AND id!=?", (now, app_user_id, target_id))
+        conn.execute("UPDATE crew_people SET app_user_id=?,updated_at=? WHERE id=?", (app_user_id, now, target_id))
+        conn.execute("UPDATE workday_assignments SET user_id=NULL,updated_at=? WHERE user_id=? AND person_id!=?", (now, app_user_id, target_id))
+        conn.execute("UPDATE workday_assignments SET user_id=?,updated_at=? WHERE person_id=?", (app_user_id, now, target_id))
+        return _rebuild_workday_visibility_conn(conn)
+
+
+def _identity_evidence_rows_conn(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    users = conn.execute("SELECT id,display_name,deputy_email FROM app_users WHERE is_active=1 ORDER BY id").fetchall()
+    result: list[dict[str, object]] = []
+    for user in users:
+        evidence = conn.execute(
+            """
+            SELECT deputy_employee_id, COUNT(*) AS evidence_rows, MIN(first_seen_at) AS first_seen,
+                   MAX(last_confirmed_at) AS last_seen
+            FROM deputy_personal_assignment_evidence
+            WHERE owner_user_id=? AND deputy_employee_id IS NOT NULL
+              AND status IN ('confirmed','possibly_missing','historical_locked')
+            GROUP BY deputy_employee_id ORDER BY evidence_rows DESC, deputy_employee_id
+            """,
+            (int(user["id"]),),
+        ).fetchall()
+        current = conn.execute(
+            "SELECT * FROM crew_people WHERE app_user_id=? AND merged_into_person_id IS NULL LIMIT 1",
+            (int(user["id"]),),
+        ).fetchone()
+        item = dict(user)
+        item["current_person_id"] = _optional_int(current["id"] if current else None)
+        item["current_person_name"] = str(current["canonical_display_name"] if current else "")
+        item["evidence_ids"] = [int(row["deputy_employee_id"]) for row in evidence]
+        employee_id = item["evidence_ids"][0] if len(item["evidence_ids"]) == 1 else None
+        target = conn.execute("SELECT * FROM crew_people WHERE deputy_employee_id=? LIMIT 1", (employee_id,)).fetchone() if employee_id is not None else None
+        item["deputy_employee_id"] = employee_id
+        item["recommended_person_id"] = _optional_int(target["id"] if target else None)
+        item["recommended_person_name"] = str(target["canonical_display_name"] if target else "")
+        item["first_confirmed_at"] = str(evidence[0]["first_seen"] if len(evidence) == 1 else "")
+        item["last_confirmed_at"] = str(evidence[0]["last_seen"] if len(evidence) == 1 else "")
+        if not evidence:
+            item["status"] = "no_evidence"
+        elif len(evidence) > 1:
+            item["status"] = "conflicting"
+        elif target is None:
+            item["status"] = "ambiguous"
+        elif current is not None and int(current["id"]) == int(target["id"]):
+            item["status"] = "correct"
+        elif target["app_user_id"] not in (None, int(user["id"])):
+            item["status"] = "conflicting"
+        else:
+            item["status"] = "repair_available"
+        result.append(item)
+    return result
+
+
+def _reconcile_authenticated_identities_conn(conn: sqlite3.Connection, *, apply: bool, trigger_source: str, actor_user_id: int | None = None) -> dict[str, object]:
+    _sync_crew_directory(conn)
+    visibility_before = {
+        (int(row["roster_day_id"]), int(row["user_id"]))
+        for row in conn.execute("SELECT roster_day_id,user_id FROM workday_user_visibility").fetchall()
+    } if apply else set()
+    rows = _identity_evidence_rows_conn(conn)
+    report: dict[str, object] = {
+        "app_users_inspected": len(rows), "correct_links_retained": 0,
+        "duplicate_identities_merged": 0, "links_repaired": 0,
+        "published_workdays_repaired": 0, "visibility_rows_added": 0,
+        "ambiguous_accounts": 0, "conflicting_accounts": 0,
+    }
+    for item in rows:
+        status = str(item["status"])
+        if status == "correct":
+            report["correct_links_retained"] = int(report["correct_links_retained"]) + 1
+        elif status == "ambiguous" or status == "no_evidence":
+            report["ambiguous_accounts"] = int(report["ambiguous_accounts"]) + 1
+        elif status == "conflicting":
+            report["conflicting_accounts"] = int(report["conflicting_accounts"]) + 1
+        if not apply or status not in {"correct", "repair_available"}:
+            continue
+        user_id = int(item["id"])
+        employee_id = _optional_int(item["deputy_employee_id"])
+        target_id = _optional_int(item["recommended_person_id"])
+        current_id = _optional_int(item["current_person_id"])
+        if employee_id is None or target_id is None:
+            continue
+        if status == "repair_available":
+            if current_id is not None and current_id != target_id:
+                current = conn.execute("SELECT deputy_employee_id FROM crew_people WHERE id=?", (current_id,)).fetchone()
+                if current is None or current["deputy_employee_id"] is not None:
+                    report["conflicting_accounts"] = int(report["conflicting_accounts"]) + 1
+                    continue
+                _merge_crew_people_conn(
+                    conn, current_id, target_id, merged_by_user_id=actor_user_id,
+                    reason="Authenticated personal Deputy capture confirmed the canonical employee identity.",
+                )
+                report["duplicate_identities_merged"] = int(report["duplicate_identities_merged"]) + 1
+                report["links_repaired"] = int(report["links_repaired"]) + 1
+            else:
+                now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+                conn.execute("UPDATE crew_people SET app_user_id=?,updated_at=? WHERE id=?", (user_id, now, target_id))
+                report["links_repaired"] = int(report["links_repaired"]) + 1
+        capture = conn.execute(
+            "SELECT id FROM deputy_web_captures WHERE owner_user_id=? ORDER BY captured_at DESC,id DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+        conn.execute(
+            """
+            INSERT INTO app_user_deputy_identity (
+                app_user_id,deputy_employee_id,canonical_person_id,first_confirmed_at,
+                last_confirmed_at,evidence_capture_id,confidence_source,status,conflict_details,updated_at
+            ) VALUES (?,?,?,?,?,?,'authenticated_personal_capture','confirmed','',?)
+            ON CONFLICT(app_user_id) DO UPDATE SET deputy_employee_id=excluded.deputy_employee_id,
+                canonical_person_id=excluded.canonical_person_id,
+                first_confirmed_at=COALESCE(app_user_deputy_identity.first_confirmed_at,excluded.first_confirmed_at),
+                last_confirmed_at=excluded.last_confirmed_at,evidence_capture_id=excluded.evidence_capture_id,
+                confidence_source=excluded.confidence_source,status='confirmed',conflict_details='',updated_at=excluded.updated_at
+            """,
+            (user_id,employee_id,target_id,item.get("first_confirmed_at") or now,item.get("last_confirmed_at") or now,_optional_int(capture["id"] if capture else None),now),
+        )
+    visibility = _rebuild_workday_visibility_conn(conn) if apply else {"visibility_rows": 0}
+    visibility_after = {
+        (int(row["roster_day_id"]), int(row["user_id"]))
+        for row in conn.execute("SELECT roster_day_id,user_id FROM workday_user_visibility").fetchall()
+    } if apply else set()
+    report["visibility_rows"] = visibility.get("visibility_rows", 0)
+    report["visibility_rows_added"] = len(visibility_after - visibility_before)
+    report["published_workdays_repaired"] = len({
+        day_id for day_id, _user_id in visibility_before.symmetric_difference(visibility_after)
+    })
+    report["orphan_synthetic_identities"] = int(conn.execute(
+        """
+        SELECT COUNT(*) n FROM crew_people p
+        WHERE p.is_active=1 AND p.deputy_employee_id IS NULL AND p.app_user_id IS NULL
+          AND p.merged_into_person_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM workday_assignments a WHERE a.person_id=p.id)
+        """
+    ).fetchone()["n"])
+    report["accounts"] = rows
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    conn.execute("INSERT INTO identity_reconciliation_runs(run_at,applied,trigger_source,report) VALUES (?,?,?,?)", (now,1 if apply else 0,trigger_source,json.dumps(report,default=str)))
+    return report
+
+
+def reconcile_authenticated_identities(*, apply: bool, trigger_source: str = "admin", actor_user_id: int | None = None) -> dict[str, object]:
+    with get_connection() as conn:
+        return _reconcile_authenticated_identities_conn(conn, apply=apply, trigger_source=trigger_source, actor_user_id=actor_user_id)
+
+
+def identity_link_diagnostics() -> list[dict[str, object]]:
+    with get_connection() as conn:
+        _sync_crew_directory(conn)
+        return _identity_evidence_rows_conn(conn)
+
+
+def list_crew_people(*, include_merged: bool = False) -> list[dict[str, object]]:
     refresh_crew_directory()
     with get_connection() as conn:
         people = [dict(row) for row in conn.execute(
@@ -3602,8 +4133,10 @@ def list_crew_people() -> list[dict[str, object]]:
             SELECT p.*, u.display_name AS app_user_name, u.deputy_email AS app_user_email
             FROM crew_people p
             LEFT JOIN app_users u ON u.id = p.app_user_id
-            ORDER BY p.is_active DESC, LOWER(p.canonical_display_name), p.id
+            WHERE (? = 1 OR p.merged_into_person_id IS NULL)
+            ORDER BY (p.merged_into_person_id IS NOT NULL), p.is_active DESC, LOWER(p.canonical_display_name), p.id
             """
+            , (1 if include_merged else 0,)
         ).fetchall()]
         aliases_by_person: dict[int, list[str]] = {}
         for row in conn.execute(
@@ -3766,6 +4299,7 @@ def update_crew_person(
                 """,
                 (person_id, label, key, now, now),
             )
+        _rebuild_workday_visibility_conn(conn)
     return True, "Crew member saved."
 
 
@@ -5853,6 +6387,11 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
             ),
             captured_at,
         )
+        identity_report = _reconcile_authenticated_identities_conn(
+            conn,
+            apply=True,
+            trigger_source="successful_personal_capture",
+        ) if owner_user_id is not None and own_counts["seen"] else {}
     return {
         "own_seen": own_counts["seen"],
         "own_created": own_counts["created"],
@@ -5864,6 +6403,8 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
         "personal_possibly_missing": personal_coverage_counts["possibly_missing"],
         "personal_retired": personal_coverage_counts["retired"],
         "partial_events": len(partial_scopes),
+        "identity_links_repaired": int(identity_report.get("links_repaired", 0))
+        + int(identity_report.get("duplicate_identities_merged", 0)),
     }
 
 

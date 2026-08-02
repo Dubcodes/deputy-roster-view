@@ -1,5 +1,26 @@
 {% extends "base.html" %}
 
+{% macro crew_person_row(person, app_users) %}
+  <details class="crew-directory-row{% if not person.is_active %} is-inactive{% endif %}">
+    <summary>
+      <span><strong>{{ person.canonical_display_name }}</strong><small>{% if person.deputy_employee_id %}Deputy #{{ person.deputy_employee_id }}{% if person.current_deputy_name %} · {{ person.current_deputy_name }}{% endif %}{% else %}No Deputy identity{% endif %}</small></span>
+      <span>{% if person.app_user_id %}<strong>App login</strong><small>{{ person.app_user_name }} · {{ person.app_user_email }}</small>{% else %}<span class="badge">No app login</span>{% endif %}</span>
+      <span class="badge">{{ "Active" if person.is_active else "Inactive" }}</span>
+    </summary>
+    <form class="settings-form crew-person-form" action="/admin/crew/{{ person.id }}" method="post">
+      <div class="form-grid-two">
+        <label class="form-row"><span>Canonical crew name</span><input name="canonical_display_name" value="{{ person.canonical_display_name }}" required></label>
+        <label class="form-row"><span>App login</span><select name="app_user_id"><option value="">Not linked</option>{% for app_user in app_users %}<option value="{{ app_user.id }}"{% if person.app_user_id == app_user.id %} selected{% endif %}>{{ app_user.display_name or app_user.deputy_email }}</option>{% endfor %}</select></label>
+      </div>
+      <label class="form-row"><span>Aliases</span><textarea name="aliases" rows="2">{{ person.aliases_text }}</textarea></label>
+      <label class="form-row"><span>Admin note</span><textarea name="admin_note" rows="2">{{ person.admin_note or '' }}</textarea></label>
+      <label class="builder-travel-toggle"><input type="checkbox" name="is_active" value="1"{% if person.is_active %} checked{% endif %}><span>Active crew identity</span></label>
+      {% if person.observed_positions or person.observed_vehicles %}<p class="muted">Observed: {{ person.observed_positions|join(", ") or "no positions" }}{% if person.observed_vehicles %} · Vehicles {{ person.observed_vehicles|join(", ") }}{% endif %}</p>{% endif %}
+      <button class="button button-compact" type="submit">Save identity</button>
+    </form>
+  </details>
+{% endmacro %}
+
 {% block title %}Admin - Deputy Roster View{% endblock %}
 
 {% block content %}
@@ -620,34 +641,49 @@
     </div>
   </details>
 
+  {% if identity_link_review %}
+    <section class="table-panel identity-link-review">
+      <div class="section-heading"><h2>Confirm account identity correction</h2><span class="badge badge-warn">Review required</span></div>
+      <p>This account is currently linked to <strong>{{ identity_link_review.source_name }}</strong>.</p>
+      <p>Proposed canonical identity: <strong>{{ identity_link_review.target_name }}{% if identity_link_review.target_employee_id %} · Deputy #{{ identity_link_review.target_employee_id }}{% endif %}</strong>.</p>
+      <dl class="race-day-rows">
+        <div><dt>Draft assignments</dt><dd>{{ identity_link_review.counts.draft_assignments }}</dd></div>
+        <div><dt>Published assignments</dt><dd>{{ identity_link_review.counts.published_assignments }}</dd></div>
+        <div><dt>Visibility records</dt><dd>{{ identity_link_review.counts.visibility_records }}</dd></div>
+        <div><dt>Aliases</dt><dd>{{ identity_link_review.counts.aliases }}</dd></div>
+      </dl>
+      <form action="/admin/crew-link/resolve" method="post" class="settings-action-row">
+        <input type="hidden" name="app_user_id" value="{{ identity_link_review.app_user_id }}"><input type="hidden" name="source_person_id" value="{{ identity_link_review.source_person_id }}"><input type="hidden" name="target_person_id" value="{{ identity_link_review.target_person_id }}">
+        <button class="button button-secondary" name="action" value="cancel">Cancel</button>
+        <button class="button button-secondary" name="action" value="transfer">Transfer link only</button>
+        <button class="button" name="action" value="merge"{% if not identity_link_review.source_is_account_only %} disabled{% endif %}>Merge duplicate into this person</button>
+      </form>
+      {% if identity_link_review.source_is_account_only %}<p class="muted">Merge is recommended because the current identity has no Deputy employee ID.</p>{% endif %}
+    </section>
+  {% endif %}
+
+  <details class="table-panel identity-diagnostics-panel">
+    <summary class="management-panel-summary"><span><strong>App accounts needing identity review</strong><small>{{ identity_diagnostics|length }} app accounts checked</small></span><span>Authenticated personal Deputy evidence</span></summary>
+    <div class="management-panel-body">
+      <div class="settings-action-row"><form action="/admin/identity-reconciliation/preview" method="post"><button class="button button-secondary" type="submit">Preview reconciliation</button></form><form action="/admin/identity-reconciliation/apply" method="post" onsubmit="return confirm('Apply only unambiguous employee-ID identity repairs?');"><button class="button" type="submit">Apply safe repairs</button></form></div>
+      {% if identity_reconciliation_report %}<p class="notice">Inspected {{ identity_reconciliation_report.app_users_inspected }} · {{ identity_reconciliation_report.correct_links_retained }} correct · {{ identity_reconciliation_report.duplicate_identities_merged }} merges · {{ identity_reconciliation_report.links_repaired }} links · {{ identity_reconciliation_report.ambiguous_accounts }} need review.</p>{% endif %}
+      <div class="identity-diagnostic-list">
+        {% for item in identity_diagnostics %}<article><strong>{{ item.display_name or item.deputy_email }}</strong><span>Current: {{ item.current_person_name or 'Not linked' }}</span><span>Personal Deputy identity: {% if item.deputy_employee_id %}#{{ item.deputy_employee_id }}{% else %}Not established{% endif %}</span><span>Recommended: {{ item.recommended_person_name or 'Review needed' }}</span><span class="badge{% if item.status in ('repair_available','conflicting') %} badge-warn{% endif %}">{% if item.status == 'no_evidence' %}No Deputy evidence{% else %}{{ item.status|replace('_',' ')|title }}{% endif %}</span></article>{% endfor %}
+      </div>
+    </div>
+  </details>
+
   <details class="table-panel crew-directory-panel">
     <summary class="management-panel-summary">
       <span><strong>Crew directory</strong><small>{{ crew_people|length }} known people</small></span>
       <span>Names, Deputy IDs, aliases, and app links</span>
     </summary>
     <div class="management-panel-body">
-      <p class="muted">Deputy employee IDs keep people separate. Aliases are case/punctuation insensitive and are rejected when already active for someone else.</p>
+      <p class="muted">A crew identity is the person Deputy rosters. An app login provides access to that identity; it is not a second crew member.</p>
       <div class="crew-directory-list">
-        {% for person in crew_people %}
-          <details class="crew-directory-row{% if not person.is_active %} is-inactive{% endif %}">
-            <summary>
-              <span><strong>{{ person.canonical_display_name }}</strong><small>{{ person.current_deputy_name or "No Deputy name" }}{% if person.deputy_employee_id %} · Deputy #{{ person.deputy_employee_id }}{% endif %}</small></span>
-              <span>{% if person.aliases %}{{ person.aliases|join(", ") }}{% else %}No aliases{% endif %}</span>
-              <span class="badge">{{ "Active" if person.is_active else "Inactive" }}</span>
-            </summary>
-            <form class="settings-form crew-person-form" action="/admin/crew/{{ person.id }}" method="post">
-              <div class="form-grid-two">
-                <label class="form-row"><span>Canonical display name</span><input name="canonical_display_name" value="{{ person.canonical_display_name }}" required></label>
-                <label class="form-row"><span>Linked app user</span><select name="app_user_id"><option value="">Not linked</option>{% for app_user in app_users %}<option value="{{ app_user.id }}"{% if person.app_user_id == app_user.id %} selected{% endif %}>{{ app_user.display_name or app_user.deputy_email }}</option>{% endfor %}</select></label>
-              </div>
-              <label class="form-row"><span>Aliases (comma or line separated)</span><textarea name="aliases" rows="2" placeholder="Gaz, Gazz">{{ person.aliases_text }}</textarea></label>
-              <label class="form-row"><span>Admin note</span><textarea name="admin_note" rows="2">{{ person.admin_note or '' }}</textarea></label>
-              <label class="builder-travel-toggle"><input type="checkbox" name="is_active" value="1"{% if person.is_active %} checked{% endif %}><span>Active crew identity</span></label>
-              {% if person.observed_positions or person.observed_vehicles %}<p class="muted">Observed only: {{ person.observed_positions|join(", ") or "no positions" }}{% if person.observed_vehicles %} · Vehicles {{ person.observed_vehicles|join(", ") }}{% endif %}</p>{% endif %}
-              <button class="button button-compact" type="submit">Save person</button>
-            </form>
-          </details>
-        {% endfor %}
+        <details open><summary>Linked people <span>{{ linked_crew_people|length }}</span></summary>{% for person in linked_crew_people %}{{ crew_person_row(person, app_users) }}{% endfor %}</details>
+        <details><summary>Crew without app logins <span>{{ unlinked_crew_people|length }}</span></summary>{% for person in unlinked_crew_people %}{{ crew_person_row(person, app_users) }}{% endfor %}</details>
+        <details><summary>Merged / retired identities <span>{{ merged_crew_people|length }}</span></summary>{% for person in merged_crew_people %}<article class="crew-directory-row is-inactive"><strong>{{ person.canonical_display_name }}</strong><small>Merged into crew person #{{ person.merged_into_person_id }} · {{ person.merged_at|datetime }}</small></article>{% endfor %}</details>
       </div>
     </div>
   </details>

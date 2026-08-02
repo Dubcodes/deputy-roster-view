@@ -40,9 +40,12 @@ python scripts\smoke_track_map_classification.py
 python scripts\smoke_note_interpretation.py
 python scripts\smoke_workday_builder.py
 python scripts\smoke_workday_responsive.py
+python scripts\smoke_identity_reconciliation.py
 ```
 
 The Admin override smoke covers legacy-row migration, field/value normalization, active precedence, historical days, immediate recalculation, replacement, disable fallback, canonical venue scope, and Changed-badge isolation. For deployed-data migration confidence, run `init_db()` against a disposable database copy only; never point migration tests at the live file.
+
+The identity reconciliation smoke covers employee-ID account linking, conservative conflicting-evidence review, Jayden/Alf/Nate duplicate retirement, already-correct links, trusted-device preservation, historical redirects, the 6 August Office Day across personal/global/day/Next Up/timesheet views, Admin transfer/merge confirmation, merge audit/idempotency, builder deduplication, and visibility gained by linking an account after publication.
 
 ## Manual App Checks
 

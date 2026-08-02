@@ -100,7 +100,7 @@
               {% for person in crew_rows %}
                 <div class="crew-roster-row{% if not person.role_label and not person.position_label %} is-placeholder{% endif %}" role="row">
                   <span role="cell">{{ person.role_label or person.position_label or 'Attending' }}</span>
-                  <strong role="cell">{{ 'TBC' if person.assignment_state == 'open' else person.assignee_label }}{% if person.user_id is none and person.assignment_state != 'open' %}<small>No app account linked</small>{% endif %}</strong>
+                  <strong role="cell">{{ 'TBC' if person.assignment_state == 'open' else person.assignee_label }}</strong>
                   <span role="cell">{{ person.transport_label or person.vehicle_label or 'TBC' }}</span>
                 </div>
                 {% if person.assignment_note %}<p class="manual-assignment-note">{{ person.assignee_label or person.role_label }} · {{ person.assignment_note }}</p>{% endif %}

@@ -130,3 +130,7 @@ Show a small note in the app:
 - Add a second test user.
 - Run both old and new systems briefly.
 - Once the multi-user system is stable, remind Jayden to delete the old single-user server/container and old data volume.
+
+## Canonical Account Linking
+
+App accounts and crew identities are deliberately separate. Authenticated personal Deputy captures establish the account's employee ID and canonical crew-person link. Unambiguous account-only duplicates are retired with an audited redirect; ambiguous evidence remains an Admin task. Manual-workday access is materialized from published canonical assignments and rebuilt after identity changes, so no republish is needed when an account is repaired or linked later.

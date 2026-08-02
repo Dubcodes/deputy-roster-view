@@ -92,6 +92,8 @@ from .database import (
     list_crew_work_location_labels,
     list_crew_people,
     crew_identity_records,
+    crew_link_change_preview,
+    identity_link_diagnostics,
     list_track_maps,
     list_track_map_location_rules,
     list_track_map_migration_warnings,
@@ -104,6 +106,9 @@ from .database import (
     purge_app_user,
     purge_old_inactive_records,
     publish_roster_day,
+    merge_crew_people,
+    reconcile_authenticated_identities,
+    resolve_workday_snapshot_assignments,
     update_deputy_user_ical_url,
     update_deputy_user_credentials,
     update_app_settings,
@@ -118,12 +123,14 @@ from .database import (
     upsert_travel_route,
     delete_travel_route,
     update_crew_person,
+    transfer_app_user_link,
     update_user_display_theme,
     update_user_pin_hash,
     upsert_track_map_location_rule,
     delete_track_map_location_rule,
     user_has_deputy_credentials,
     user_has_ical_url,
+    visible_workday_ids_for_user,
 )
 from .deputy_api import test_deputy_roster_api
 from .deputy_web import capture_and_save_deputy_web, format_capture_payload
@@ -178,7 +185,7 @@ from .public_holidays import holiday_for_date
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.02.1"
+APP_BUILD = "2026.08.03.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -2728,15 +2735,15 @@ def manual_workday_hours(item: dict[str, object]) -> float:
 
 def published_rosters_by_date(start_date: str, end_date: str, user_id: int | None) -> dict[str, list[dict[str, object]]]:
     result: dict[str, list[dict[str, object]]] = {}
+    visible_ids = visible_workday_ids_for_user(start_date, end_date, user_id) if user_id is not None else None
     for row in fetch_published_roster_days_between(start_date, end_date):
+        if visible_ids is not None and int(row["id"]) not in visible_ids:
+            continue
         snapshot = parse_roster_snapshot(row["published_snapshot"])
         if not snapshot:
             continue
         all_assignments = []
-        for raw_assignment in snapshot.get("assignments", []):
-            if not isinstance(raw_assignment, dict):
-                continue
-            assignment = dict(raw_assignment)
+        for assignment in resolve_workday_snapshot_assignments(snapshot.get("assignments", [])):
             assignment["role_label"] = str(
                 assignment.get("role_label") or assignment.get("position_label") or ""
             ).strip()
@@ -5253,6 +5260,11 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
             "label": str(person.get("canonical_display_name") or "Crew"),
             "user_id": person.get("app_user_id"),
             "person_id": person.get("id"),
+            "meta": (
+                f"Deputy #{person['deputy_employee_id']} · "
+                + ("App account linked" if person.get("app_user_id") else "No app login")
+                if person.get("deputy_employee_id") else ("App account linked" if person.get("app_user_id") else "Crew identity")
+            ),
         }
         for person in directory_people
     ]
@@ -5302,6 +5314,11 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
                 if str(item.get("transport_mode") or "") == "vehicle" and str(item.get("vehicle_label") or "").strip()
             )
         ),
+        "unlinked_names": [
+            str(item.get("person_display_name") or item.get("assignee_label") or "Crew")
+            for item in assigned_rows
+            if item.get("user_id") is None
+        ],
     }
     return templates.TemplateResponse(
         "roster_day_builder.html",
@@ -5345,6 +5362,8 @@ def admin_page_context(
     love_racing_backfill: dict[str, object] | None = None,
     backfill_start: str = "",
     backfill_end: str = "",
+    identity_reconciliation_report: dict[str, object] | None = None,
+    identity_link_review: dict[str, object] | None = None,
 ) -> dict[str, object]:
     settings = get_settings()
     today = datetime.now(settings.timezone).date()
@@ -5376,6 +5395,8 @@ def admin_page_context(
                 item.get("normalized_value") or item.get("value") or ""
             )
         override_rows.append(item)
+    all_crew_people = list_crew_people(include_merged=True)
+    canonical_people = [item for item in all_crew_people if item.get("merged_into_person_id") is None]
     return {
         "request": request,
         "notice": notice,
@@ -5415,7 +5436,13 @@ def admin_page_context(
         "track_map_migration_warnings": track_map_data["warnings"],
         "travel_routes": [dict(row) for row in list_travel_routes()],
         "known_places": list_known_place_labels(),
-        "crew_people": list_crew_people(),
+        "crew_people": canonical_people,
+        "linked_crew_people": [item for item in canonical_people if int(item.get("is_active") or 0) and item.get("app_user_id")],
+        "unlinked_crew_people": [item for item in canonical_people if int(item.get("is_active") or 0) and not item.get("app_user_id")],
+        "merged_crew_people": [item for item in all_crew_people if item.get("merged_into_person_id") is not None],
+        "identity_diagnostics": identity_link_diagnostics(),
+        "identity_reconciliation_report": identity_reconciliation_report,
+        "identity_link_review": identity_link_review,
         "app_users": [dict(item) for item in list_app_users()],
         "planning_location_enabled_count": sum(
             1 for location in planning_locations if int(location.get("is_enabled") or 0)
@@ -5665,15 +5692,27 @@ def admin_delete_travel_route(request: Request, route_id: int) -> RedirectRespon
 
 
 @app.post("/admin/crew/{person_id}")
-async def admin_update_crew_person(request: Request, person_id: int) -> RedirectResponse:
-    require_admin_user(request)
+async def admin_update_crew_person(request: Request, person_id: int) -> object:
+    user = require_admin_user(request)
     form = await request.form()
     app_user_text = str(form.get("app_user_id") or "").strip()
+    app_user_id = int(app_user_text) if app_user_text.isdigit() else None
+    link_review = crew_link_change_preview(person_id, app_user_id) if app_user_id is not None else None
+    if link_review is not None:
+        return templates.TemplateResponse(
+            "admin.html",
+            admin_page_context(
+                request,
+                user,
+                notice="Confirm how this existing account link should be corrected.",
+                identity_link_review=link_review,
+            ),
+        )
     aliases = re.split(r"[,;\n]+", str(form.get("aliases") or ""))
     _saved, message = update_crew_person(
         person_id,
         canonical_display_name=str(form.get("canonical_display_name") or ""),
-        app_user_id=int(app_user_text) if app_user_text.isdigit() else None,
+        app_user_id=app_user_id,
         aliases=aliases,
         is_active=bool(form.get("is_active")),
         admin_note=str(form.get("admin_note") or ""),
@@ -5725,6 +5764,54 @@ async def admin_disable_override(request: Request, override_id: int) -> Redirect
         if disabled
         else "That override is no longer active."
     )
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/identity-reconciliation/preview")
+def admin_preview_identity_reconciliation(request: Request) -> object:
+    user = require_admin_user(request)
+    report = reconcile_authenticated_identities(apply=False, trigger_source="admin_preview", actor_user_id=int(user["id"]))
+    return templates.TemplateResponse(
+        "admin.html",
+        admin_page_context(request, user, identity_reconciliation_report=report),
+    )
+
+
+@app.post("/admin/identity-reconciliation/apply")
+def admin_apply_identity_reconciliation(request: Request) -> RedirectResponse:
+    user = require_admin_user(request)
+    report = reconcile_authenticated_identities(apply=True, trigger_source="admin_apply", actor_user_id=int(user["id"]))
+    message = (
+        f"Identity reconciliation complete: {report.get('duplicate_identities_merged', 0)} merged, "
+        f"{report.get('links_repaired', 0)} linked, {report.get('published_workdays_repaired', 0)} workdays repaired."
+    )
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/crew-link/resolve")
+async def admin_resolve_crew_link(request: Request) -> RedirectResponse:
+    user = require_admin_user(request)
+    form = await request.form()
+    action = str(form.get("action") or "cancel")
+    source_id = safe_int(form.get("source_person_id")) or 0
+    target_id = safe_int(form.get("target_person_id")) or 0
+    app_user_id = safe_int(form.get("app_user_id")) or 0
+    try:
+        if action == "merge":
+            merge_crew_people(
+                source_id,
+                target_id,
+                merged_by_user_id=int(user["id"]),
+                reason="Admin confirmed duplicate app-account identity merge.",
+            )
+            message = "Duplicate identity merged and personal workday access rebuilt."
+        elif action == "transfer":
+            transfer_app_user_link(app_user_id, target_id)
+            message = "App login transferred to the canonical crew identity."
+        else:
+            message = "Account link change cancelled."
+    except (TypeError, ValueError) as exc:
+        message = str(exc)
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
@@ -6474,6 +6561,7 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
         for alias in aliases if isinstance(aliases, list) else []:
             role_aliases[normalise_role_key(alias)] = role_key
     assignments: list[dict[str, object]] = []
+    seen_person_roles: set[tuple[int, str]] = set()
     for index, role_value in enumerate(role_labels):
         role_label = str(role_value or "").strip()[:100]
         submitted_role_key = str(role_keys[index] if index < len(role_keys) else "").strip()
@@ -6505,6 +6593,11 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
         if directory_person and user_id is None and directory_person.get("app_user_id") in active_users:
             user_id = int(directory_person["app_user_id"])
         role_key = canonical_role_key(submitted_role_key or role_label, role_aliases) if role_label else ""
+        if state != "open" and person_id is not None:
+            identity_key = (person_id, role_key)
+            if identity_key in seen_person_roles:
+                continue
+            seen_person_roles.add(identity_key)
         if role_label and str(index) in save_roles:
             save_workday_role(
                 role_key=role_key,

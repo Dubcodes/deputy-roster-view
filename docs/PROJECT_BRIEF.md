@@ -64,3 +64,5 @@ Device-friendly and especially phone-friendly. The month calendar is the landing
 ## Manual Work Days
 
 Admin work days use a private draft, review, and explicit publish workflow. Supported types are race day, office day, travel day, training day, and other work. Dynamic crew rows allow optional roles, roleless attendees, deliberate open/TBC roles, and structured transport. Published days appear in assigned users' calendar, Next Up, day, weekly totals, global crew view, and timesheet. Non-race days do not invoke Love Racing, race calculations, or track maps.
+
+App users are login accounts; canonical crew people are the humans selected for work. A successful authenticated personal Deputy capture links the account to the one crew person carrying that Deputy employee ID. Published workday visibility follows that canonical link, so differing app and Deputy display names do not create a second crew member. Unlinked attendees remain visible to the crew but do not receive personal calendar access until an app login is linked.

@@ -203,3 +203,14 @@ For race days, the app may show a cached or admin-uploaded 2D course map at the 
 - Presets are editable starting points. Removing RTS and adding Gimbal must not recreate RTS when the draft is reopened.
 - Non-race manual days do not use race count, Love Racing timing, race-clear/pack-up math, or track maps.
 - Manual and Deputy events do not merge by date. A likely date/location duplicate is an Admin warning and requires a deliberate keep-separate or link decision.
+
+## Crew Identity And Manual Visibility
+
+- An app profile name, a Deputy-observed name, a canonical crew name, and an alias are separate concepts.
+- Deputy employee ID from an authenticated personal capture is the authoritative account-to-person link. A shared schedule or similar-looking name is not sufficient ownership evidence.
+- A login account must never remain linked to two active canonical people.
+- Account-only duplicates may be merged into a Deputy-backed person; Deputy-backed people are not auto-merged into each other.
+- Ambiguous or conflicting personal evidence stays in Admin review. Do not guess from normalized names.
+- New manual assignments store canonical `person_id`. The same person may appear more than once only for distinct operational roles.
+- Published personal visibility resolves the assignment's canonical redirect and current app link. Linking an account later must unlock existing workdays without republishing.
+- Unlinked attendees remain on normal crew pages. Account-link warnings belong in Admin review, not beside every crew-facing name.
