@@ -191,3 +191,15 @@ For race days, the app may show a cached or admin-uploaded 2D course map at the 
 - The marker may expose more than one holiday name on a date and must work by mouse, touch, and keyboard.
 - Holiday display does not alter rostered hours, calculated hours, or holiday-pay rules.
 - Keep the small star in reserved normal-flow date-heading space. Its touch target may be larger than the glyph, but it must not overlap the date number, weekday, shifts, or neighbouring cells at narrow phone widths.
+## Manually Organised Work
+
+- Admins may create race days, office days, travel days, training, and other work that is absent from Deputy.
+- A draft is private. Crew see the last published snapshot until a new version is deliberately published.
+- A person is the only generally required value for an assigned row. Role and transport are optional.
+- A blank role means no role has been assigned; display it neutrally as `Attending` without inventing a production position.
+- An unused preset row is omitted. An explicit open row is published as TBC. These states are not interchangeable.
+- Transport keeps operational distinctions: not assigned yet, making own way, not required, a known vehicle, or a custom note.
+- Custom role labels retain their capitalization and punctuation. Their normalized key is used only for matching. A role enters the reusable catalogue only when an admin deliberately saves it.
+- Presets are editable starting points. Removing RTS and adding Gimbal must not recreate RTS when the draft is reopened.
+- Non-race manual days do not use race count, Love Racing timing, race-clear/pack-up math, or track maps.
+- Manual and Deputy events do not merge by date. A likely date/location duplicate is an Admin warning and requires a deliberate keep-separate or link decision.

@@ -1,19 +1,76 @@
 {% extends "base.html" %}
 
-{% block title %}Build Race Day - Deputy Roster View{% endblock %}
+{% block title %}Build Work Day - Deputy Roster View{% endblock %}
+
+{% macro assignment_row(assignment, index) %}
+  <article class="workday-assignment" data-assignment-row>
+    <input type="hidden" name="role_key" value="{{ assignment.role_key or '' }}">
+    <div class="workday-assignment-grid">
+      <label class="form-row">
+        <span>Person</span>
+        <select name="assignee" data-person-select>
+          <option value="">Choose a person</option>
+          {% for person in crew_options %}
+            <option value="{{ person.value }}"{% if assignment.person_id == person.person_id or (not assignment.person_id and assignment.user_id == person.user_id) %} selected{% endif %}>{{ person.label }}{% if not person.user_id %} · no app account{% endif %}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="form-row">
+        <span>Role <small>optional</small></span>
+        <input type="text" name="role_label" list="workday-role-options" value="{{ assignment.role_label or assignment.position_label or '' }}" placeholder="Attending / no role">
+      </label>
+      <label class="form-row">
+        <span>Row type</span>
+        <select name="assignment_state" data-assignment-state>
+          <option value="assigned"{% if assignment.assignment_state != 'open' %} selected{% endif %}>Assigned person</option>
+          <option value="open"{% if assignment.assignment_state == 'open' %} selected{% endif %}>Open / TBC role</option>
+        </select>
+      </label>
+      <label class="form-row">
+        <span>Transport</span>
+        <select name="transport_mode" data-transport-mode>
+          {% for value, label in transport_modes %}<option value="{{ value }}"{% if (assignment.transport_mode or 'unassigned') == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="form-row transport-detail" data-vehicle-field>
+        <span>Vehicle</span>
+        <select name="vehicle_label">
+          <option value="">Choose vehicle</option>
+          {% for vehicle in vehicles %}<option value="{{ vehicle }}"{% if assignment.vehicle_label == vehicle %} selected{% endif %}>{{ vehicle }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="form-row transport-detail" data-custom-transport-field>
+        <span>Custom transport</span>
+        <input type="text" name="custom_transport_text" value="{{ assignment.custom_transport_text or '' }}" placeholder="Taxi, hire van, other detail">
+      </label>
+      <label class="form-row workday-assignment-note">
+        <span>Note <small>optional</small></span>
+        <input type="text" name="assignment_note" value="{{ assignment.assignment_note or '' }}" placeholder="Training, observer, pickup detail">
+      </label>
+    </div>
+    <div class="workday-row-actions">
+      <label class="compact-check"><input type="checkbox" name="save_role_index" value="{{ index }}" data-save-role> Save this role for future days</label>
+      <span class="workday-row-buttons">
+        <button class="icon-button" type="button" data-move-up aria-label="Move assignment up" title="Move up">↑</button>
+        <button class="icon-button" type="button" data-move-down aria-label="Move assignment down" title="Move down">↓</button>
+        <button class="icon-button" type="button" data-remove-row aria-label="Remove assignment" title="Remove">×</button>
+      </span>
+    </div>
+  </article>
+{% endmacro %}
 
 {% block content %}
   <section class="page-heading compact-heading">
     <div>
-      <p class="eyebrow">Admin · Roster builder</p>
-      <h1>{% if roster_day.id %}Edit {{ roster_day.track_label }}{% else %}Build a race day{% endif %}</h1>
-      <p class="muted">Save a private draft first. Publishing is a separate action after you review the changes.</p>
+      <p class="eyebrow">Admin · Workday builder</p>
+      <h1>{% if roster_day.id %}Edit {{ roster_day.title or roster_day.track_label or 'work day' }}{% else %}Build a work day{% endif %}</h1>
+      <p class="muted">Create race days, office days, travel days, training, and other manually organised work. Save a private draft first, then publish after review.</p>
     </div>
     <div class="heading-actions">
       <a class="button button-secondary" href="/admin">Back to admin</a>
       {% if roster_day.id and roster_day.status != "published" %}
-        <form action="/admin/roster-days/{{ roster_day.id }}/publish" method="post" onsubmit="return confirm('Publish this roster to the assigned crew?');">
-          <button class="button" type="submit">Publish roster</button>
+        <form action="/admin/roster-days/{{ roster_day.id }}/publish" method="post" onsubmit="return confirm('Publish this work day to the assigned crew?');">
+          <button class="button" type="submit">Publish work day</button>
         </form>
       {% endif %}
     </div>
@@ -22,180 +79,216 @@
   {% if roster_day.id %}
     <section class="builder-status-strip">
       <span class="badge{% if roster_day.status == 'changes_pending' %} badge-warn{% endif %}">{{ roster_day.status|replace('_', ' ')|title }}</span>
-      {% if roster_day.published_at %}<span>Last published {{ roster_day.published_at|datetime }}</span>{% else %}<span>Not published yet</span>{% endif %}
+      {% if roster_day.published_at %}<span>Last published {{ roster_day.published_at|datetime }}</span>{% else %}<span>Private draft</span>{% endif %}
+    </section>
+    <section class="table-panel builder-publish-summary" aria-label="Publish review summary">
+      <div class="section-heading"><h2>Publish review</h2><span>{{ roster_day.day_type|replace('_', ' ')|title }}</span></div>
+      <dl class="race-day-rows">
+        <div><dt>Date</dt><dd>{{ roster_day.roster_date }}</dd></div>
+        <div><dt>Location</dt><dd>{{ roster_day.custom_location or roster_day.track_label or 'Not set' }}</dd></div>
+        <div><dt>Time</dt><dd>{{ roster_day.office_start or 'TBC' }}{% if roster_day.end_time %}–{{ roster_day.end_time }}{% endif %}</dd></div>
+        <div><dt>Assigned</dt><dd>{{ review_summary.assigned_count }}{% if review_summary.roleless_count %} · {{ review_summary.roleless_count }} attending without a role{% endif %}</dd></div>
+        <div><dt>Open roles</dt><dd>{{ review_summary.open_count }}</dd></div>
+        <div><dt>Transport</dt><dd>{% if review_summary.vehicles %}{{ review_summary.vehicles|join(', ') }}{% endif %}{% if review_summary.self_travel_count %}{% if review_summary.vehicles %} · {% endif %}{{ review_summary.self_travel_count }} making own way{% endif %}{% if not review_summary.vehicles and not review_summary.self_travel_count %}No assigned vehicles{% endif %}</dd></div>
+      </dl>
     </section>
   {% endif %}
 
   {% if changes %}
     <section class="table-panel builder-review-panel">
       <div class="section-heading"><h2>Review unpublished changes</h2><span class="badge badge-warn">{{ changes|length }} changed</span></div>
-      <p class="muted">These highlights compare this draft with the version crew can currently see.</p>
+      <p class="muted">These changes are compared with the version crew can currently see. Reordering alone is ignored.</p>
       <div class="builder-change-list">
-        {% for change in changes %}
-          <div><strong>{{ change.label }}</strong><span>{{ change.old }} → {{ change.new }}</span></div>
-        {% endfor %}
+        {% for change in changes %}<div><strong>{{ change.label }}</strong><span>{{ change.old }} → {{ change.new }}</span></div>{% endfor %}
       </div>
     </section>
   {% elif has_published_version %}
-    <div class="notice">This draft matches the published roster.</div>
+    <div class="notice">This draft matches the published work day.</div>
   {% endif %}
 
-  <form class="builder-form" action="/admin/roster-days/save" method="post">
+  {% if version_history %}
+    <details class="table-panel builder-version-history">
+      <summary>Published history <span>{{ version_history|length }} version{% if version_history|length != 1 %}s{% endif %}</span></summary>
+      <div class="builder-change-list">
+        {% for version in version_history %}
+          <div>
+            <strong>Version {{ version.version_number }} · {{ version.published_at|datetime }}</strong>
+            {% if version.changes %}<span>{% for change in version.changes %}{{ change.label }}: {{ change.old }} → {{ change.new }}{% if not loop.last %}; {% endif %}{% endfor %}</span>{% else %}<span>Initial published version</span>{% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    </details>
+  {% endif %}
+
+  <form class="builder-form" action="/admin/roster-days/save" method="post" data-workday-form>
     <input type="hidden" name="roster_day_id" value="{{ roster_day.id or '' }}">
+    {% if duplicate_candidates %}
+      <section class="notice builder-duplicate-warning">
+        <strong>A Deputy shift may describe the same work day.</strong>
+        <p>Nothing is merged automatically. Keep this manual day separate, or deliberately link it for reference.</p>
+        <label class="form-row"><span>Duplicate handling</span><select name="duplicate_resolution"><option value="keep_separate"{% if roster_day.duplicate_resolution != 'linked' %} selected{% endif %}>Keep separate</option><option value="linked"{% if roster_day.duplicate_resolution == 'linked' %} selected{% endif %}>Link to Deputy day</option></select></label>
+        <label class="form-row"><span>Deputy day</span><select name="linked_deputy_event_id"><option value="">Choose when linking</option>{% for candidate in duplicate_candidates %}<option value="{{ candidate.source_id }}"{% if roster_day.linked_deputy_event_id == candidate.source_id %} selected{% endif %}>{{ candidate.label }}</option>{% endfor %}</select></label>
+        <small>To cancel this manual draft, leave it private and return to Admin.</small>
+      </section>
+    {% else %}
+      <input type="hidden" name="duplicate_resolution" value="{{ roster_day.duplicate_resolution or 'keep_separate' }}">
+      <input type="hidden" name="linked_deputy_event_id" value="{{ roster_day.linked_deputy_event_id or '' }}">
+    {% endif %}
 
     <section class="table-panel">
-      <div class="section-heading"><h2>Race day</h2></div>
+      <div class="section-heading"><h2>Work day</h2></div>
       <div class="builder-race-grid">
-        <label class="form-row{% if 'roster_date' in changed_fields %} is-changed{% endif %}">
-          <span>Date</span>
-          <input type="date" name="roster_date" value="{{ roster_day.roster_date }}" required>
-        </label>
-        <label class="form-row{% if 'track_label' in changed_fields %} is-changed{% endif %}">
-          <span>Track</span>
-          <select name="track_label" data-track-select>
-            <option value="">Choose a track</option>
-            {% for track in track_options %}
-              <option value="{{ track.label }}" data-race-type="{{ track.default_race_type }}" data-travel-minutes="{{ track.travel_minutes }}"{% if track.label == roster_day.track_label %} selected{% endif %}>{{ track.label }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label class="form-row">
-          <span>New / unlisted track</span>
-          <input type="text" name="new_track_label" placeholder="Only use when it is not in the list">
-        </label>
-        <label class="form-row{% if 'race_type' in changed_fields %} is-changed{% endif %}">
-          <span>Race type</span>
-          <select name="race_type" data-race-type-select required>
-            {% for value, label in race_types %}<option value="{{ value }}"{% if value == roster_day.race_type %} selected{% endif %}>{{ label }}</option>{% endfor %}
-          </select>
-        </label>
+        <label class="form-row"><span>Day type</span><select name="day_type" data-day-type>{% for value, label in workday_types %}<option value="{{ value }}"{% if roster_day.day_type == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+        <label class="form-row"><span>Date</span><input type="date" name="roster_date" value="{{ roster_day.roster_date }}" required></label>
+        <label class="form-row" data-general-field><span>Title / purpose</span><input type="text" name="title" value="{{ roster_day.title or '' }}" placeholder="Office work, equipment preparation, training"></label>
+        <label class="form-row" data-general-field><span>Location</span><input type="text" name="custom_location" value="{{ roster_day.custom_location or 'Office / Clow Place' }}" list="known-place-options"></label>
+        <label class="form-row" data-race-field><span>Track</span><select name="track_label" data-track-select><option value="">Choose a track</option>{% for track in track_options %}<option value="{{ track.label }}" data-race-type="{{ track.default_race_type }}" data-travel-minutes="{{ track.travel_minutes }}"{% if track.label == roster_day.track_label %} selected{% endif %}>{{ track.label }}</option>{% endfor %}</select></label>
+        <label class="form-row" data-race-field><span>New / unlisted track</span><input type="text" name="new_track_label" placeholder="Only when it is not in the list"></label>
+        <label class="form-row" data-race-field><span>Race type</span><select name="race_type" data-race-type-select>{% for value, label in race_types %}<option value="{{ value }}"{% if value == roster_day.race_type %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
       </div>
+      <datalist id="known-place-options">{% for place in place_options %}<option value="{{ place }}">{% endfor %}</datalist>
     </section>
 
-    <details class="table-panel builder-travel-panel"{% if roster_day.day_type == 'travel_day' %} open{% endif %}>
-      <summary>Travel day and hotels <span>Optional · expand when needed</span></summary>
+    <details class="table-panel builder-travel-panel" data-travel-section{% if roster_day.day_type in ('race_day', 'travel_day') and (roster_day.start_origin or roster_day.hotel_assignments != '[]') %} open{% endif %}>
+      <summary>Travel and hotels <span>Optional · expand when needed</span></summary>
       <div class="builder-travel-body">
         <div class="form-grid-two">
-          <label class="form-row{% if 'start_origin' in changed_fields %} is-changed{% endif %}">
-            <span>Race-day start origin</span>
-            <input type="text" name="start_origin" list="known-place-options" value="{{ roster_day.start_origin or '' }}" placeholder="Office / Clow Place or hotel">
-          </label>
-          <label class="form-row{% if 'finish_destination' in changed_fields %} is-changed{% endif %}">
-            <span>Race-day finish destination</span>
-            <input type="text" name="finish_destination" list="known-place-options" value="{{ roster_day.finish_destination or '' }}" placeholder="Office / Clow Place or hotel">
-          </label>
+          <label class="form-row"><span>Start origin</span><input type="text" name="start_origin" list="known-place-options" value="{{ roster_day.start_origin or '' }}" placeholder="Office / Clow Place or hotel"></label>
+          <label class="form-row"><span>Finish destination</span><input type="text" name="finish_destination" list="known-place-options" value="{{ roster_day.finish_destination or '' }}" placeholder="Office / Clow Place or hotel"></label>
         </div>
-        <datalist id="known-place-options">{% for place in place_options %}<option value="{{ place }}">{% endfor %}</datalist>
-        <p class="muted">These directed selections override inferred hotel/office context for this published race day.</p>
-        <label class="builder-travel-toggle">
-          <input type="checkbox" name="is_travel_day" value="1"{% if roster_day.day_type == 'travel_day' %} checked{% endif %}>
-          <span>This is a travel day</span>
-        </label>
-        <p class="muted">Assign each traveller to their hotel. Different crew can stay at different hotels, and hotel-only crew will still receive the published travel day.</p>
         <div class="hotel-assignment-list" data-hotel-list>
-          {% for hotel in hotel_rows %}
-            <div class="hotel-assignment-row">
-              <select name="hotel_user_id" aria-label="Traveller">
-                <option value="">Choose crew member</option>
-                {% for user in users %}<option value="{{ user.id }}"{% if hotel.user_id == user.id %} selected{% endif %}>{{ user.display_name or user.deputy_email }}</option>{% endfor %}
-              </select>
-              <input type="text" name="hotel_name" value="{{ hotel.hotel_name or '' }}" placeholder="Hotel name">
-            </div>
-          {% endfor %}
+          {% for hotel in hotel_rows %}<div class="hotel-assignment-row"><select name="hotel_user_id"><option value="">Choose crew member</option>{% for user in users %}<option value="{{ user.id }}"{% if hotel.user_id == user.id %} selected{% endif %}>{{ user.display_name or user.deputy_email }}</option>{% endfor %}</select><input type="text" name="hotel_name" value="{{ hotel.hotel_name or '' }}" placeholder="Hotel name"></div>{% endfor %}
         </div>
-        <button class="button button-secondary button-compact" type="button" data-add-hotel>Add another hotel assignment</button>
-        <template data-hotel-template>
-          <div class="hotel-assignment-row">
-            <select name="hotel_user_id" aria-label="Traveller">
-              <option value="">Choose crew member</option>
-              {% for user in users %}<option value="{{ user.id }}">{{ user.display_name or user.deputy_email }}</option>{% endfor %}
-            </select>
-            <input type="text" name="hotel_name" placeholder="Hotel name">
-          </div>
-        </template>
+        <button class="button button-secondary button-compact" type="button" data-add-hotel>Add hotel assignment</button>
+        <template data-hotel-template><div class="hotel-assignment-row"><select name="hotel_user_id"><option value="">Choose crew member</option>{% for user in users %}<option value="{{ user.id }}">{{ user.display_name or user.deputy_email }}</option>{% endfor %}</select><input type="text" name="hotel_name" placeholder="Hotel name"></div></template>
       </div>
     </details>
 
     <section class="table-panel">
       <div class="section-heading"><h2>Timing</h2></div>
-      <p class="muted">On-track time is suggested from the saved Office / Clow Place travel time. You can always overwrite it.</p>
       <div class="builder-time-grid">
-        <label class="form-row{% if 'office_start' in changed_fields %} is-changed{% endif %}"><span>Start at office</span><input type="time" name="office_start" value="{{ roster_day.office_start }}" data-office-time></label>
-        <label class="form-row{% if 'on_track_time' in changed_fields %} is-changed{% endif %}"><span>Arrive on track</span><input type="time" name="on_track_time" value="{{ roster_day.on_track_time }}" data-on-track-time></label>
-        <label class="form-row{% if 'first_race_time' in changed_fields %} is-changed{% endif %}"><span>First race</span><input type="time" name="first_race_time" value="{{ roster_day.first_race_time }}"></label>
-        <label class="form-row{% if 'last_race_time' in changed_fields %} is-changed{% endif %}"><span>Last race</span><input type="time" name="last_race_time" value="{{ roster_day.last_race_time }}"></label>
-        <label class="form-row{% if 'race_count' in changed_fields %} is-changed{% endif %}"><span>Total races</span><input type="number" name="race_count" min="1" max="50" value="{{ roster_day.race_count or '' }}"></label>
+        <label class="form-row"><span>Start time</span><input type="time" name="office_start" value="{{ roster_day.office_start }}" data-office-time></label>
+        <label class="form-row" data-general-field><span>Finish time</span><input type="time" name="end_time" value="{{ roster_day.end_time or '' }}"></label>
+        <label class="form-row" data-general-field><span>Break minutes <small>optional</small></span><input type="number" name="break_minutes" min="0" max="720" value="{{ roster_day.break_minutes or 0 }}"></label>
+        <label class="form-row" data-race-field><span>Arrive on track</span><input type="time" name="on_track_time" value="{{ roster_day.on_track_time }}" data-on-track-time></label>
+        <label class="form-row" data-race-field><span>First race</span><input type="time" name="first_race_time" value="{{ roster_day.first_race_time }}"></label>
+        <label class="form-row" data-race-field><span>Last race</span><input type="time" name="last_race_time" value="{{ roster_day.last_race_time }}"></label>
+        <label class="form-row" data-race-field><span>Total races</span><input type="number" name="race_count" min="1" max="50" value="{{ roster_day.race_count or '' }}"></label>
       </div>
     </section>
 
     <section class="table-panel">
-      <div class="section-heading"><h2>Crew and vehicles</h2><small>Blank positions are not published</small></div>
-      <div class="builder-assignment-list" role="table" aria-label="Crew assignments">
-        <div class="builder-assignment-row builder-assignment-head" role="row"><span>Position</span><span>Who</span><span>Vehicle</span></div>
-        {% for position in positions %}
-          {% set assignment = assignments.get(position|lower, {}) %}
-          <div class="builder-assignment-row{% if position|lower in changed_positions %} is-changed{% endif %}" role="row">
-            <strong>{{ position }}</strong>
-            <input type="hidden" name="position_label" value="{{ position }}">
-            <select name="assignee" aria-label="Person working {{ position }}">
-              <option value="">Not assigned</option>
-              <option value="tbc"{% if assignment.assignee_label == 'TBC' and not assignment.user_id %} selected{% endif %}>TBC</option>
-              {% for person in crew_options %}
-                <option value="{{ person.value }}"{% if assignment.user_id and assignment.user_id == person.user_id %} selected{% elif not assignment.user_id and assignment.assignee_label == person.label %} selected{% endif %}>{{ person.label }}</option>
-              {% endfor %}
-            </select>
-            <select name="vehicle_label" aria-label="Vehicle for {{ position }}">
-              <option value="">No vehicle</option>
-              {% for vehicle in vehicles %}<option value="{{ vehicle }}"{% if assignment.vehicle_label == vehicle %} selected{% endif %}>{{ vehicle }}</option>{% endfor %}
-            </select>
-          </div>
-        {% endfor %}
+      <div class="section-heading builder-assignment-heading"><div><h2>Crew and transport</h2><small>Rows without a person are not published. Role and transport are optional.</small></div><div class="builder-preset-controls"><select data-preset-select aria-label="Starting preset">{% for key, preset in workday_presets.items() %}<option value="{{ key }}">{{ preset.label }}</option>{% endfor %}</select><button class="button button-secondary button-compact" type="button" data-apply-preset>Apply preset</button></div></div>
+      <datalist id="workday-role-options">{% for role in active_roles %}<option value="{{ role.display_label }}">{% endfor %}</datalist>
+      <div class="workday-assignment-list" data-assignment-list>
+        {% for assignment in assignment_rows %}{{ assignment_row(assignment, loop.index0) }}{% endfor %}
       </div>
+      <div class="workday-add-actions"><button class="button button-secondary" type="button" data-add-person>Add person</button><button class="button button-secondary" type="button" data-add-open>Add open role</button></div>
+      <template data-assignment-template>{{ assignment_row({}, '__INDEX__') }}</template>
     </section>
 
-    <section class="table-panel">
-      <label class="form-row{% if 'notes' in changed_fields %} is-changed{% endif %}"><span>Important notes shown to crew</span><textarea name="notes" rows="5" placeholder="Access, parking, gear, unusual timings…">{{ roster_day.notes }}</textarea></label>
+    <section class="table-panel workday-notes-grid">
+      <label class="form-row"><span>Important notes shown to crew</span><textarea name="notes" rows="5" placeholder="Access, parking, gear, unusual timings…">{{ roster_day.notes }}</textarea></label>
+      <label class="form-row" data-general-field><span>Source / reference note <small>optional</small></span><input type="text" name="source_reference" value="{{ roster_day.source_reference or '' }}" placeholder="Organised by email"></label>
     </section>
 
-    <section class="table-panel spreadsheet-placeholder">
-      <div class="section-heading"><h2>Spreadsheet paste</h2><span class="badge">Waiting for sample</span></div>
-      <p class="muted">Once we have one real spreadsheet example, pasted rows will fill this draft and show a preview before saving. They will never publish automatically.</p>
-    </section>
-
-    <div class="builder-save-bar"><button class="button" type="submit">Save draft and review</button><span>Saving does not notify crew.</span></div>
+    <div class="builder-save-bar"><button class="button" type="submit">Save draft and review</button><span>Saving does not expose this day to crew.</span></div>
   </form>
+
+  <details class="table-panel role-catalogue-panel">
+    <summary>Reusable roles <span>{{ role_catalogue|length }} roles</span></summary>
+    <p class="muted">Add, rename, reorder, disable, or add aliases. Disabling a role only removes it from future selection.</p>
+    <form class="role-catalogue-add" action="/admin/workday-roles/save" method="post">
+      <input type="text" name="display_label" placeholder="New role" required><input type="text" name="aliases" placeholder="Aliases, comma separated"><input type="number" name="display_order" value="1000" aria-label="Order"><button class="button button-secondary" type="submit">Add role</button>
+    </form>
+    <div class="role-catalogue-list">
+      {% for role in role_catalogue %}<form class="role-catalogue-row" action="/admin/workday-roles/save" method="post"><input type="hidden" name="role_key" value="{{ role.role_key }}"><input type="text" name="display_label" value="{{ role.display_label }}" aria-label="Role label"><input type="text" name="aliases" value="{{ role.aliases|replace('[', '')|replace(']', '')|replace('"', '') }}" aria-label="Aliases"><input type="number" name="display_order" value="{{ role.display_order }}" aria-label="Order"><label class="compact-check"><input type="checkbox" name="is_active" value="1"{% if role.is_active %} checked{% endif %}> Active</label><button class="button button-secondary button-compact" type="submit">Save</button></form>{% endfor %}
+    </div>
+  </details>
 {% endblock %}
 
 {% block scripts %}
   <script>
     (() => {
-      const track = document.querySelector('[data-track-select]');
-      const raceType = document.querySelector('[data-race-type-select]');
-      const office = document.querySelector('[data-office-time]');
-      const onTrack = document.querySelector('[data-on-track-time]');
-      if (!track || !office || !onTrack) return;
+      const form = document.querySelector('[data-workday-form]');
+      if (!form) return;
+      const dayType = form.querySelector('[data-day-type]');
+      const refreshType = () => {
+        const race = dayType.value === 'race_day';
+        form.querySelectorAll('[data-race-field]').forEach((field) => { field.hidden = !race; });
+        form.querySelectorAll('[data-general-field]').forEach((field) => { field.hidden = race; });
+      };
+      dayType.addEventListener('change', refreshType);
+      refreshType();
+
+      const list = form.querySelector('[data-assignment-list]');
+      const template = form.querySelector('[data-assignment-template]');
+      let rowIndex = list.querySelectorAll('[data-assignment-row]').length;
+      const refreshRow = (row) => {
+        const state = row.querySelector('[data-assignment-state]')?.value;
+        const person = row.querySelector('[data-person-select]');
+        if (person) person.disabled = state === 'open';
+        const mode = row.querySelector('[data-transport-mode]')?.value;
+        const vehicle = row.querySelector('[data-vehicle-field]');
+        const custom = row.querySelector('[data-custom-transport-field]');
+        if (vehicle) vehicle.hidden = mode !== 'vehicle';
+        if (custom) custom.hidden = mode !== 'custom';
+      };
+      const wireRow = (row) => {
+        row.querySelector('[data-assignment-state]')?.addEventListener('change', () => refreshRow(row));
+        row.querySelector('[data-transport-mode]')?.addEventListener('change', () => refreshRow(row));
+        row.querySelector('[data-remove-row]')?.addEventListener('click', () => row.remove());
+        row.querySelector('[data-move-up]')?.addEventListener('click', () => { if (row.previousElementSibling) list.insertBefore(row, row.previousElementSibling); });
+        row.querySelector('[data-move-down]')?.addEventListener('click', () => { if (row.nextElementSibling) list.insertBefore(row.nextElementSibling, row); });
+        refreshRow(row);
+      };
+      list.querySelectorAll('[data-assignment-row]').forEach(wireRow);
+      const addRow = (state = 'assigned', role = '') => {
+        const fragment = template.content.cloneNode(true);
+        const row = fragment.querySelector('[data-assignment-row]');
+        const saveRole = row.querySelector('[data-save-role]');
+        if (saveRole) saveRole.value = String(rowIndex++);
+        row.querySelector('[name="assignment_state"]').value = state;
+        row.querySelector('[name="role_label"]').value = role;
+        list.append(fragment);
+        wireRow(list.lastElementChild);
+      };
+      form.querySelector('[data-add-person]')?.addEventListener('click', () => addRow());
+      form.querySelector('[data-add-open]')?.addEventListener('click', () => addRow('open'));
+
+      const presets = {{ workday_presets|tojson }};
+      form.querySelector('[data-apply-preset]')?.addEventListener('click', () => {
+        const key = form.querySelector('[data-preset-select]').value;
+        const preset = presets[key];
+        if (!preset) return;
+        const populated = [...list.querySelectorAll('[data-assignment-row]')].some((row) => row.querySelector('[name="assignee"]')?.value || row.querySelector('[name="role_label"]')?.value);
+        if (populated && !confirm('Replace the current assignment rows with this preset?')) return;
+        list.replaceChildren();
+        dayType.value = preset.day_type;
+        preset.roles.forEach((role) => addRow('assigned', role));
+        if (!preset.roles.length) addRow();
+        refreshType();
+      });
+
+      const track = form.querySelector('[data-track-select]');
+      const raceType = form.querySelector('[data-race-type-select]');
+      const office = form.querySelector('[data-office-time]');
+      const onTrack = form.querySelector('[data-on-track-time]');
       const suggestArrival = () => {
-        const option = track.options[track.selectedIndex];
+        const option = track?.options[track.selectedIndex];
         const minutes = Number(option?.dataset.travelMinutes || 0);
-        if (!office.value || !minutes || (onTrack.value && onTrack.dataset.suggested !== '1')) return;
+        if (!office?.value || !minutes || !onTrack || (onTrack.value && onTrack.dataset.suggested !== '1')) return;
         const [hours, mins] = office.value.split(':').map(Number);
         const total = (hours * 60 + mins + minutes) % 1440;
         onTrack.value = `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
         onTrack.dataset.suggested = '1';
       };
-      track.addEventListener('change', () => {
-        const option = track.options[track.selectedIndex];
-        if (option?.dataset.raceType) raceType.value = option.dataset.raceType;
-        suggestArrival();
-      });
-      office.addEventListener('change', suggestArrival);
-      onTrack.addEventListener('input', () => { onTrack.dataset.suggested = '0'; });
-      const addHotel = document.querySelector('[data-add-hotel]');
-      const hotelList = document.querySelector('[data-hotel-list]');
-      const hotelTemplate = document.querySelector('[data-hotel-template]');
-      addHotel?.addEventListener('click', () => {
-        if (hotelList && hotelTemplate) hotelList.append(hotelTemplate.content.cloneNode(true));
-      });
+      track?.addEventListener('change', () => { const option = track.options[track.selectedIndex]; if (option?.dataset.raceType) raceType.value = option.dataset.raceType; suggestArrival(); });
+      office?.addEventListener('change', suggestArrival);
+      onTrack?.addEventListener('input', () => { onTrack.dataset.suggested = '0'; });
+      const hotelList = form.querySelector('[data-hotel-list]');
+      const hotelTemplate = form.querySelector('[data-hotel-template]');
+      form.querySelector('[data-add-hotel]')?.addEventListener('click', () => { if (hotelList && hotelTemplate) hotelList.append(hotelTemplate.content.cloneNode(true)); });
     })();
   </script>
 {% endblock %}

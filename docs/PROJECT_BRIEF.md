@@ -39,7 +39,7 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 - Let admins preview one official meeting without saving it and safely backfill unresolved recent Thoroughbred days by date range.
 - Let admins upload a better map for any crew-known location, download the retained automatic image, and reset to automatic without losing either source.
 - Present maps by canonical racing venue: consolidate trial aliases, exclude operational locations, and let admins classify uncertain labels without rewriting roster history.
-- Let admins build race-day roster drafts, review changes against the last published version, and publish assignments to the selected crew as an early test of replacing Deputy.
+- Let admins build manual race, office, travel, training, and other work days, review changes against the last published version, and publish them to selected crew without writing to Deputy.
 - Keep personal roster views scoped to the signed-in user's own shifts. Shared crew context is only shown as race-day schedule context.
 - Reconcile each registered user's confirmed personal assignment into missing shared crew positions without hiding source conflicts.
 - Treat incomplete Deputy responses conservatively, delay future-shift removal until two complete absences, and permanently lock completed workdays.
@@ -60,3 +60,7 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 ## Primary UX
 
 Device-friendly and especially phone-friendly. The month calendar is the landing page, but the day page must be dense, readable, and useful during work.
+
+## Manual Work Days
+
+Admin work days use a private draft, review, and explicit publish workflow. Supported types are race day, office day, travel day, training day, and other work. Dynamic crew rows allow optional roles, roleless attendees, deliberate open/TBC roles, and structured transport. Published days appear in assigned users' calendar, Next Up, day, weekly totals, global crew view, and timesheet. Non-race days do not invoke Love Racing, race calculations, or track maps.

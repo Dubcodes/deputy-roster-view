@@ -464,8 +464,8 @@ def main() -> None:
         raise AssertionError(f"Expected completed-only labelled weekday insights, got {insights!r}")
 
     builder = client.get("/admin/roster-days/new")
-    if builder.status_code != 200 or "Build a race day" not in builder.text or "Crew and vehicles" not in builder.text:
-        raise AssertionError("Expected admin roster builder to render.")
+    if builder.status_code != 200 or "Build a work day" not in builder.text or "Crew and transport" not in builder.text:
+        raise AssertionError("Expected admin workday builder to render.")
     filtered_positions = roster_builder_positions(["FCR CCU 1", "FCR DIR", "H-Cambridge", "Travel then Overnighter", "Side 1"])
     if filtered_positions.count("Side 1") != 1 or any(value in filtered_positions for value in ("FCR CCU 1", "FCR DIR", "H-Cambridge", "Travel then Overnighter")):
         raise AssertionError(f"Expected builder context areas to be filtered, got {filtered_positions!r}")
@@ -491,12 +491,12 @@ def main() -> None:
     draft_location = draft.headers["location"]
     roster_day_id = int(draft_location.split("/admin/roster-days/", 1)[1].split("?", 1)[0])
     draft_page = client.get(f"/admin/roster-days/{roster_day_id}")
-    if "Not published yet" not in draft_page.text or "Use the north gate." not in draft_page.text:
+    if draft_page.status_code != 200 or "Private draft" not in draft_page.text or "Use the north gate." not in draft_page.text:
         raise AssertionError("Expected saved roster draft to render privately.")
     publish = client.post(f"/admin/roster-days/{roster_day_id}/publish", follow_redirects=False)
     assert_redirect(publish, "Roster+version+1+published")
     published_day = client.get("/day/2026-07-12")
-    if "Published roster" not in published_day.text or "Test Park" not in published_day.text or "684" not in published_day.text:
+    if "Manually rostered" not in published_day.text or "Test Park" not in published_day.text or "684" not in published_day.text:
         raise AssertionError("Expected published roster to appear on the assigned user's day view.")
     published_month = client.get("/month?year=2026&month=7")
     if "published-roster-marker" not in published_month.text or "Test Park" not in published_month.text:
@@ -547,6 +547,8 @@ def main() -> None:
             "new_track_label": "Rotorua",
             "race_type": "thoroughbred",
             "is_travel_day": "1",
+            "office_start": "13:00",
+            "end_time": "17:00",
             "hotel_user_id": str(admin_user["id"]),
             "hotel_name": "Lake Hotel",
         },

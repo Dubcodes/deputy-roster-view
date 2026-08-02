@@ -31,9 +31,9 @@
           </div>
           <div class="list-day-shifts">
             {% for roster in day.manual_rosters %}
-              <a class="list-shift published-roster-marker" href="/day/{{ day.iso }}">
-                <span class="list-shift-main"><strong>{{ roster.track_label }}</strong><span>{{ roster.position_label }}</span></span>
-                <span class="list-shift-meta"><span>{{ roster.office_start or "Time TBC" }}</span><span>Published roster</span></span>
+              <a class="list-shift published-roster-marker" href="/day/{{ day.iso }}{% if global_view %}?scope=global&amp;manual_id={{ roster.id }}{% endif %}">
+                <span class="list-shift-main"><strong>{{ roster.location_label or roster.display_title }}</strong><span>{{ roster.position_label if roster.day_type == 'race_day' else roster.display_title }}</span></span>
+                <span class="list-shift-meta"><span>{{ roster.time_range }}</span><span>{{ roster.hours_label }}</span><span>Manually rostered</span></span>
               </a>
             {% endfor %}
             {% for shift in day.shifts %}
@@ -132,9 +132,10 @@
 
             <div class="shift-list">
               {% for roster in day.manual_rosters %}
-                <a class="shift-card published-roster-marker" href="/day/{{ day.iso }}">
-                  <strong class="shift-track">{{ roster.track_label }}</strong>
-                  <span class="shift-mini"><span class="shift-mini-role">{{ roster.position_label }}</span><span class="shift-mini-time">{{ roster.office_start or "TBC" }}</span></span>
+                <a class="shift-card published-roster-marker" href="/day/{{ day.iso }}{% if global_view %}?scope=global&amp;manual_id={{ roster.id }}{% endif %}">
+                  <strong class="shift-track">{{ roster.location_label or roster.display_title }}</strong>
+                  <span class="shift-mini"><span class="shift-mini-role">{{ roster.position_label if roster.day_type == 'race_day' else roster.display_title }}</span><span class="shift-mini-time">{{ roster.office_start or "TBC" }}</span></span>
+                  {% if day.manual_rosters|length == 1 %}<span class="shift-meta">{{ roster.hours_label }}</span>{% endif %}
                 </a>
               {% endfor %}
               {% for shift in day.shifts %}
@@ -194,14 +195,22 @@
       <div class="section-heading">
         <h2>Next Up</h2>
       </div>
-      {% if upcoming_shifts %}
+      {% if upcoming_items %}
         <div class="upcoming-list">
-          {% for shift in upcoming_shifts %}
-            <a class="upcoming-card" href="/day/{{ shift.date }}" style="{{ shift.colour_style }}">
-              <span>{{ shift.start_at|day_short }}</span>
-              <strong>{{ shift.track_label }}</strong>
-              <span>{{ shift.role_chain_label or shift.role_label or shift.title or "Shift" }} · {{ shift.display_start_label or shift.start_label }}{% if shift.race_type_label %} · {{ shift.race_type_label }}{% endif %}</span>
-            </a>
+          {% for item in upcoming_items %}
+            {% if item.upcoming_kind == "manual" %}
+              <a class="upcoming-card published-roster-marker" href="/day/{{ item.date }}">
+                <span>{{ item.date_label }}</span>
+                <strong>{{ item.location_label or item.display_title }}</strong>
+                <span>{{ item.position_label if item.day_type == 'race_day' else item.display_title }} · {{ item.office_start or "Time TBC" }} · {{ item.hours_label }}</span>
+              </a>
+            {% else %}
+              <a class="upcoming-card" href="/day/{{ item.date }}" style="{{ item.colour_style }}">
+                <span>{{ item.start_at|day_short }}</span>
+                <strong>{{ item.track_label }}</strong>
+                <span>{{ item.role_chain_label or item.role_label or item.title or "Shift" }} · {{ item.display_start_label or item.start_label }}{% if item.race_type_label %} · {{ item.race_type_label }}{% endif %}</span>
+              </a>
+            {% endif %}
           {% endfor %}
         </div>
       {% else %}

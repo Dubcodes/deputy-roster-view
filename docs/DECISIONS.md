@@ -172,3 +172,6 @@ All roster-note clocks use one strict token parser. Dotted AM/PM forms are valid
 When race-day maths is complete, the heading uses the calculated start, calculated finish, and calculated duration as one set. Otherwise it uses the complete Deputy roster set. A shared `display_window` object enforces that choice across views.
 
 Crew event audit rows remain granular in SQLite, but user-facing history is grouped by event group. Names are canonicalized before the message is generated so aliases do not produce duplicate-looking changes.
+## Generalize the Race-Day Draft into a Manual Workday Model
+
+The existing `roster_days` publication/version boundary remains, while assignments move from one fixed position per row to dynamic `workday_assignments`. This preserves old drafts and snapshots while allowing office days, roleless attendees, custom roles, explicit vacancies, and structured transport. A shared role catalogue supplies convenient defaults without constraining an individual event. Manual events keep independent identity and provenance; date overlap with Deputy never causes an automatic merge.

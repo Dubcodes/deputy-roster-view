@@ -262,6 +262,7 @@ def render_month_template() -> None:
         weeks=[{"days": [day], "total": 9.25}],
         active_days=[day],
         upcoming_shifts=[shift],
+        upcoming_items=[{**shift, "upcoming_kind": "deputy"}],
         today=date(2026, 6, 14),
     )
     if 'class="shift-card' not in html:
@@ -286,7 +287,7 @@ def render_month_template() -> None:
     list_html = template.render(
         request=SimpleNamespace(url=SimpleNamespace(path="/month", query="scope=global"), cookies={}),
         notice=None, current_user=None, view="list", global_view=True,
-        active_days=[day], weeks=[], upcoming_shifts=[], today=date(2026, 6, 14),
+        active_days=[day], weeks=[], upcoming_shifts=[], upcoming_items=[], today=date(2026, 6, 14),
         month_name="June 2026", header_prev_url="#", header_next_url="#",
         month_view_url="#", list_view_url="#",
     )

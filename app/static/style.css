@@ -3515,7 +3515,11 @@ textarea {
   background: var(--surface-raised);
 }
 
-/* Admin race-day builder */
+/* Admin workday builder */
+[hidden] {
+  display: none !important;
+}
+
 .builder-status-strip,
 .builder-save-bar {
   display: flex;
@@ -3644,6 +3648,114 @@ textarea {
   gap: 8px;
 }
 
+.builder-assignment-heading,
+.builder-preset-controls,
+.workday-add-actions,
+.workday-row-actions,
+.workday-row-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.builder-assignment-heading,
+.workday-row-actions {
+  justify-content: space-between;
+}
+
+.builder-assignment-heading > div:first-child {
+  min-width: 0;
+}
+
+.builder-assignment-heading small {
+  color: var(--muted);
+}
+
+.workday-assignment-list,
+.role-catalogue-list,
+.workday-notes-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.workday-assignment {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.workday-assignment-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.workday-assignment-note {
+  grid-column: span 2;
+}
+
+.workday-row-actions {
+  margin-top: 8px;
+}
+
+.workday-add-actions {
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.compact-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.icon-button {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 900;
+}
+
+.icon-button:hover,
+.icon-button:focus-visible {
+  border-color: var(--accent);
+  background: var(--surface-soft);
+}
+
+.role-catalogue-panel {
+  margin-top: 14px;
+}
+
+.role-catalogue-panel > summary {
+  display: flex;
+  justify-content: space-between;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.role-catalogue-add,
+.role-catalogue-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(160px, 1.4fr) 80px auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.role-catalogue-add {
+  margin: 12px 0;
+}
+
 .published-roster-card,
 .published-roster-marker {
   border-left: 5px solid var(--accent);
@@ -3672,6 +3784,27 @@ input[type="number"] {
 
   .hotel-assignment-row {
     grid-template-columns: 1fr;
+  }
+
+  .builder-assignment-heading,
+  .builder-preset-controls,
+  .workday-row-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .workday-assignment-grid,
+  .role-catalogue-add,
+  .role-catalogue-row {
+    grid-template-columns: 1fr;
+  }
+
+  .workday-assignment-note {
+    grid-column: auto;
+  }
+
+  .workday-row-buttons {
+    align-self: flex-end;
   }
 
   .builder-change-list div,

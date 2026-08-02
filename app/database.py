@@ -15,6 +15,7 @@ from .admin_overrides import (
     normalise_override_value,
     validate_override_date,
 )
+from .workday_builder import BUILT_IN_ROLES, canonical_role_key, legacy_transport_mode
 
 
 DEFAULT_CREW_POOL_NAME = "Northern Crew"
@@ -645,6 +646,40 @@ def init_db(settings: Settings | None = None) -> None:
                 FOREIGN KEY (published_by_user_id) REFERENCES app_users(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS workday_role_catalogue (
+                role_key TEXT PRIMARY KEY,
+                display_label TEXT NOT NULL,
+                aliases TEXT DEFAULT '[]',
+                display_order INTEGER DEFAULT 999999,
+                is_active INTEGER DEFAULT 1,
+                is_built_in INTEGER DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS workday_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                roster_day_id INTEGER NOT NULL,
+                person_id INTEGER,
+                user_id INTEGER,
+                assignee_label TEXT,
+                role_key TEXT,
+                role_label TEXT,
+                assignment_state TEXT DEFAULT 'assigned',
+                transport_mode TEXT DEFAULT 'unassigned',
+                vehicle_key TEXT,
+                vehicle_label TEXT,
+                custom_transport_text TEXT,
+                assignment_note TEXT,
+                sort_order INTEGER DEFAULT 999999,
+                legacy_assignment_id INTEGER UNIQUE,
+                created_at TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (roster_day_id) REFERENCES roster_days(id) ON DELETE CASCADE,
+                FOREIGN KEY (person_id) REFERENCES crew_people(id) ON DELETE SET NULL,
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_shifts_date ON shifts(date);
             CREATE INDEX IF NOT EXISTS idx_shifts_start_at ON shifts(start_at);
             CREATE INDEX IF NOT EXISTS idx_shifts_changed ON shifts(changed_since_viewed);
@@ -674,6 +709,8 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_roster_days_date ON roster_days(roster_date, status);
             CREATE INDEX IF NOT EXISTS idx_roster_day_assignments_user ON roster_day_assignments(user_id, roster_day_id);
             CREATE INDEX IF NOT EXISTS idx_roster_day_versions_day ON roster_day_versions(roster_day_id, version_number DESC);
+            CREATE INDEX IF NOT EXISTS idx_workday_assignments_day ON workday_assignments(roster_day_id, sort_order);
+            CREATE INDEX IF NOT EXISTS idx_workday_assignments_user ON workday_assignments(user_id, roster_day_id);
             """
         )
         _ensure_default_crew_pool(conn)
@@ -727,6 +764,22 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "roster_days", "hotel_assignments", "TEXT DEFAULT '[]'")
         _ensure_column(conn, "roster_days", "start_origin", "TEXT")
         _ensure_column(conn, "roster_days", "finish_destination", "TEXT")
+        _ensure_column(conn, "roster_days", "title", "TEXT")
+        _ensure_column(conn, "roster_days", "custom_location", "TEXT")
+        _ensure_column(conn, "roster_days", "end_time", "TEXT")
+        _ensure_column(conn, "roster_days", "break_minutes", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "roster_days", "source_reference", "TEXT")
+        _ensure_column(conn, "roster_days", "provenance", "TEXT DEFAULT 'manual'")
+        _ensure_column(conn, "roster_days", "linked_deputy_event_id", "TEXT")
+        _ensure_column(conn, "roster_days", "duplicate_resolution", "TEXT DEFAULT 'keep_separate'")
+        _ensure_column(conn, "roster_days", "canonical_location_key", "TEXT")
+        conn.execute(
+            """
+            UPDATE roster_days
+            SET canonical_location_key = track_key
+            WHERE TRIM(COALESCE(canonical_location_key, '')) = ''
+            """
+        )
         _ensure_column(conn, "track_maps", "image_width", "INTEGER")
         _ensure_column(conn, "track_maps", "image_height", "INTEGER")
         _ensure_column(conn, "track_maps", "byte_size", "INTEGER")
@@ -771,6 +824,8 @@ def init_db(settings: Settings | None = None) -> None:
         _sync_crew_directory(conn)
         _reclassify_legacy_shift_changes(conn)
         _migrate_admin_overrides(conn)
+        _seed_workday_role_catalogue(conn)
+        _migrate_legacy_roster_assignments(conn)
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_admin_overrides_effective
@@ -796,6 +851,84 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
     }
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _seed_workday_role_catalogue(conn: sqlite3.Connection) -> None:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    for order, (role_key, display_label, aliases) in enumerate(BUILT_IN_ROLES):
+        conn.execute(
+            """
+            INSERT INTO workday_role_catalogue (
+                role_key, display_label, aliases, display_order, is_active,
+                is_built_in, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, 1, 1, ?, ?)
+            ON CONFLICT(role_key) DO UPDATE SET
+                is_built_in = 1,
+                aliases = CASE
+                    WHEN TRIM(COALESCE(workday_role_catalogue.aliases, '')) IN ('', '[]')
+                    THEN excluded.aliases ELSE workday_role_catalogue.aliases END,
+                updated_at = CASE
+                    WHEN workday_role_catalogue.updated_at IS NULL THEN excluded.updated_at
+                    ELSE workday_role_catalogue.updated_at END
+            """,
+            (role_key, display_label, json.dumps(list(aliases)), order, now, now),
+        )
+
+
+def _migrate_legacy_roster_assignments(conn: sqlite3.Connection) -> None:
+    migration_key = "workday_assignments_migrated_v1"
+    migrated = conn.execute(
+        "SELECT value FROM app_settings WHERE key = ?",
+        (migration_key,),
+    ).fetchone()
+    if migrated is not None and str(migrated["value"] or "") == "1":
+        return
+    rows = conn.execute(
+        """
+        SELECT a.*,
+               (SELECT p.id FROM crew_people p WHERE p.app_user_id = a.user_id LIMIT 1) AS person_id
+        FROM roster_day_assignments a
+        ORDER BY a.roster_day_id, a.sort_order, a.id
+        """
+    ).fetchall()
+    for row in rows:
+        role_label = str(row["position_label"] or "").strip()
+        assignee_label = str(row["assignee_label"] or "").strip()
+        vehicle_label = str(row["vehicle_label"] or "").strip()
+        assignment_state = "open" if assignee_label.casefold() == "tbc" else "assigned"
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO workday_assignments (
+                roster_day_id, person_id, user_id, assignee_label,
+                role_key, role_label, assignment_state, transport_mode,
+                vehicle_key, vehicle_label, custom_transport_text,
+                assignment_note, sort_order, legacy_assignment_id,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, ?)
+            """,
+            (
+                int(row["roster_day_id"]),
+                row["person_id"],
+                row["user_id"],
+                assignee_label,
+                canonical_role_key(role_label),
+                role_label,
+                assignment_state,
+                legacy_transport_mode(vehicle_label),
+                re.sub(r"[^a-z0-9]+", "", vehicle_label.lower()),
+                vehicle_label,
+                int(row["sort_order"]) if row["sort_order"] is not None else 999999,
+                int(row["id"]),
+                str(row["created_at"] or ""),
+                str(row["updated_at"] or ""),
+            ),
+        )
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, '1')",
+        (migration_key,),
+    )
 
 
 def _migrate_admin_overrides(conn: sqlite3.Connection) -> None:
@@ -2180,7 +2313,7 @@ def list_roster_days(limit: int = 40) -> list[sqlite3.Row]:
             SELECT d.*,
                    creator.display_name AS created_by_name,
                    publisher.display_name AS published_by_name,
-                   (SELECT COUNT(*) FROM roster_day_assignments a WHERE a.roster_day_id = d.id) AS assignment_count,
+                   (SELECT COUNT(*) FROM workday_assignments a WHERE a.roster_day_id = d.id) AS assignment_count,
                    (SELECT MAX(version_number) FROM roster_day_versions v WHERE v.roster_day_id = d.id) AS version_number
             FROM roster_days d
             LEFT JOIN app_users creator ON creator.id = d.created_by_user_id
@@ -2204,14 +2337,84 @@ def get_roster_day_assignments(roster_day_id: int) -> list[sqlite3.Row]:
     with get_connection() as conn:
         return conn.execute(
             """
-            SELECT a.*, u.display_name, u.deputy_email
-            FROM roster_day_assignments a
+            SELECT a.*, u.display_name, u.deputy_email,
+                   p.canonical_display_name AS person_display_name
+            FROM workday_assignments a
             LEFT JOIN app_users u ON u.id = a.user_id
+            LEFT JOIN crew_people p ON p.id = a.person_id
             WHERE a.roster_day_id = ?
-            ORDER BY a.sort_order, LOWER(a.position_label)
+            ORDER BY a.sort_order, LOWER(a.role_label), a.id
             """,
             (roster_day_id,),
         ).fetchall()
+
+
+def list_roster_day_versions(roster_day_id: int) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT v.*, u.display_name AS published_by_name
+            FROM roster_day_versions v
+            LEFT JOIN app_users u ON u.id = v.published_by_user_id
+            WHERE v.roster_day_id = ?
+            ORDER BY v.version_number DESC
+            """,
+            (roster_day_id,),
+        ).fetchall()
+
+
+def list_workday_roles(*, include_disabled: bool = False) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        where = "" if include_disabled else "WHERE is_active = 1"
+        return conn.execute(
+            f"""
+            SELECT * FROM workday_role_catalogue
+            {where}
+            ORDER BY display_order, LOWER(display_label)
+            """
+        ).fetchall()
+
+
+def save_workday_role(
+    *,
+    role_key: str,
+    display_label: str,
+    aliases: list[str],
+    display_order: int,
+    is_active: bool,
+    is_built_in: bool = False,
+) -> str:
+    key = canonical_role_key(role_key or display_label)
+    if not key or not display_label.strip():
+        raise ValueError("Role name is required.")
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO workday_role_catalogue (
+                role_key, display_label, aliases, display_order, is_active,
+                is_built_in, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(role_key) DO UPDATE SET
+                display_label = excluded.display_label,
+                aliases = excluded.aliases,
+                display_order = excluded.display_order,
+                is_active = excluded.is_active,
+                updated_at = excluded.updated_at
+            """,
+            (
+                key,
+                display_label.strip()[:100],
+                json.dumps([str(alias).strip()[:100] for alias in aliases if str(alias).strip()]),
+                int(display_order),
+                1 if is_active else 0,
+                1 if is_built_in else 0,
+                now,
+                now,
+            ),
+        )
+    return key
 
 
 def save_roster_day(
@@ -2231,6 +2434,14 @@ def save_roster_day(
     race_count: int | None,
     notes: str,
     hotel_assignments: str,
+    title: str = "",
+    custom_location: str = "",
+    end_time: str = "",
+    break_minutes: int = 0,
+    source_reference: str = "",
+    provenance: str = "manual",
+    linked_deputy_event_id: str = "",
+    duplicate_resolution: str = "keep_separate",
     updated_by_user_id: int,
     assignments: list[dict[str, object]],
 ) -> int:
@@ -2243,28 +2454,36 @@ def save_roster_day(
                 (roster_day_id,),
             ).fetchone()
         if existing is None:
-            existing = conn.execute(
-                "SELECT id, published_snapshot FROM roster_days WHERE roster_date = ? AND track_key = ?",
-                (roster_date, track_key),
-            ).fetchone()
-
-        if existing is None:
+            canonical_location_key = track_key
+            identity_key = track_key
+            suffix = 1
+            while conn.execute(
+                "SELECT 1 FROM roster_days WHERE roster_date = ? AND track_key = ?",
+                (roster_date, identity_key),
+            ).fetchone() is not None:
+                suffix += 1
+                identity_key = f"{track_key}-manual-{suffix}"
             cursor = conn.execute(
                 """
                 INSERT INTO roster_days (
-                    roster_date, track_key, track_label, race_type, day_type,
+                    roster_date, track_key, canonical_location_key, track_label, race_type, day_type,
                     start_origin, finish_destination, office_start,
                     on_track_time, first_race_time, last_race_time, race_count,
-                    notes, hotel_assignments, status, published_snapshot, created_by_user_id,
+                    notes, hotel_assignments, title, custom_location, end_time,
+                    break_minutes, source_reference, provenance, linked_deputy_event_id,
+                    duplicate_resolution, status, published_snapshot, created_by_user_id,
                     updated_by_user_id, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', '', ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', '', ?, ?, ?, ?)
                 """,
                 (
-                    roster_date, track_key, track_label, race_type, day_type,
+                    roster_date, identity_key, canonical_location_key, track_label, race_type, day_type,
                     start_origin, finish_destination, office_start,
                     on_track_time, first_race_time, last_race_time, race_count,
-                    notes, hotel_assignments, updated_by_user_id, updated_by_user_id, now, now,
+                    notes, hotel_assignments, title, custom_location, end_time,
+                    max(0, int(break_minutes or 0)), source_reference, provenance,
+                    linked_deputy_event_id, duplicate_resolution,
+                    updated_by_user_id, updated_by_user_id, now, now,
                 ),
             )
             saved_id = int(cursor.lastrowid)
@@ -2274,10 +2493,12 @@ def save_roster_day(
             conn.execute(
                 """
                 UPDATE roster_days
-                SET roster_date = ?, track_key = ?, track_label = ?, race_type = ?, day_type = ?,
+                SET roster_date = ?, canonical_location_key = ?, track_label = ?, race_type = ?, day_type = ?,
                     start_origin = ?, finish_destination = ?, office_start = ?,
                     on_track_time = ?, first_race_time = ?,
                     last_race_time = ?, race_count = ?, notes = ?, hotel_assignments = ?, status = ?,
+                    title = ?, custom_location = ?, end_time = ?, break_minutes = ?,
+                    source_reference = ?, provenance = ?, linked_deputy_event_id = ?, duplicate_resolution = ?,
                     updated_by_user_id = ?, updated_at = ?
                 WHERE id = ?
                 """,
@@ -2285,27 +2506,39 @@ def save_roster_day(
                     roster_date, track_key, track_label, race_type, day_type,
                     start_origin, finish_destination, office_start,
                     on_track_time, first_race_time, last_race_time, race_count,
-                    notes, hotel_assignments, status, updated_by_user_id, now, saved_id,
+                    notes, hotel_assignments, status,
+                    title, custom_location, end_time, max(0, int(break_minutes or 0)),
+                    source_reference, provenance, linked_deputy_event_id, duplicate_resolution,
+                    updated_by_user_id, now, saved_id,
                 ),
             )
 
-        conn.execute("DELETE FROM roster_day_assignments WHERE roster_day_id = ?", (saved_id,))
+        conn.execute("DELETE FROM workday_assignments WHERE roster_day_id = ?", (saved_id,))
         for assignment in assignments:
             conn.execute(
                 """
-                INSERT INTO roster_day_assignments (
-                    roster_day_id, position_label, user_id, assignee_label,
-                    vehicle_label, sort_order, created_at, updated_at
+                INSERT INTO workday_assignments (
+                    roster_day_id, person_id, user_id, assignee_label,
+                    role_key, role_label, assignment_state, transport_mode,
+                    vehicle_key, vehicle_label, custom_transport_text,
+                    assignment_note, sort_order, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     saved_id,
-                    str(assignment.get("position_label") or "").strip(),
+                    assignment.get("person_id"),
                     assignment.get("user_id"),
                     str(assignment.get("assignee_label") or "").strip(),
+                    str(assignment.get("role_key") or "").strip(),
+                    str(assignment.get("role_label") or "").strip(),
+                    str(assignment.get("assignment_state") or "assigned").strip(),
+                    str(assignment.get("transport_mode") or "unassigned").strip(),
+                    str(assignment.get("vehicle_key") or "").strip(),
                     str(assignment.get("vehicle_label") or "").strip(),
-                    int(assignment.get("sort_order") or 999999),
+                    str(assignment.get("custom_transport_text") or "").strip(),
+                    str(assignment.get("assignment_note") or "").strip(),
+                    int(assignment.get("sort_order")) if assignment.get("sort_order") is not None else 999999,
                     now,
                     now,
                 ),

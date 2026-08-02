@@ -38,6 +38,8 @@ python scripts\smoke_extended_features.py
 python scripts\smoke_roster_integrity.py
 python scripts\smoke_track_map_classification.py
 python scripts\smoke_note_interpretation.py
+python scripts\smoke_workday_builder.py
+python scripts\smoke_workday_responsive.py
 ```
 
 The Admin override smoke covers legacy-row migration, field/value normalization, active precedence, historical days, immediate recalculation, replacement, disable fallback, canonical venue scope, and Changed-badge isolation. For deployed-data migration confidence, run `init_db()` against a disposable database copy only; never point migration tests at the live file.
@@ -65,7 +67,9 @@ After Portainer redeploy:
 - Confirm spinner/progress appears and then hides.
 - Confirm a failed sync shows a useful message below the status.
 - Open `/admin`.
-- Open `/admin/roster-days/new`, save a draft, confirm it remains private, publish it, and verify only an assigned user's month/day views show it.
+- Open `/admin/roster-days/new`, create an office day with a roleless attendee, save it privately, publish it, and confirm calendar, Next Up, day, weekly total, global view, and timesheet all agree.
+- Apply the Thoroughbred preset, remove RTS, add Gimbal and an explicit open Gimbal Assist row, then reopen the draft and confirm removed roles stay removed.
+- Confirm Making own way, No transport required, an assigned vehicle, and transport TBC remain visually distinct on phone and desktop.
 - Expand Travel day and hotels, assign two crew to different hotels, and confirm each published user sees only their own hotel.
 - Confirm FCR context, H-Cambridge, and Travel then Overnighter are absent from production positions.
 - In Settings, expand Your roster stats and confirm weekday cards show rostered hours and shift counts, today is excluded from completed totals, and the location-hours summary remains readable.

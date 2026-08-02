@@ -168,3 +168,10 @@ Personal roster rows are also stored as durable `deputy_personal_assignment_evid
 Completed shared events are recorded in `deputy_event_locks` after the latest known finish plus six hours, with an early-following-morning fallback when no finish is known. Personal shifts receive `historical_locked_at`. Locked snapshots cannot be pruned or have nonblank operational facts replaced; late conflicts go to `deputy_historical_discrepancies`. A one-time additive replay can restore missing completed rows from retained successful `deputy_web_captures`, with counts in `historical_recovery_runs`.
 
 `shift_changes.change_category` and `user_visible` separate operational alerts from enrichment, normalization, derived values, parser reinterpretation, and historical discrepancies. Normal day history reads only user-visible records. Technical records remain in SQLite for diagnosis.
+## Manual Workday Builder
+
+Admin workday drafts use `roster_days` for event metadata, `workday_assignments` for ordered person/role/transport rows, and `workday_role_catalogue` for reusable role choices. `roster_day_versions` remains the append-only publication boundary. Published views read the saved snapshot rather than the mutable draft.
+
+The builder supports race, office, travel, training, and other work days. Race-only timing, Love Racing, and map behavior is guarded by `day_type == 'race_day'`. `published_rosters_by_date()` is the shared projection used by personal and global calendars, day pages, Next Up, and timesheets. It also normalizes historical snapshots that predate structured transport.
+
+Legacy `roster_day_assignments` rows migrate once into `workday_assignments`, retaining their source row ID for idempotency. New saves never write the legacy table. Manual events retain their own ID and provenance and are never merged with Deputy rows merely because their date matches.

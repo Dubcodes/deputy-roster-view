@@ -107,6 +107,8 @@ Admin should be able to:
 
 Admin should not see Deputy passwords.
 
+Admins can publish manually organised work to canonical crew identities. Linked app users receive calendar/day/timesheet visibility; unlinked crew remain in the published crew list with an explicit no-account marker. Roleless attendees are retained, and open/TBC roles do not grant user visibility.
+
 ## Data Warning
 
 Show a small note in the app:
