@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from urllib.parse import quote
+from datetime import datetime, timedelta
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response
@@ -72,7 +73,11 @@ async def trusted_device_middleware(
                 "deputy_email": device["deputy_email"],
                 "is_admin": device["is_admin"],
                 "last_sync_at": device["last_sync_at"],
+                "last_sync_status": device["last_status"],
+                "last_sync_message": device["last_message"],
+                "sync_in_progress": device["sync_in_progress"],
             }
+            _add_sync_notice(request.state.current_user)
             update_trusted_device_seen(int(device["id"]), expires_at)
             update_app_user_seen(int(device["user_id"]))
             response = await call_next(request)
@@ -102,3 +107,35 @@ def clear_trusted_device(request: Request, response: Response) -> None:
 
 def _is_public_path(path: str) -> bool:
     return path in PUBLIC_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_PREFIXES)
+
+
+def _add_sync_notice(user: dict[str, object]) -> None:
+    settings = get_settings()
+    last_sync_text = str(user.get("last_sync_at") or "").strip()
+    status_text = str(user.get("last_sync_status") or "").strip().lower()
+    if int(user.get("sync_in_progress") or 0):
+        user["sync_notice_kind"] = "syncing"
+        user["sync_notice_text"] = "Deputy roster sync in progress"
+        return
+    if status_text in {"error", "failed"}:
+        user["sync_notice_kind"] = "failed"
+        user["sync_notice_text"] = "Deputy sync failed · check Deputy before relying on this roster"
+        return
+    try:
+        last_sync = datetime.fromisoformat(last_sync_text)
+        if last_sync.tzinfo is None:
+            last_sync = last_sync.replace(tzinfo=settings.timezone)
+    except (TypeError, ValueError):
+        user["sync_notice_kind"] = "stale"
+        user["sync_notice_text"] = "Deputy roster has not synced yet"
+        return
+    now = datetime.now(settings.timezone)
+    age = now - last_sync.astimezone(settings.timezone)
+    if age > timedelta(hours=36):
+        days = max(1, int(age.total_seconds() // 86400))
+        age_label = f"{days} day{'s' if days != 1 else ''} ago" if days else "over a day ago"
+        user["sync_notice_kind"] = "stale"
+        user["sync_notice_text"] = f"Deputy roster may be out of date · last synced {age_label}"
+        return
+    user["sync_notice_kind"] = "healthy"
+    user["sync_notice_text"] = f"Deputy roster synced {last_sync.astimezone(settings.timezone).strftime('%d %b %H:%M')}"

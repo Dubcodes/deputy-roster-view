@@ -41,6 +41,7 @@ python scripts\smoke_note_interpretation.py
 python scripts\smoke_workday_builder.py
 python scripts\smoke_workday_responsive.py
 python scripts\smoke_identity_reconciliation.py
+python scripts\smoke_self_travel.py
 ```
 
 The Admin override smoke covers legacy-row migration, field/value normalization, active precedence, historical days, immediate recalculation, replacement, disable fallback, canonical venue scope, and Changed-badge isolation. For deployed-data migration confidence, run `init_db()` against a disposable database copy only; never point migration tests at the live file.
@@ -99,3 +100,5 @@ The route smoke also verifies that Office/Clow Place travel defaults collapse to
 - Deputy web capture is hard to test without live credentials.
 - Live Deputy capture remains difficult to reproduce without credentials; parsing and database behavior are covered with sanitized fixtures.
 - Live Love Racing browser access can change independently of the app. Meeting discovery, programme parsing, cadence, monotonic cache merging, queue deduplication, and source precedence are covered by local HTML/SQLite smoke fixtures.
+
+The self-travel smoke confirms owner-only today/future authorization, stable identity linkage, reversible local overlay, preservation of a later roster vehicle update, append-only preference audit, and isolation from Deputy evidence and Changed state. The responsive builder smoke covers 1280px, 430px, 375px, and 320px widths.

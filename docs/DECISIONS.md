@@ -181,3 +181,11 @@ The existing `roster_days` publication/version boundary remains, while assignmen
 An account's profile name is not a crew identity key. Successful personal Deputy captures provide the authoritative employee ID, which links the app user to the existing Deputy-backed `crew_people` row. This avoids duplicate choices such as a full account name beside a shorter Deputy name without hard-coding individual mappings.
 
 Account-only duplicates are retired through an audited redirect. Published snapshots stay immutable and are resolved through that redirect at read/visibility time. A separate materialized visibility table is rebuilt from canonical published assignments, allowing identity fixes and later account links to repair personal access without a new roster version. Conflicting evidence is deliberately held for Admin review.
+
+## Keep Self-Travel As A Local Overlay
+
+The `Making my own way` choice is stored separately from Deputy and manual roster evidence. It is keyed to the authenticated user, canonical crew person, event kind, and stable event ID, with an audit row for each change. Rendering overlays the choice on the current transport value, so later Deputy vehicle changes remain intact and become visible when the user reverses the choice. This avoids write-back, false change alerts, and stale copied vehicle values.
+
+## Review Before Publishing Manual Work
+
+Builder saves remain private drafts and now land on a compact read-only review. Editing and publishing are separate explicit actions. Love Racing can seed date, venue, and cached programme facts into a new draft, but cannot skip review or publication. Regular racecourse choices exclude operational Deputy labels; unusual source locations remain available in an advanced selector without being discarded.

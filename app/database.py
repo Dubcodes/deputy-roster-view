@@ -732,6 +732,41 @@ def init_db(settings: Settings | None = None) -> None:
                 FOREIGN KEY (canonical_person_id) REFERENCES crew_people(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS user_event_transport_preferences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                canonical_person_id INTEGER NOT NULL,
+                event_kind TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                event_date TEXT NOT NULL,
+                location_key TEXT NOT NULL DEFAULT '',
+                self_travel INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'user',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(user_id, event_kind, event_id),
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE,
+                FOREIGN KEY (canonical_person_id) REFERENCES crew_people(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS user_event_transport_preference_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                preference_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                canonical_person_id INTEGER NOT NULL,
+                event_kind TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                event_date TEXT NOT NULL,
+                location_key TEXT NOT NULL DEFAULT '',
+                old_self_travel INTEGER NOT NULL DEFAULT 0,
+                new_self_travel INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'user',
+                changed_at TEXT NOT NULL,
+                FOREIGN KEY (preference_id) REFERENCES user_event_transport_preferences(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE,
+                FOREIGN KEY (canonical_person_id) REFERENCES crew_people(id) ON DELETE CASCADE
+            );
+
             CREATE INDEX IF NOT EXISTS idx_shifts_date ON shifts(date);
             CREATE INDEX IF NOT EXISTS idx_shifts_start_at ON shifts(start_at);
             CREATE INDEX IF NOT EXISTS idx_shifts_changed ON shifts(changed_since_viewed);
@@ -763,6 +798,7 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_roster_day_versions_day ON roster_day_versions(roster_day_id, version_number DESC);
             CREATE INDEX IF NOT EXISTS idx_workday_assignments_day ON workday_assignments(roster_day_id, sort_order);
             CREATE INDEX IF NOT EXISTS idx_workday_assignments_user ON workday_assignments(user_id, roster_day_id);
+            CREATE INDEX IF NOT EXISTS idx_user_transport_pref_day ON user_event_transport_preferences(event_date, location_key, canonical_person_id);
             CREATE INDEX IF NOT EXISTS idx_workday_visibility_user ON workday_user_visibility(user_id, roster_day_id);
             CREATE INDEX IF NOT EXISTS idx_identity_deputy_employee ON app_user_deputy_identity(deputy_employee_id);
             """
@@ -1943,7 +1979,10 @@ def get_trusted_device(token_hash: str, now: str | None = None) -> sqlite3.Row |
                 u.display_theme,
                 u.is_admin,
                 u.is_active,
-                s.last_sync_at
+                s.last_sync_at,
+                s.last_status,
+                s.last_message,
+                s.sync_in_progress
             FROM trusted_devices d
             JOIN app_users u ON u.id = d.user_id
             LEFT JOIN user_sync_state s ON s.user_id = u.id
@@ -3053,6 +3092,23 @@ def fetch_love_racing_meetings_between(start_date: str, end_date: str) -> list[s
         ).fetchall()
 
 
+def get_love_racing_planning_meeting(meeting_row_id: int) -> sqlite3.Row | None:
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT meeting.*,
+                   detail.race_count AS scheduled_race_count,
+                   detail.first_race_time AS scheduled_first_race_time,
+                   detail.last_race_time AS scheduled_last_race_time
+            FROM love_racing_meetings meeting
+            LEFT JOIN love_racing_meeting_details detail
+              ON detail.meeting_id = meeting.meeting_id
+            WHERE meeting.id = ? AND meeting.is_active = 1
+            """,
+            (meeting_row_id,),
+        ).fetchone()
+
+
 def merge_love_racing_meeting_identities(
     meetings: list[dict[str, object]],
     discovered_at: str,
@@ -3751,6 +3807,121 @@ def _canonical_person_id_conn(conn: sqlite3.Connection, person_id: int | None) -
 def canonical_person_id(person_id: int | None) -> int | None:
     with get_connection() as conn:
         return _canonical_person_id_conn(conn, person_id)
+
+
+def get_user_canonical_person_id(user_id: int) -> int | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id FROM crew_people
+            WHERE app_user_id = ? AND is_active = 1 AND merged_into_person_id IS NULL
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        return int(row["id"]) if row is not None else None
+
+
+def fetch_self_travel_preferences_between(start_date: str, end_date: str) -> list[dict[str, object]]:
+    with get_connection() as conn:
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT * FROM user_event_transport_preferences
+                WHERE event_date BETWEEN ? AND ? AND self_travel = 1
+                ORDER BY event_date, user_id, id
+                """,
+                (start_date, end_date),
+            ).fetchall()
+        ]
+        for row in rows:
+            row["canonical_person_id"] = _canonical_person_id_conn(
+                conn, _optional_int(row.get("canonical_person_id"))
+            )
+        return rows
+
+
+def set_user_event_self_travel(
+    *,
+    user_id: int,
+    canonical_person_id: int,
+    event_kind: str,
+    event_id: str,
+    event_date: str,
+    location_key: str,
+    self_travel: bool,
+    source: str = "user",
+) -> bool:
+    clean_kind = str(event_kind or "").strip().lower()
+    clean_event_id = str(event_id or "").strip()
+    if clean_kind not in {"deputy_shift", "manual_workday"} or not clean_event_id:
+        return False
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        linked = conn.execute(
+            """
+            SELECT id FROM crew_people
+            WHERE id = ? AND app_user_id = ? AND is_active = 1
+              AND merged_into_person_id IS NULL
+            """,
+            (canonical_person_id, user_id),
+        ).fetchone()
+        if linked is None:
+            return False
+        existing = conn.execute(
+            """
+            SELECT * FROM user_event_transport_preferences
+            WHERE user_id = ? AND event_kind = ? AND event_id = ?
+            """,
+            (user_id, clean_kind, clean_event_id),
+        ).fetchone()
+        old_value = int(existing["self_travel"] or 0) if existing is not None else 0
+        new_value = 1 if self_travel else 0
+        if existing is None:
+            cursor = conn.execute(
+                """
+                INSERT INTO user_event_transport_preferences (
+                    user_id, canonical_person_id, event_kind, event_id,
+                    event_date, location_key, self_travel, source, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user_id, canonical_person_id, clean_kind, clean_event_id,
+                    event_date, location_key, new_value, source, now, now,
+                ),
+            )
+            preference_id = int(cursor.lastrowid)
+        else:
+            preference_id = int(existing["id"])
+            conn.execute(
+                """
+                UPDATE user_event_transport_preferences
+                SET canonical_person_id = ?, event_date = ?, location_key = ?,
+                    self_travel = ?, source = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    canonical_person_id, event_date, location_key,
+                    new_value, source, now, preference_id,
+                ),
+            )
+        if old_value != new_value:
+            conn.execute(
+                """
+                INSERT INTO user_event_transport_preference_audit (
+                    preference_id, user_id, canonical_person_id, event_kind,
+                    event_id, event_date, location_key, old_self_travel,
+                    new_self_travel, source, changed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    preference_id, user_id, canonical_person_id, clean_kind,
+                    clean_event_id, event_date, location_key, old_value,
+                    new_value, source, now,
+                ),
+            )
+    return True
 
 
 def _published_visibility_map_conn(conn: sqlite3.Connection) -> dict[int, dict[int, int | None]]:

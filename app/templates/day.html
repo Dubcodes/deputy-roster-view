@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_holiday_marker.html" import holiday_marker %}
 
-{% block title %}{{ day_date.strftime("%A %d %B %Y") }} - Deputy Roster View{% endblock %}
+{% block title %}{{ day_date.strftime("%A %d %B %Y") }} - Re-Deputy{% endblock %}
 
 {% block content %}
   <section class="page-heading compact-heading">
@@ -110,6 +110,17 @@
         {% endif %}
         {% if roster.notes %}<section class="description-block"><h3>Important notes</h3><p>{{ roster.notes }}</p></section>{% endif %}
         {% if roster.source_reference %}<p class="muted">Source: {{ roster.source_reference }}</p>{% endif %}
+        {% if can_change_self_travel and roster.assignments %}
+          <section class="self-travel-control">
+            <div><strong>Travel</strong><span>{% if roster.self_travel %}Making your own way{% else %}{{ roster.underlying_transport_label or roster.vehicle_label or 'Crew transport TBC' }}{% endif %}</span></div>
+            <form action="/day/{{ date_text }}/self-travel" method="post">
+              <input type="hidden" name="event_kind" value="manual_workday">
+              <input type="hidden" name="event_id" value="{{ roster.id }}">
+              <input type="hidden" name="self_travel" value="{{ 0 if roster.self_travel else 1 }}">
+              <button class="button button-secondary button-compact" type="submit">{{ 'Use crew transport instead' if roster.self_travel else 'Making my own way' }}</button>
+            </form>
+          </section>
+        {% endif %}
       </section>
     {% endfor %}
   {% endif %}
@@ -129,6 +140,7 @@
               {% if meeting.club_name %}<div><dt>Club</dt><dd>{{ meeting.club_name }}</dd></div>{% endif %}
               <div><dt>Source</dt><dd>Love Racing racing calendar</dd></div>
             </dl>
+            {% if current_user and current_user.is_admin %}<a class="button button-secondary button-compact" href="/admin/roster-days/new?planning_id={{ meeting.id }}">Build this race day</a>{% endif %}
           </article>
         {% endfor %}
       </div>
@@ -369,6 +381,18 @@
             {% endif %}
           </div>
         </details>
+
+        {% if can_change_self_travel %}
+          <section class="self-travel-control">
+            <div><strong>Travel</strong><span>{% if shift.self_travel %}Making your own way{% else %}{{ shift.underlying_vehicle_label or shift.header_vehicle_label or 'Crew transport TBC' }}{% endif %}</span></div>
+            <form action="/day/{{ date_text }}/self-travel" method="post">
+              <input type="hidden" name="event_kind" value="deputy_shift">
+              <input type="hidden" name="event_id" value="{{ shift.id }}">
+              <input type="hidden" name="self_travel" value="{{ 0 if shift.self_travel else 1 }}">
+              <button class="button button-secondary button-compact" type="submit">{{ 'Use crew transport instead' if shift.self_travel else 'Making my own way' }}</button>
+            </form>
+          </section>
+        {% endif %}
 
         <section class="timing-panel">
           <h3>Notes and timing</h3>

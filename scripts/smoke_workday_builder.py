@@ -80,6 +80,44 @@ def main() -> None:
     gary_person = next(row for row in people.values() if row.get("app_user_id") == int(gary["id"]))
     olivia_person = next(row for row in people.values() if row.get("app_user_id") == int(olivia["id"]))
 
+    with get_connection() as conn:
+        planning_cursor = conn.execute(
+            """
+            INSERT INTO love_racing_meetings (
+                meeting_date, racecourse_key, racecourse, club_name, meeting_id,
+                meeting_url, discovery_source, discovered_at, source_url,
+                source_hash, raw_text, first_seen_at, last_seen_at, last_synced_at, is_active
+            ) VALUES (
+                '2026-08-22', 'te-rapa', 'Te Rapa', 'Waikato TR', 'builder-55032',
+                'https://loveracing.example/meeting-overview.aspx', 'fixture', '2026-08-01T00:00:00+12:00',
+                'https://loveracing.example/calendar', 'builder-planning-fixture', '',
+                '2026-08-01T00:00:00+12:00', '2026-08-01T00:00:00+12:00', '2026-08-01T00:00:00+12:00', 1
+            )
+            """
+        )
+        planning_id = int(planning_cursor.lastrowid)
+        conn.execute(
+            """
+            INSERT INTO love_racing_meeting_details (
+                meeting_id, meeting_date, canonical_venue_key, canonical_venue_label,
+                club, meeting_url, lifecycle_status, fetch_status, race_count,
+                first_race_time, last_race_time, races_json, parser_diagnostics,
+                created_at, updated_at
+            ) VALUES (
+                'builder-55032', '2026-08-22', 'te-rapa', 'Te Rapa', 'Waikato TR',
+                'https://loveracing.example/meeting-overview.aspx', 'complete', 'ok', 8,
+                '12:25', '16:38', '[]', '[]',
+                '2026-08-01T00:00:00+12:00', '2026-08-01T00:00:00+12:00'
+            )
+            """
+        )
+    planning_builder = client.get(f"/admin/roster-days/new?planning_id={planning_id}")
+    for expected in ('value="2026-08-22"', '>Te Rapa</option>', 'value="12:25"', 'value="16:38"', 'value="8"'):
+        if expected not in planning_builder.text:
+            raise AssertionError(f"Love Racing planning seed omitted {expected!r}.")
+    if "Private until published" not in planning_builder.text:
+        raise AssertionError("Love Racing planning seed did not remain a private builder draft.")
+
     office = client.post(
         "/admin/roster-days/save",
         data={
@@ -105,10 +143,15 @@ def main() -> None:
     )
     assert_redirect(office, "/admin/roster-days/")
     office_id = int(office.headers["location"].split("/admin/roster-days/", 1)[1].split("?", 1)[0])
-    office_review = client.get(f"/admin/roster-days/{office_id}")
+    office_review = client.get(f"/admin/roster-days/{office_id}?mode=review")
     for expected in ("Office work", "Gary McClure", "Olivia Dooley", "Making own way", "Organised by email"):
         if expected not in office_review.text:
             raise AssertionError(f"Office draft review omitted {expected!r}.")
+    if '<form class="workday-form"' in office_review.text or ">Edit<" not in office_review.text:
+        raise AssertionError("Saved workday did not open in the read-only review step.")
+    office_editor = client.get(f"/admin/roster-days/{office_id}")
+    if 'data-workday-form' not in office_editor.text or "Save &amp; review" not in office_editor.text:
+        raise AssertionError("The explicit edit view did not retain the full builder.")
     assert_redirect(client.post(f"/admin/roster-days/{office_id}/publish", follow_redirects=False), "Roster+version+1+published")
 
     for user_id in (int(jayden_person["app_user_id"]), int(gary["id"]), int(olivia["id"])):
@@ -161,6 +204,14 @@ def main() -> None:
         follow_redirects=False,
     )
     race_id = int(race.headers["location"].split("/admin/roster-days/", 1)[1].split("?", 1)[0])
+    race_editor = client.get(f"/admin/roster-days/{race_id}")
+    if "Use another Deputy location" not in race_editor.text:
+        raise AssertionError("Exceptional Deputy locations are not available behind the advanced control.")
+    normal_selector = race_editor.text.split('name="track_label"', 1)[1].split("</select>", 1)[0]
+    if any(label in normal_selector for label in (">Leave<", ">PubHol<", ">Travel<")):
+        raise AssertionError("Operational Deputy labels leaked into the normal race venue selector.")
+    if "data-assignment-advanced open" in race_editor.text:
+        raise AssertionError("Assignment advanced controls should be collapsed by default.")
     assert_redirect(client.post(f"/admin/roster-days/{race_id}/publish", follow_redirects=False), "Roster+version+1+published")
     race_day = client.get("/day/2026-08-15")
     for expected in ("Gimbal", "Gimbal Assist", "TBC", "Attending", "Making own way", "684"):

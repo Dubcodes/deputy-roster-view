@@ -3,7 +3,7 @@
 Use this when asking an AI agent to make a change.
 
 ```text
-Repo: deputy-recalender / Deputy Roster View
+Repo: deputy-recalender / Re-Deputy
 
 Read first:
 - AGENTS.md

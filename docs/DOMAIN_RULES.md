@@ -214,3 +214,12 @@ For race days, the app may show a cached or admin-uploaded 2D course map at the 
 - New manual assignments store canonical `person_id`. The same person may appear more than once only for distinct operational roles.
 - Published personal visibility resolves the assignment's canonical redirect and current app link. Linking an account later must unlock existing workdays without republishing.
 - Unlinked attendees remain on normal crew pages. Account-link warnings belong in Admin review, not beside every crew-facing name.
+
+## Personal Transport Choice
+
+- A user may mark only their own today/future Deputy shift or published manual workday as `Making my own way`.
+- This is a private Re-Deputy preference, not a Deputy update and not a replacement for roster evidence.
+- Crew and Admin views may show the local choice so transport planning remains accurate.
+- The preference is reversible. Removing it reveals the latest underlying roster vehicle or transport, including changes synced after the preference was set.
+- The toggle must not create a Changed badge or rewrite a shift, published snapshot, raw note, schedule row, or vehicle assignment.
+- Stable event and canonical-person IDs are required; date/name matching alone is not sufficient authorization.

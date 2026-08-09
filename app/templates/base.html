@@ -5,17 +5,18 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}Deputy Roster View{% endblock %}</title>
+    <title>{% block title %}Re-Deputy{% endblock %}</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/static/style.css?v={{ app_build }}">
   </head>
   <body>
     <header class="site-header {% if header_context %}has-month-nav{% else %}no-month-nav{% endif %}">
       <div class="brand-stack">
-        <a class="brand" href="{{ calendar_home_url or '/month' }}">Deputy Roster View</a>
+        <a class="brand" href="{{ calendar_home_url or '/month' }}">Re-Deputy</a>
         {% if current_user %}
           <span class="brand-meta">
-            {{ current_user.display_name or "Roster" }}
+            <span class="brand-meta-name brand-meta-name-full">{{ current_user.display_name or "Roster" }}</span>
+            <span class="brand-meta-name brand-meta-name-short">{{ (current_user.display_name or "Roster").split()[0] }}</span>
             {% if current_user.last_sync_at %}
               · synced {{ current_user.last_sync_at|datetime("%d %b %H:%M") }}
             {% endif %}
@@ -86,7 +87,7 @@
 
     <main class="page-shell">
       {% if current_user %}
-        <p class="data-warning">This is a copy of Deputy roster data and may lag behind Deputy. Check Deputy if something looks wrong or urgent.</p>
+        <p class="sync-notice sync-notice-{{ current_user.sync_notice_kind or 'stale' }}">{{ current_user.sync_notice_text or 'Deputy roster status unavailable' }}</p>
       {% endif %}
       {% if notice %}
         <div class="notice">{{ notice }}</div>

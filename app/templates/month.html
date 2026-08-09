@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_holiday_marker.html" import holiday_marker %}
 
-{% block title %}{{ month_name }} - Deputy Roster View{% endblock %}
+{% block title %}{{ month_name }} - Re-Deputy{% endblock %}
 
 {% block content %}
   {% if global_view %}
@@ -34,6 +34,7 @@
               <a class="list-shift published-roster-marker" href="/day/{{ day.iso }}{% if global_view %}?scope=global&amp;manual_id={{ roster.id }}{% endif %}">
                 <span class="list-shift-main"><strong>{{ roster.location_label or roster.display_title }}</strong><span>{{ roster.position_label if roster.day_type == 'race_day' else roster.display_title }}</span></span>
                 <span class="list-shift-meta"><span>{{ roster.time_range }}</span><span>{{ roster.hours_label }}</span><span>Manually rostered</span></span>
+                {% if roster.self_travel %}<span class="local-travel-note">Making own way</span>{% endif %}
               </a>
             {% endfor %}
             {% for shift in day.shifts %}
@@ -55,6 +56,7 @@
                 {% if shift.description_lines %}
                   <span class="list-shift-note">{{ shift.description_lines[0] }}</span>
                 {% endif %}
+                {% if shift.self_travel %}<span class="local-travel-note">Making own way</span>{% endif %}
                 {% if shift.deleted_from_source or shift.changed_since_viewed or shift.capture_status == "possibly_missing" %}
                   <span class="badge-row">
                     {% if shift.deleted_from_source %}
@@ -136,6 +138,7 @@
                   <strong class="shift-track">{{ roster.location_label or roster.display_title }}</strong>
                   <span class="shift-mini"><span class="shift-mini-role">{{ roster.position_label if roster.day_type == 'race_day' else roster.display_title }}</span><span class="shift-mini-time">{{ roster.office_start or "TBC" }}</span></span>
                   {% if day.manual_rosters|length == 1 %}<span class="shift-meta">{{ roster.hours_label }}</span>{% endif %}
+                  {% if roster.self_travel %}<span class="shift-self-travel">Own way</span>{% endif %}
                 </a>
               {% endfor %}
               {% for shift in day.shifts %}
@@ -148,6 +151,7 @@
                   {% if day.shifts|length == 1 %}
                     <span class="shift-meta">{{ shift.display_hours_label }}</span>
                   {% endif %}
+                  {% if shift.self_travel %}<span class="shift-self-travel">Own way</span>{% endif %}
                   {% if shift.deleted_from_source or shift.changed_since_viewed or shift.capture_status == "possibly_missing" %}
                     <span class="badge-row">
                       {% if shift.deleted_from_source %}

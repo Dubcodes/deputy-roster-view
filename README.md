@@ -1,6 +1,6 @@
-# Deputy Roster View
+# Re-Deputy
 
-Deputy Roster View is a small private web app that mirrors Deputy roster data into SQLite and shows it as a cleaner month calendar with shift details, crew assignments, local notes, timing adjustments, and sync history.
+Re-Deputy is a small private web app that mirrors Deputy roster data into SQLite and shows it as a cleaner month calendar with shift details, crew assignments, local notes, timing adjustments, and sync history.
 
 The app is read-only against Deputy. It never writes back to Deputy.
 

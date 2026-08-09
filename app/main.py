@@ -44,6 +44,7 @@ from .database import (
     fetch_personal_assignment_evidence_for_date,
     fetch_love_racing_meetings_between,
     fetch_love_racing_details_between,
+    fetch_self_travel_preferences_between,
     fetch_deputy_schedule_for_date,
     fetch_deputy_schedule_areas_for_locations,
     fetch_shifts_for_travel_learning,
@@ -58,6 +59,7 @@ from .database import (
     get_last_deputy_web_capture,
     get_latest_deputy_web_capture_for_user,
     get_love_racing_snapshot,
+    get_love_racing_planning_meeting,
     get_roster_day,
     get_roster_day_assignments,
     fetch_shift,
@@ -74,6 +76,7 @@ from .database import (
     get_recent_sync_logs,
     get_upcoming_shifts,
     get_user_sync_state,
+    get_user_canonical_person_id,
     init_db,
     list_admin_overrides,
     list_active_admin_overrides_between,
@@ -115,6 +118,7 @@ from .database import (
     update_shift_marks,
     set_app_user_active,
     set_planning_location_enabled,
+    set_user_event_self_travel,
     save_roster_day,
     save_workday_role,
     upsert_travel_time_default,
@@ -185,7 +189,7 @@ from .public_holidays import holiday_for_date
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.03.1"
+APP_BUILD = "2026.08.09.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -565,7 +569,7 @@ ROSTER_RACE_TYPE_LABELS = dict(ROSTER_RACE_TYPES)
 
 
 app = FastAPI(
-    title="Deputy Roster View",
+    title="Re-Deputy",
 )
 app.add_middleware(GZipMiddleware, minimum_size=500)
 app.middleware("http")(trusted_device_middleware)
@@ -2587,6 +2591,23 @@ def default_roster_race_type(track_label: object) -> str:
     return "thoroughbred"
 
 
+def regular_builder_race_location(label: object) -> bool:
+    text = str(label or "").strip()
+    key = schedule_label_key(text)
+    if not key:
+        return False
+    blocked_fragments = {
+        "leave", "office", "clowplace", "pubhol", "publicholiday", "vehicles",
+        "trackinstall", "prodshoot", "productionshoot", "travel", "outofregion",
+        "northernopscontractors", "accommodation", "training",
+    }
+    if key in blocked_fragments or any(fragment in key for fragment in blocked_fragments):
+        return False
+    if re.match(r"^\([a-z]\)\s*", text.lower()):
+        return False
+    return True
+
+
 def parse_hotel_assignments(value: object) -> list[dict[str, object]]:
     if isinstance(value, list):
         rows = value
@@ -2733,8 +2754,77 @@ def manual_workday_hours(item: dict[str, object]) -> float:
     return manual_workday_window(item)[0]
 
 
+def apply_shift_self_travel(
+    shifts: list[dict[str, object]],
+    start_date: str,
+    end_date: str,
+    user_id: int | None,
+) -> None:
+    if user_id is None:
+        return
+    active = {
+        str(item.get("event_id") or "")
+        for item in fetch_self_travel_preferences_between(start_date, end_date)
+        if int(item.get("user_id") or 0) == user_id
+        and str(item.get("event_kind") or "") == "deputy_shift"
+    }
+    for shift in shifts:
+        shift_ids = {
+            str(value)
+            for value in shift.get("combined_shift_ids", [shift.get("id")])
+            if value is not None
+        }
+        enabled = bool(active & shift_ids)
+        shift["self_travel"] = enabled
+        shift["underlying_vehicle_label"] = str(shift.get("header_vehicle_label") or "")
+        if enabled:
+            shift["header_vehicle_label"] = "Making own way"
+            shift["transport_display_label"] = "Making own way"
+
+
+def apply_manual_self_travel(
+    roster: dict[str, object],
+    preferences: list[dict[str, object]],
+) -> None:
+    event_id = str(roster.get("id") or "")
+    active_people = {
+        int(item.get("canonical_person_id") or 0)
+        for item in preferences
+        if str(item.get("event_kind") or "") == "manual_workday"
+        and str(item.get("event_id") or "") == event_id
+    }
+    for assignment in list(roster.get("all_assignments") or []):
+        person_id = int(assignment.get("person_id") or 0)
+        assignment["local_self_travel"] = person_id in active_people
+        assignment["underlying_transport_label"] = str(assignment.get("transport_label") or "")
+        if assignment["local_self_travel"]:
+            assignment["transport_label"] = "Making own way"
+
+
+def apply_schedule_self_travel(
+    people: list[dict[str, object]],
+    date_text: str,
+    location_label: object,
+) -> None:
+    location_key = calendar_location_key(location_label)
+    active_people = {
+        int(item.get("canonical_person_id") or 0)
+        for item in fetch_self_travel_preferences_between(date_text, date_text)
+        if str(item.get("event_kind") or "") == "deputy_shift"
+        and (
+            not location_key or not str(item.get("location_key") or "")
+            or str(item.get("location_key") or "") == location_key
+        )
+    }
+    for person in people:
+        if int(person.get("canonical_person_id") or 0) not in active_people:
+            continue
+        person["local_self_travel"] = True
+        person["underlying_vehicle_label"] = str(person.get("vehicle_label") or "")
+        person["vehicle_label"] = "Making own way"
 def published_rosters_by_date(start_date: str, end_date: str, user_id: int | None) -> dict[str, list[dict[str, object]]]:
     result: dict[str, list[dict[str, object]]] = {}
+    self_travel_preferences = fetch_self_travel_preferences_between(start_date, end_date)
     visible_ids = visible_workday_ids_for_user(start_date, end_date, user_id) if user_id is not None else None
     for row in fetch_published_roster_days_between(start_date, end_date):
         if visible_ids is not None and int(row["id"]) not in visible_ids:
@@ -2781,6 +2871,19 @@ def published_rosters_by_date(start_date: str, end_date: str, user_id: int | Non
             assignments=assignments,
             all_assignments=all_assignments,
             hotel_assignments=hotels,
+        )
+        apply_manual_self_travel(item, self_travel_preferences)
+        user_assignments = [
+            value for value in assignments
+            if user_id is not None and int(value.get("user_id") or 0) == user_id
+        ]
+        item["self_travel"] = any(bool(value.get("local_self_travel")) for value in user_assignments)
+        item["underlying_transport_label"] = ", ".join(
+            dict.fromkeys(
+                str(value.get("underlying_transport_label") or "").strip()
+                for value in user_assignments
+                if str(value.get("underlying_transport_label") or "").strip()
+            )
         )
         role_labels = [str(value.get("role_label") or value.get("position_label") or "").strip() for value in assignments if value.get("assignment_state") != "open"]
         item["position_label"] = ", ".join(dict.fromkeys(label or "Attending" for label in role_labels)) or WORKDAY_TYPE_LABELS.get(str(item.get("day_type") or ""), "Work day")
@@ -5187,14 +5290,19 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
     row = get_roster_day(roster_day_id) if roster_day_id is not None else None
     if roster_day_id is not None and row is None:
         raise HTTPException(status_code=404, detail="Roster day not found")
+    planning_seed = None
+    planning_id_text = str(request.query_params.get("planning_id") or "").strip()
+    if row is None and planning_id_text.isdigit():
+        planning_seed_row = get_love_racing_planning_meeting(int(planning_id_text))
+        planning_seed = dict(planning_seed_row) if planning_seed_row is not None else None
     roster_day = dict(row) if row else {
         "id": 0,
-        "roster_date": datetime.now(settings.timezone).date().isoformat(),
+        "roster_date": str((planning_seed or {}).get("meeting_date") or datetime.now(settings.timezone).date().isoformat()),
         "track_key": "",
-        "track_label": "",
+        "track_label": str((planning_seed or {}).get("racecourse") or ""),
         "canonical_location_key": "",
         "title": "",
-        "custom_location": "Office / Clow Place",
+        "custom_location": str((planning_seed or {}).get("racecourse") or "Office / Clow Place"),
         "race_type": "thoroughbred",
         "day_type": "race_day",
         "start_origin": "",
@@ -5203,11 +5311,11 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
         "end_time": "",
         "break_minutes": 0,
         "on_track_time": "",
-        "first_race_time": "",
-        "last_race_time": "",
-        "race_count": None,
+        "first_race_time": str((planning_seed or {}).get("scheduled_first_race_time") or ""),
+        "last_race_time": str((planning_seed or {}).get("scheduled_last_race_time") or ""),
+        "race_count": (planning_seed or {}).get("scheduled_race_count"),
         "notes": "",
-        "source_reference": "",
+        "source_reference": "Love Racing planning calendar" if planning_seed else "",
         "provenance": "manual",
         "linked_deputy_event_id": "",
         "duplicate_resolution": "keep_separate",
@@ -5241,6 +5349,9 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
         if canonical_travel_base_label(item.get("base_label")) != "Office / Clow Place":
             continue
         travel_minutes.setdefault(str(item.get("track_key") or ""), int(item.get("travel_minutes") or 0))
+    regular_locations = [label for label in locations if regular_builder_race_location(label)]
+    if roster_day.get("track_label") and roster_day["track_label"] not in regular_locations:
+        regular_locations.append(str(roster_day["track_label"]))
     track_options = [
         {
             "label": label,
@@ -5248,7 +5359,11 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
             "default_race_type": default_roster_race_type(label),
             "travel_minutes": travel_minutes.get(travel_default_key(label), 0),
         }
-        for label in sorted(set(locations), key=str.lower)
+        for label in sorted(set(regular_locations), key=str.lower)
+    ]
+    advanced_track_options = [
+        label for label in sorted(set(locations), key=str.lower)
+        if label not in regular_locations
     ]
     current_snapshot = roster_day_snapshot(roster_day, assignments)
     published_snapshot = parse_roster_snapshot(roster_day.get("published_snapshot"))
@@ -5334,6 +5449,7 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
             "users": [dict(item) for item in list_app_users() if int(item["is_active"] or 0)],
             "crew_options": crew_options,
             "track_options": track_options,
+            "advanced_track_options": advanced_track_options,
             "place_options": list_known_place_labels(),
             "race_types": ROSTER_RACE_TYPES,
             "workday_types": WORKDAY_TYPES,
@@ -5349,6 +5465,8 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
             "duplicate_candidates": duplicate_candidates,
             "version_history": version_history,
             "review_summary": review_summary,
+            "review_mode": bool(row is not None and request.query_params.get("mode") == "review"),
+            "planning_seed": planning_seed,
         },
     )
 
@@ -5855,6 +5973,12 @@ def month_view(
     for date_key, day_shifts in list(shifts_by_date.items()):
         shifts_by_date[date_key] = day_shifts if global_view else combine_adjacent_shifts(day_shifts)
     if not global_view:
+        apply_shift_self_travel(
+            [shift for day_shifts in shifts_by_date.values() for shift in day_shifts],
+            grid_start,
+            grid_end,
+            owner_user_id,
+        )
         enrich_shifts_with_love_racing(
             [shift for day_shifts in shifts_by_date.values() for shift in day_shifts],
             grid_start,
@@ -6217,6 +6341,11 @@ def day_view(
             event_start_at=selected_event.get("start_at") if selected_event else None,
             event_end_at=selected_event.get("end_at") if selected_event else None,
         )
+        apply_schedule_self_travel(
+            global_schedule_people,
+            date_text,
+            selected_event.get("track_label") if selected_event else "",
+        )
         for person in global_schedule_people:
             person["changed"] = False
         return templates.TemplateResponse(
@@ -6364,6 +6493,12 @@ def day_view(
         if str(shift.get("header_vehicle_label") or "").strip():
             continue
         shift["header_vehicle_label"] = vehicle_for_user_from_schedule(deputy_schedule_people, user, shift)
+    apply_shift_self_travel(shifts, date_text, date_text, owner_user_id)
+    apply_schedule_self_travel(
+        deputy_schedule_people,
+        date_text,
+        shifts[0].get("track_label") if shifts else "",
+    )
     deputy_schedule_changed = any(bool(person.get("changed")) for person in deputy_schedule_people)
     deputy_schedule_changes = [person for person in deputy_schedule_people if person.get("changed")]
     change_identities = crew_identity_records()
@@ -6447,8 +6582,66 @@ def day_view(
             "day_total": day_total,
             "has_changed": has_changed,
             "mark_fields": MARK_FIELDS,
+            "can_change_self_travel": bool(owner_user_id is not None and day_date >= datetime.now(get_settings().timezone).date()),
         },
     )
+
+
+@app.post("/day/{date_text}/self-travel")
+async def update_day_self_travel(request: Request, date_text: str) -> RedirectResponse:
+    user = current_user(request)
+    if not user:
+        raise HTTPException(status_code=403, detail="Login required")
+    try:
+        event_date = date.fromisoformat(date_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Invalid date") from exc
+    if event_date < datetime.now(get_settings().timezone).date():
+        return RedirectResponse(
+            url=notice_url(f"/day/{date_text}", "Past workday travel preferences cannot be changed."),
+            status_code=303,
+        )
+    user_id = int(user["id"])
+    person_id = get_user_canonical_person_id(user_id)
+    if person_id is None:
+        return RedirectResponse(
+            url=notice_url(f"/day/{date_text}", "Your app account is not linked to a crew identity yet."),
+            status_code=303,
+        )
+    form = await request.form()
+    event_kind = str(form.get("event_kind") or "").strip()
+    event_id = str(form.get("event_id") or "").strip()
+    enabled = str(form.get("self_travel") or "") == "1"
+    location_key = ""
+    if event_kind == "deputy_shift" and event_id.isdigit():
+        shift = fetch_shift(int(event_id), owner_user_id=user_id)
+        if shift is None or str(shift["date"] or "") != date_text:
+            raise HTTPException(status_code=403, detail="Shift does not belong to this user")
+        decorated = decorate_shift(shift)
+        location_key = calendar_location_key(decorated.get("track_label") or decorated.get("location") or "")
+    elif event_kind == "manual_workday" and event_id.isdigit():
+        visible = published_rosters_by_date(date_text, date_text, user_id).get(date_text, [])
+        roster = next((item for item in visible if int(item.get("id") or 0) == int(event_id)), None)
+        if roster is None or not any(
+            int(item.get("person_id") or 0) == person_id
+            for item in roster.get("assignments", [])
+        ):
+            raise HTTPException(status_code=403, detail="Workday does not belong to this user")
+        location_key = calendar_location_key(roster.get("location_label") or roster.get("display_title") or "")
+    else:
+        raise HTTPException(status_code=400, detail="Invalid workday")
+    if not set_user_event_self_travel(
+        user_id=user_id,
+        canonical_person_id=person_id,
+        event_kind=event_kind,
+        event_id=event_id,
+        event_date=date_text,
+        location_key=location_key,
+        self_travel=enabled,
+    ):
+        raise HTTPException(status_code=400, detail="Travel preference could not be saved")
+    message = "Making your own way saved locally in Re-Deputy." if enabled else "Crew transport restored from the current roster."
+    return RedirectResponse(url=notice_url(f"/day/{date_text}", message), status_code=303)
 
 
 @app.get("/admin/roster-days/new")
@@ -6656,7 +6849,7 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
         updated_by_user_id=int(user["id"]),
         assignments=assignments,
     )
-    return RedirectResponse(url=notice_url(f"/admin/roster-days/{saved_id}", "Draft saved. Review highlighted changes, then publish when ready."), status_code=303)
+    return RedirectResponse(url=notice_url(f"/admin/roster-days/{saved_id}?mode=review", "Draft saved. Review it, then publish when ready."), status_code=303)
 
 
 @app.post("/admin/roster-days/{roster_day_id}/publish")
@@ -7267,13 +7460,11 @@ async def save_calendar_settings(request: Request) -> RedirectResponse:
 
 
 @app.post("/settings/clear-changed")
-def clear_all_changed(request: Request) -> RedirectResponse:
+def clear_user_changed(request: Request) -> RedirectResponse:
     user = current_user(request)
-    owner_user_id = int(user["id"]) if user and user.get("id") is not None else None
-    if owner_user_id is None:
-        changed = clear_all_changed_flags()
-    else:
-        changed = clear_changed_flags_for_user(owner_user_id)
+    if not user or user.get("id") is None:
+        raise HTTPException(status_code=403, detail="Login required")
+    changed = clear_changed_flags_for_user(int(user["id"]))
     return RedirectResponse(
         url=notice_url("/settings", f"Cleared changed flags on {changed} of your shifts."),
         status_code=303,

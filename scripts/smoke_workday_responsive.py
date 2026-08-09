@@ -65,7 +65,18 @@ def main() -> None:
             if page.locator('[data-general-field]:visible').count() == 0 or page.locator('[data-race-field]:visible').count() != 0:
                 raise AssertionError("Day-type controls did not hide race-only fields without removing general fields.")
 
-            for width in (1280, 375, 320):
+            initial_rows = page.locator("[data-assignment-row]").count()
+            page.locator("[data-add-position]").click()
+            page.locator("[data-add-attendee]").click()
+            if page.locator("[data-assignment-row]").count() != initial_rows + 2:
+                raise AssertionError("Compact Add position/Add attendee controls did not create editable rows.")
+            last_row = page.locator("[data-assignment-row]").last
+            last_row.locator("[data-assignment-advanced]").evaluate("element => { element.open = true; }")
+            last_row.locator("[data-remove-row]").click()
+            if page.locator("[data-assignment-row]").count() != initial_rows + 1:
+                raise AssertionError("Advanced remove-position control did not remove its row.")
+
+            for width in (1280, 430, 375, 320):
                 page.set_viewport_size({"width": width, "height": 900})
                 page.reload()
                 page.wait_for_selector("[data-workday-form]")
@@ -76,18 +87,28 @@ def main() -> None:
                 box = first_row.bounding_box()
                 if not box or box["x"] < 0 or box["x"] + box["width"] > width + 1:
                     raise AssertionError(f"Assignment editor did not fit the {width}px viewport: {box!r}")
+                if first_row.locator("[data-assignment-advanced]").get_attribute("open") is not None:
+                    raise AssertionError("Advanced assignment fields were not collapsed by default.")
                 if width <= 375:
                     columns = first_row.locator(".workday-assignment-grid").evaluate(
                         "element => getComputedStyle(element).gridTemplateColumns"
                     )
                     if " " in columns.strip():
                         raise AssertionError(f"Assignment fields did not stack at {width}px: {columns!r}")
+            for width in (1280, 430, 375, 320):
+                page.set_viewport_size({"width": width, "height": 900})
+                page.goto(f"http://127.0.0.1:{port}/month")
+                if page.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1"):
+                    raise AssertionError(f"Month/header layout overflowed horizontally at {width}px.")
+                if width <= 430:
+                    if page.locator(".brand-meta-name-full").is_visible() or not page.locator(".brand-meta-name-short").is_visible():
+                        raise AssertionError(f"Compact mobile identity did not replace the full header name at {width}px.")
             browser.close()
     finally:
         server.should_exit = True
         thread.join(timeout=10)
 
-    print("workday responsive smoke ok (1280px, 375px, 320px)")
+    print("workday responsive smoke ok (1280px, 430px, 375px, 320px)")
 
 
 if __name__ == "__main__":

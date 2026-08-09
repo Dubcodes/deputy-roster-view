@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Settings - Deputy Roster View{% endblock %}
+{% block title %}Settings - Re-Deputy{% endblock %}
 
 {% block content %}
   <section class="settings-grid settings-grid-two settings-quiet">
@@ -23,6 +23,10 @@
         {% endif %}
       </div>
       {% if current_user %}
+        <details class="inline-settings-details">
+          <summary>Notifications <span>Coming next</span></summary>
+          <p class="muted">Notification controls will live here when Re-Deputy push notifications are ready.</p>
+        </details>
         <details class="inline-settings-details">
           <summary>Change PIN</summary>
           <form class="settings-form compact-settings-form" action="/settings/pin" method="post">
@@ -156,9 +160,14 @@
           <span data-sync-progress-fill style="width: {% if sync_status.running %}15{% else %}0{% endif %}%;"></span>
         </div>
       </div>
-      <form action="/sync-now" method="post" data-progress-form>
-        <button class="button" type="submit" data-progress-button {% if sync_status.running %}disabled{% endif %}>Sync my roster</button>
-      </form>
+      <div class="settings-action-row sync-action-row">
+        <form action="/sync-now" method="post" data-progress-form>
+          <button class="button" type="submit" data-progress-button {% if sync_status.running %}disabled{% endif %}>Sync my roster</button>
+        </form>
+        <form action="/settings/clear-changed" method="post">
+          <button class="button button-secondary" type="submit">Clear changes</button>
+        </form>
+      </div>
       <p class="muted">Automatic checks also run at 5am and around upcoming shifts.</p>
       <div class="sync-next-shift">
         <span class="summary-label">Next shift</span>
@@ -452,12 +461,6 @@
 
       <details class="inline-settings-details">
         <summary>Maintenance And Sync Logs</summary>
-        <div class="stacked-actions">
-          <form action="/settings/clear-changed" method="post">
-            <button class="button button-secondary" type="submit">Clear Changed Flags</button>
-          </form>
-        </div>
-
         <div class="section-heading sync-log-heading">
           <h2>Sync Logs</h2>
         </div>

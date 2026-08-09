@@ -2,7 +2,7 @@
 
 ## Name
 
-Deputy Roster View
+Re-Deputy
 
 ## Purpose
 
@@ -40,6 +40,9 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 - Let admins upload a better map for any crew-known location, download the retained automatic image, and reset to automatic without losing either source.
 - Present maps by canonical racing venue: consolidate trial aliases, exclude operational locations, and let admins classify uncertain labels without rewriting roster history.
 - Let admins build manual race, office, travel, training, and other work days, review changes against the last published version, and publish them to selected crew without writing to Deputy.
+- Keep the manual workday editor compact on phones while allowing reusable, Deputy-discovered, and one-day custom roles, roleless attendees, deliberate open positions, and exceptional locations.
+- Let an admin seed a private Thoroughbred draft from a saved Love Racing planning day; review and explicit publication are still required.
+- Let a user mark their own today/future event as Making my own way. This reversible Re-Deputy-only overlay is visible for crew planning but never changes Deputy, source evidence, or Changed state.
 - Keep personal roster views scoped to the signed-in user's own shifts. Shared crew context is only shown as race-day schedule context.
 - Reconcile each registered user's confirmed personal assignment into missing shared crew positions without hiding source conflicts.
 - Treat incomplete Deputy responses conservatively, delay future-shift removal until two complete absences, and permanently lock completed workdays.

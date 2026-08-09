@@ -1,2 +1,2 @@
-"""Deputy Roster View application package."""
+"""Re-Deputy application package."""
 

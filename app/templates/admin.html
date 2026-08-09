@@ -21,7 +21,7 @@
   </details>
 {% endmacro %}
 
-{% block title %}Admin - Deputy Roster View{% endblock %}
+{% block title %}Admin - Re-Deputy{% endblock %}
 
 {% block content %}
   <section class="page-heading compact-heading">
@@ -681,17 +681,16 @@
     <div class="management-panel-body">
       <p class="muted">A crew identity is the person Deputy rosters. An app login provides access to that identity; it is not a second crew member.</p>
       <div class="crew-directory-list">
-        <details open><summary>Linked people <span>{{ linked_crew_people|length }}</span></summary>{% for person in linked_crew_people %}{{ crew_person_row(person, app_users) }}{% endfor %}</details>
+        <details><summary>Linked people <span>{{ linked_crew_people|length }}</span></summary>{% for person in linked_crew_people %}{{ crew_person_row(person, app_users) }}{% endfor %}</details>
         <details><summary>Crew without app logins <span>{{ unlinked_crew_people|length }}</span></summary>{% for person in unlinked_crew_people %}{{ crew_person_row(person, app_users) }}{% endfor %}</details>
         <details><summary>Merged / retired identities <span>{{ merged_crew_people|length }}</span></summary>{% for person in merged_crew_people %}<article class="crew-directory-row is-inactive"><strong>{{ person.canonical_display_name }}</strong><small>Merged into crew person #{{ person.merged_into_person_id }} · {{ person.merged_at|datetime }}</small></article>{% endfor %}</details>
       </div>
     </div>
   </details>
 
-  <section class="table-panel">
-    <div class="section-heading">
-      <h2>Users</h2>
-    </div>
+  <details class="table-panel">
+    <summary class="management-panel-summary"><span><strong>Users</strong><small>{{ users|length }} accounts</small></span><span>Devices, login, PIN, and account controls</span></summary>
+    <div class="management-panel-body">
     <div class="admin-user-list">
       {% for user in users %}
         <details class="admin-user-row">
@@ -840,12 +839,12 @@
         </details>
       {% endfor %}
     </div>
-  </section>
-
-  <section class="table-panel">
-    <div class="section-heading">
-      <h2>Error Reports</h2>
     </div>
+  </details>
+
+  <details class="table-panel"{% if error_reports %} open{% endif %}>
+    <summary class="management-panel-summary"><span><strong>Error reports</strong><small>{{ error_reports|length }} submitted</small></span><span>{{ 'Review needed' if error_reports else 'None waiting' }}</span></summary>
+    <div class="management-panel-body">
     {% if not error_reports %}
       <div class="empty-state">No error reports yet.</div>
     {% else %}
@@ -865,7 +864,8 @@
         {% endfor %}
       </div>
     {% endif %}
-  </section>
+    </div>
+  </details>
 
   <section class="table-panel">
     <div class="section-heading">
@@ -904,7 +904,7 @@
     </form>
   </section>
 
-  <details class="table-panel" {% if overrides %}open{% endif %}>
+  <details class="table-panel">
     <summary>Override Audit</summary>
     {% if not overrides %}
       <div class="empty-state">No manual overrides recorded yet.</div>

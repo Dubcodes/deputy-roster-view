@@ -183,3 +183,11 @@ Legacy `roster_day_assignments` rows migrate once into `workday_assignments`, re
 An unambiguous employee-ID match may link the account directly or merge an account-only synthetic person into the Deputy-backed canonical person. Merges are transactional, audited in `crew_identity_merge_audit`, and retire the source through `merged_into_person_id` rather than deleting it. Runtime assignment reads follow that redirect, while immutable published JSON snapshots remain untouched.
 
 `workday_user_visibility` materializes personal access for published manual workdays from canonical assignment people and their linked active app users. It is rebuilt after publication, identity repair, and later account linking. This lets existing workdays become visible without republishing or creating a content change.
+
+## Local Transport Preferences
+
+`user_event_transport_preferences` stores a signed-in user's reversible "Making my own way" choice against a stable Deputy shift or manual-workday ID and canonical crew identity. `user_event_transport_preference_audit` records each actual toggle. The read layer overlays that choice on the latest roster transport; it never edits Deputy shifts, manual roster snapshots, vehicle evidence, or Changed state. Turning it off therefore reveals the newest underlying transport assignment.
+
+## Workday Review Flow
+
+The manual workday builder keeps its existing draft/version/publication boundary. Its compact editor supports searchable reusable roles, one-day custom roles, roleless attendees, open positions, and exceptional Deputy locations behind advanced controls. Saving redirects to a read-only review view; only an explicit publish action changes what crew can see. A saved Love Racing planning row may prefill a new private race-day draft, but remains planning evidence and never publishes automatically.

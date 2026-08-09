@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Help - Deputy Roster View{% endblock %}
+{% block title %}Help - Re-Deputy{% endblock %}
 
 {% block content %}
   <section class="page-heading compact-heading">
@@ -12,6 +12,8 @@
       <a class="button button-secondary" href="/settings">Back to settings</a>
     </div>
   </section>
+
+  <p class="help-intro">Re-Deputy makes your Deputy roster easier to read, while Deputy remains the source for confirmed shifts.</p>
 
   <section class="help-layout">
     <article class="table-panel help-panel">
@@ -84,6 +86,10 @@
           <dd>Notes saved at the bottom of a shift are private to your account. You can also record a changed last-race time or when the day actually finished.</dd>
         </div>
         <div>
+          <dt>Making my own way</dt>
+          <dd>For today or a future workday, you can show that you are travelling separately. This is a reversible Re-Deputy preference: it never changes Deputy, and switching it off restores the latest crew vehicle from the roster.</dd>
+        </div>
+        <div>
           <dt>Admin corrections</dt>
           <dd>An active admin correction applies to that exact date and racecourse for everyone. It takes priority without changing the original Deputy note. If it is disabled, the page falls back to your own correction, Deputy, Love Racing, or the usual calculated default.</dd>
         </div>
@@ -103,7 +109,7 @@
         </div>
         <div>
           <dt>Love Racing</dt>
-          <dd>A faded gold planning entry is a public race date, not a roster. Tap it to see the saved date, location, and source. Once Deputy has a real shift for that day and location, Deputy takes priority.</dd>
+          <dd>A faded gold planning entry is a public race date, not a roster. Tap it to see the saved date, location, and source. An admin can use it to start a private draft without changing the planning entry. Once Deputy has a real shift for that day and location, Deputy takes priority.</dd>
         </div>
       </dl>
     </article>

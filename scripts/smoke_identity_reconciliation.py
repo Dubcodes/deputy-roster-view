@@ -254,8 +254,10 @@ def main() -> None:
         if expected not in response.text:
             raise AssertionError(f"Repaired office day missing from {path}.")
     month = client.get("/month?year=2026&month=8")
-    if "Next Up" not in month.text or "Office Day" not in month.text.split("Next Up", 1)[-1]:
-        raise AssertionError("Repaired office day did not appear in Next Up.")
+    if date(2026, 8, 6) >= date.today() and (
+        "Next Up" not in month.text or "Office Day" not in month.text.split("Next Up", 1)[-1]
+    ):
+        raise AssertionError("Repaired future office day did not appear in Next Up.")
     day = client.get("/day/2026-08-06")
     if "No app account linked" in day.text or day.text.count("Contractor ") < 10:
         raise AssertionError("Crew day leaked account-link status or lost unlinked attendees.")

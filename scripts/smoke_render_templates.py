@@ -368,9 +368,23 @@ def check_holiday_marker_css() -> None:
         raise AssertionError("Holiday markers must not be absolutely positioned over date headings.")
 
 
+def check_product_branding() -> None:
+    template_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "app" / "templates").glob("*.html")
+    )
+    if "Deputy Roster View" in template_text or "Re-Deputy Roster View" in template_text:
+        raise AssertionError("A retired product name remains in the main UI templates.")
+    if "Re-Deputy" not in template_text:
+        raise AssertionError("The Re-Deputy product name is missing from the UI templates.")
+    if "Deputy roster" not in template_text:
+        raise AssertionError("Deputy is no longer identified as the external roster source.")
+
+
 if __name__ == "__main__":
     render_day_template()
     render_month_template()
     render_timesheet_template()
     check_holiday_marker_css()
+    check_product_branding()
     print("template smoke render ok")
