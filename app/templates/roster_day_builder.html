@@ -7,6 +7,7 @@
     <input type="hidden" name="assignment_key" value="{{ assignment.assignment_key or '' }}">
     <input type="hidden" name="role_key" value="{{ assignment.role_key or '' }}">
     <input type="hidden" name="allow_multiple_roles" value="0" data-allow-multiple>
+    <input type="hidden" name="assignment_state" value="{{ assignment.assignment_state if assignment.assignment_state in ('open','tbc') else 'assigned' }}" data-assignment-state>
     <div class="workday-assignment-primary">
       <label class="form-row workday-role-field">
         <span>Position</span>
@@ -16,9 +17,10 @@
         <span>Person</span>
         <input type="hidden" name="assignee" value="{% if assignment.person_id %}person:{{ assignment.person_id }}{% endif %}" data-picker-value>
         <div class="search-picker" data-search-picker data-picker-kind="person">
-          <input type="search" value="{% if assignment.person_id %}{{ assignment.person_display_name or assignment.assignee_label }}{% elif assignment.assignment_state == 'open' %}Open position{% elif assignment.assignment_state == 'tbc' %}TBC{% endif %}" placeholder="Search crew..." autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" data-picker-input>
+          <input type="search" value="{% if assignment.person_id %}{{ assignment.person_display_name or assignment.assignee_label }}{% elif assignment.assignment_state == 'open' %}Open position{% elif assignment.assignment_state == 'tbc' %}TBC / not offered{% endif %}" placeholder="Search crew..." autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" data-picker-input>
           <div class="search-picker-menu" role="listbox" hidden data-picker-menu>
             <button type="button" role="option" class="search-picker-option is-open-position" data-picker-option data-value="" data-label="Open position" data-search="open position" data-state="open"><strong>Open position</strong><small>Available for eligible crew to apply</small></button>
+            <button type="button" role="option" class="search-picker-option" data-picker-option data-value="" data-label="TBC / not offered" data-search="tbc not offered unfilled" data-state="tbc"><strong>TBC / not offered</strong><small>Unfilled but not available for applications</small></button>
             <div class="search-picker-group" data-team-group><span data-team-group-label>{{ selected_team_label or 'Selected team' }}</span>
               {% for person in crew_options if person.selected_team_member %}<button type="button" role="option" class="search-picker-option" data-picker-option data-value="person:{{ person.id }}" data-person-id="{{ person.id }}" data-team-ids="{{ person.team_ids|join(',') }}" data-label="{{ person.canonical_display_name }}" data-search="{{ person.search_text }}"><strong>{{ person.canonical_display_name }}</strong><small>{{ person.team_names|join(', ') }}</small></button>{% endfor %}
             </div>
@@ -34,8 +36,8 @@
         <input type="hidden" name="transport_mode" value="{{ assignment.transport_mode or 'unassigned' }}" data-transport-mode>
         <input type="hidden" name="vehicle_id" value="{{ assignment.vehicle_id or '' }}" data-vehicle-id>
         <input type="hidden" name="vehicle_label" value="{{ assignment.vehicle_label or '' }}" data-vehicle-label>
-        <div class="search-picker" data-search-picker data-picker-kind="vehicle">
-          <input type="search" value="{% if assignment.transport_mode == 'vehicle' %}{{ assignment.vehicle_label or 'Crew vehicle TBC' }}{% elif assignment.transport_mode == 'self_travel' %}Making own way{% elif assignment.transport_mode == 'not_required' %}No transport required{% elif assignment.transport_mode == 'custom' %}{{ assignment.custom_transport_text or 'Custom transport' }}{% else %}No transport assigned yet{% endif %}" placeholder="Search vehicles..." autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" data-picker-input>
+        <div class="search-picker" data-search-picker data-picker-kind="vehicle" data-current-value="{% if assignment.transport_mode == 'vehicle' and assignment.vehicle_id %}vehicle:{{ assignment.vehicle_id }}{% else %}{{ assignment.transport_mode or 'unassigned' }}{% endif %}">
+          <input type="search" value="{% if assignment.transport_mode == 'vehicle' %}{{ assignment.vehicle_label or 'Crew vehicle TBC' }}{% elif assignment.transport_mode == 'self_travel' %}Making own way{% elif assignment.transport_mode == 'not_required' %}No transport required{% elif assignment.transport_mode == 'custom' %}{{ assignment.custom_transport_text or 'Custom transport' }}{% else %}No transport assigned yet{% endif %}" data-selected-label="{% if assignment.transport_mode == 'vehicle' %}{{ assignment.vehicle_label or 'Crew vehicle TBC' }}{% elif assignment.transport_mode == 'self_travel' %}Making own way{% elif assignment.transport_mode == 'not_required' %}No transport required{% elif assignment.transport_mode == 'custom' %}{{ assignment.custom_transport_text or 'Custom transport' }}{% else %}No transport assigned yet{% endif %}" placeholder="Search vehicles..." autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" data-picker-input>
           <div class="search-picker-menu" role="listbox" hidden data-picker-menu>
             <button type="button" role="option" class="search-picker-option" data-picker-option data-value="unassigned" data-label="No transport assigned yet" data-search="unassigned tbc no transport assigned"><strong>No transport assigned yet</strong></button>
             <button type="button" role="option" class="search-picker-option" data-picker-option data-value="self_travel" data-label="Making own way" data-search="making own way self travel"><strong>Making own way</strong></button>
@@ -53,17 +55,10 @@
     <details class="workday-assignment-advanced" data-assignment-advanced>
       <summary>Advanced assignment options</summary>
       <div class="workday-assignment-grid">
-        <label class="form-row">
-          <span>Assignment</span>
-          <select name="assignment_state" data-assignment-state>
-            <option value="assigned"{% if assignment.assignment_state not in ('open','tbc','unused') %} selected{% endif %}>Assigned</option>
-            <option value="open"{% if assignment.assignment_state == 'open' %} selected{% endif %}>Open position</option>
-            <option value="tbc"{% if assignment.assignment_state == 'tbc' %} selected{% endif %}>TBC (not offered)</option>
-            <option value="unused"{% if assignment.assignment_state == 'unused' %} selected{% endif %}>Unused / remove</option>
-          </select>
-        </label>
-      <label class="form-row"><span>Eligible crew</span><select name="eligible_all_teams"><option value="0"{% if not assignment.eligible_all_teams %} selected{% endif %}>Selected team</option><option value="1"{% if assignment.eligible_all_teams %} selected{% endif %}>All teams</option></select></label>
-      <label class="form-row"><span>Eligible team</span><select name="eligible_team_id"><option value="">Workday team</option>{% for team in teams if team.active %}<option value="{{ team.id }}"{% if assignment.eligible_team_id == team.id %} selected{% endif %}>{{ team.display_name }}</option>{% endfor %}</select></label>
+      <div class="workday-open-eligibility" data-open-eligibility>
+        <label class="form-row"><span>Eligible crew</span><select name="eligible_all_teams"><option value="0"{% if not assignment.eligible_all_teams %} selected{% endif %}>Workday team</option><option value="1"{% if assignment.eligible_all_teams %} selected{% endif %}>All teams</option></select></label>
+        <label class="form-row"><span>Eligible team</span><select name="eligible_team_id"><option value="">Workday team</option>{% for team in teams if team.active %}<option value="{{ team.id }}"{% if assignment.eligible_team_id == team.id %} selected{% endif %}>{{ team.display_name }}</option>{% endfor %}</select></label>
+      </div>
       <label class="form-row transport-detail" data-custom-transport-field>
         <span>Custom transport</span>
         <input type="text" name="custom_transport_text" value="{{ assignment.custom_transport_text or '' }}" placeholder="Taxi, hire van, other detail">
@@ -191,8 +186,8 @@
       <details class="builder-inline-advanced" data-race-field>
         <summary>Use another Deputy location</summary>
         <div class="form-grid-two">
-          <label class="form-row"><span>Deputy location</span><select data-advanced-track><option value="">Choose an exceptional location</option>{% for label in advanced_track_options %}<option value="{{ label }}">{{ label }}</option>{% endfor %}</select></label>
-          <label class="form-row"><span>Custom / unlisted venue</span><input type="text" name="new_track_label" data-custom-track placeholder="Only when it is not in the normal list"></label>
+          <label class="form-row"><span>Deputy location</span><select data-advanced-track><option value="">Choose an exceptional location</option>{% for label in advanced_track_options %}<option value="{{ label }}"{% if label == exceptional_track_label %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+          <label class="form-row"><span>Custom / unlisted venue</span><input type="text" name="new_track_label" data-custom-track value="{{ exceptional_track_label }}" placeholder="Only when it is not in the normal list"></label>
         </div>
       </details>
       <datalist id="known-place-options">{% for place in place_options %}<option value="{{ place }}">{% endfor %}</datalist>
@@ -321,14 +316,17 @@
         const menu = picker.querySelector('[data-picker-menu]');
         const input = picker.querySelector('[data-picker-input]');
         if (menu) menu.hidden = true;
+        if (picker.dataset.pickerKind === 'vehicle' && input) input.value = input.dataset.selectedLabel || '';
         input?.setAttribute('aria-expanded', 'false');
       };
       const openPicker = (picker) => {
         document.querySelectorAll('[data-search-picker]').forEach((other) => { if (other !== picker) closePicker(other); });
         const menu = picker.querySelector('[data-picker-menu]');
         const input = picker.querySelector('[data-picker-input]');
+        const wasClosed = !menu || menu.hidden;
         if (menu) menu.hidden = false;
         input?.setAttribute('aria-expanded', 'true');
+        if (wasClosed && picker.dataset.pickerKind === 'vehicle' && input) input.value = '';
         filterPicker(picker, input?.value || '');
       };
       const visibleOptions = (picker) => [...picker.querySelectorAll('[data-picker-option]')].filter((option) => !option.hidden);
@@ -347,7 +345,9 @@
         picker.querySelectorAll('.search-picker-group').forEach((group) => { group.hidden = !group.querySelector('[data-picker-option]:not([hidden])'); });
         const empty = picker.querySelector('[data-picker-empty]');
         if (empty) empty.hidden = count > 0;
-        setActiveOption(picker, visibleOptions(picker)[0]);
+        const options = visibleOptions(picker);
+        const selected = options.find((option) => option.dataset.value === picker.dataset.currentValue);
+        setActiveOption(picker, selected || options[0]);
       };
       const clearPersonRow = (row) => {
         row.querySelector('[name="assignee"]').value = '';
@@ -380,7 +380,11 @@
           row.querySelector('[name="transport_mode"]').value = mode;
           row.querySelector('[name="vehicle_id"]').value = option.dataset.vehicleId || '';
           row.querySelector('[name="vehicle_label"]').value = mode === 'vehicle' ? (option.dataset.label || '') : '';
-          if (input) input.value = option.dataset.label || '';
+          picker.dataset.currentValue = value;
+          if (input) {
+            input.dataset.selectedLabel = option.dataset.label || '';
+            input.value = input.dataset.selectedLabel;
+          }
         }
         closePicker(picker);
         refreshRow(row);
@@ -388,7 +392,7 @@
       };
       const wirePicker = (picker) => {
         const input = picker.querySelector('[data-picker-input]');
-        input?.addEventListener('focus', () => { input.select(); openPicker(picker); });
+        input?.addEventListener('focus', () => { openPicker(picker); if (picker.dataset.pickerKind !== 'vehicle') input.select(); });
         input?.addEventListener('input', () => { openPicker(picker); filterPicker(picker, input.value); });
         input?.addEventListener('keydown', (event) => {
           if (event.key === 'Escape') { closePicker(picker); return; }
@@ -416,8 +420,10 @@
         row.classList.toggle('is-tbc', state === 'tbc');
         if (state !== 'assigned' && personValue) {
           personValue.value = '';
-          if (personInput) personInput.value = state === 'open' ? 'Open position' : state === 'tbc' ? 'TBC' : '';
+          if (personInput) personInput.value = state === 'open' ? 'Open position' : state === 'tbc' ? 'TBC / not offered' : '';
         }
+        const eligibility = row.querySelector('[data-open-eligibility]');
+        if (eligibility) eligibility.hidden = state !== 'open';
         const mode = row.querySelector('[data-transport-mode]')?.value;
         const custom = row.querySelector('[data-custom-transport-field]');
         if (custom) custom.hidden = mode !== 'custom';
@@ -425,7 +431,6 @@
       const wireRow = (row) => {
         const advanced = row.querySelector('[data-assignment-advanced]');
         row.querySelector('[data-toggle-advanced]')?.addEventListener('click', () => { if (advanced) advanced.open = !advanced.open; });
-        row.querySelector('[data-assignment-state]')?.addEventListener('change', () => refreshRow(row));
         row.querySelectorAll('[data-search-picker]').forEach(wirePicker);
         row.querySelector('[data-remove-row]')?.addEventListener('click', () => row.remove());
         row.querySelector('[data-move-up]')?.addEventListener('click', () => { if (row.previousElementSibling) list.insertBefore(row, row.previousElementSibling); });

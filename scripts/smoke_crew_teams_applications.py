@@ -33,6 +33,7 @@ def main() -> None:
         get_roster_day_assignments,
         init_db,
         list_crew_people,
+        list_crew_teams,
         list_crew_vehicles,
         list_open_workday_positions,
         publish_roster_day,
@@ -132,6 +133,51 @@ def main() -> None:
         raise AssertionError("Northern Team members were not prioritised alphabetically.")
     if picker_matches("Aaron") != ["Aaron Rangi"]:
         raise AssertionError("Search did not include other-team crew.")
+
+    admin_page = client.get("/admin")
+    if "63 people" in admin_page.text or "Crew teams" in admin_page.text:
+        raise AssertionError("Admin Crew UI retained a duplicated team matrix or a hard-coded crew count.")
+    for expected in ("Manage people, teams and identities", "Search crew", "No team assigned", "Type to add a team...", "Cambo"):
+        if expected not in admin_page.text:
+            raise AssertionError(f"Consolidated Crew UI omitted {expected!r}.")
+
+    add_second_team = client.post(
+        f"/admin/crew/{other_person}/teams",
+        data={"action": "add", "team_id": str(northern_team)},
+        follow_redirects=False,
+    )
+    if add_second_team.status_code != 303:
+        raise AssertionError("Team chip add route failed.")
+    other_picker = next(item for item in crew_picker_records(northern_team) if int(item["id"]) == other_person)
+    if set(other_picker["team_ids"]) != {northern_team, other_team}:
+        raise AssertionError("A crew member could not retain multiple team memberships.")
+
+    create_team = client.post(
+        f"/admin/crew/{campbell_person}/teams",
+        data={"action": "create", "team_name": "  Special   Events  "},
+        follow_redirects=False,
+    )
+    duplicate_name = client.post(
+        f"/admin/crew/{dylan_person}/teams",
+        data={"action": "create", "team_name": "special events"},
+        follow_redirects=False,
+    )
+    if create_team.status_code != 303 or duplicate_name.status_code != 303:
+        raise AssertionError("Inline team creation route failed.")
+    special_teams = [team for team in list_crew_teams(include_inactive=True) if team["display_name"].casefold() == "special events"]
+    if len(special_teams) != 1 or int(special_teams[0]["member_count"]) != 2:
+        raise AssertionError("Normalized inline team creation made a duplicate or failed to assign both people.")
+
+    remove_team = client.post(
+        f"/admin/crew/{other_person}/teams",
+        data={"action": "remove", "team_id": str(other_team)},
+        follow_redirects=False,
+    )
+    if remove_team.status_code != 303:
+        raise AssertionError("Team chip remove route failed.")
+    other_picker = next(item for item in crew_picker_records(northern_team) if int(item["id"]) == other_person)
+    if set(other_picker["team_ids"]) != {northern_team} or not any(int(team["id"]) == other_team for team in list_crew_teams()):
+        raise AssertionError("Removing membership deleted the team or retained the removed membership.")
 
     ok, message, vehicle_id = save_crew_vehicle(
         vehicle_id=None,

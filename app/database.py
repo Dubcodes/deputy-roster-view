@@ -2923,8 +2923,8 @@ def crew_picker_records(selected_team_id: int | None = None) -> list[dict[str, o
         rows = [dict(row) for row in conn.execute(
             """
             SELECT p.id,p.canonical_display_name,p.deputy_employee_id,
-                   GROUP_CONCAT(DISTINCT CASE WHEN m.active=1 THEN m.team_id END) team_ids,
-                   GROUP_CONCAT(DISTINCT CASE WHEN m.active=1 THEN t.display_name END) team_names
+                   GROUP_CONCAT(DISTINCT CASE WHEN m.active=1 AND t.id IS NOT NULL THEN m.team_id END) team_ids,
+                   GROUP_CONCAT(DISTINCT CASE WHEN m.active=1 AND t.id IS NOT NULL THEN t.display_name END) team_names
             FROM crew_people p
             LEFT JOIN crew_person_teams m ON m.crew_person_id=p.id
             LEFT JOIN crew_teams t ON t.id=m.team_id AND t.active=1

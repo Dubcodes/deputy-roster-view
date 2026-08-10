@@ -1,24 +1,38 @@
 {% extends "base.html" %}
 
-{% macro crew_person_row(person, app_users) %}
-  <details class="crew-directory-row{% if not person.is_active %} is-inactive{% endif %}">
-    <summary>
-      <span><strong>{{ person.canonical_display_name }}</strong><small>{% if person.deputy_employee_id %}Deputy #{{ person.deputy_employee_id }}{% if person.current_deputy_name %} · {{ person.current_deputy_name }}{% endif %}{% else %}No Deputy identity{% endif %}</small></span>
-      <span>{% if person.app_user_id %}<strong>App login</strong><small>{{ person.app_user_name }} · {{ person.app_user_email }}</small>{% else %}<span class="badge">No app login</span>{% endif %}</span>
-      <span class="badge">{{ "Active" if person.is_active else "Inactive" }}</span>
-    </summary>
-    <form class="settings-form crew-person-form" action="/admin/crew/{{ person.id }}" method="post">
-      <div class="form-grid-two">
-        <label class="form-row"><span>Canonical crew name</span><input name="canonical_display_name" value="{{ person.canonical_display_name }}" required></label>
-        <label class="form-row"><span>App login</span><select name="app_user_id"><option value="">Not linked</option>{% for app_user in app_users %}<option value="{{ app_user.id }}"{% if person.app_user_id == app_user.id %} selected{% endif %}>{{ app_user.display_name or app_user.deputy_email }}</option>{% endfor %}</select></label>
+{% macro crew_person_row(person, app_users, active_teams) %}
+  <article class="crew-management-row{% if not person.is_active %} is-inactive{% endif %}" data-crew-row data-search="{{ person.search_text }}" data-team-ids="{{ person.team_ids|join(',') }}">
+    <div class="crew-management-main">
+      <span><strong>{{ person.canonical_display_name }}</strong><small>{% if person.deputy_employee_id %}Deputy #{{ person.deputy_employee_id }}{% else %}No Deputy ID{% endif %}{% if person.aliases_text %} · {{ person.aliases_text }}{% endif %} · {{ 'App linked' if person.app_user_id else 'No app login' }}</small></span>
+      <div class="crew-team-editor" aria-label="Teams for {{ person.canonical_display_name }}">
+        <div class="crew-team-chips">
+          {% for team in person.teams if team.active %}
+            <form action="/admin/crew/{{ person.id }}/teams" method="post"><input type="hidden" name="team_id" value="{{ team.id }}"><button class="team-chip" name="action" value="remove" type="submit" data-remove-team data-person-name="{{ person.canonical_display_name }}" data-team-name="{{ team.display_name }}">{{ team.display_name }}{% if team.is_primary %}<small>Primary</small>{% endif %}<span aria-hidden="true">×</span></button></form>
+          {% else %}<small class="muted">No team assigned</small>{% endfor %}
+        </div>
+        <form class="crew-team-add" action="/admin/crew/{{ person.id }}/teams" method="post" data-person-team-form data-person-name="{{ person.canonical_display_name }}">
+          <input type="hidden" name="team_id" data-team-id><input type="hidden" name="team_name" data-team-name><input type="hidden" name="action" value="add" data-team-action>
+          <input type="search" list="active-team-options" placeholder="Type to add a team..." autocomplete="off" aria-label="Add team to {{ person.canonical_display_name }}" data-team-input required>
+          <label class="compact-check"><input type="checkbox" name="is_primary" value="1"> Primary</label>
+          <button class="button button-secondary button-compact" type="submit" data-team-submit>Add team</button>
+        </form>
       </div>
-      <label class="form-row"><span>Aliases</span><textarea name="aliases" rows="2">{{ person.aliases_text }}</textarea></label>
-      <label class="form-row"><span>Admin note</span><textarea name="admin_note" rows="2">{{ person.admin_note or '' }}</textarea></label>
-      <label class="builder-travel-toggle"><input type="checkbox" name="is_active" value="1"{% if person.is_active %} checked{% endif %}><span>Active crew identity</span></label>
-      {% if person.observed_positions or person.observed_vehicles %}<p class="muted">Observed: {{ person.observed_positions|join(", ") or "no positions" }}{% if person.observed_vehicles %} · Vehicles {{ person.observed_vehicles|join(", ") }}{% endif %}</p>{% endif %}
-      <button class="button button-compact" type="submit">Save identity</button>
-    </form>
-  </details>
+    </div>
+    <details class="crew-identity-details">
+      <summary>Edit identity</summary>
+      <form class="settings-form crew-person-form" action="/admin/crew/{{ person.id }}" method="post">
+        <div class="form-grid-two">
+          <label class="form-row"><span>Canonical crew name</span><input name="canonical_display_name" value="{{ person.canonical_display_name }}" required></label>
+          <label class="form-row"><span>App login</span><select name="app_user_id"><option value="">Not linked</option>{% for app_user in app_users %}<option value="{{ app_user.id }}"{% if person.app_user_id == app_user.id %} selected{% endif %}>{{ app_user.display_name or app_user.deputy_email }}</option>{% endfor %}</select></label>
+        </div>
+        <label class="form-row"><span>Aliases</span><textarea name="aliases" rows="2">{{ person.aliases_text }}</textarea></label>
+        <label class="form-row"><span>Admin note</span><textarea name="admin_note" rows="2">{{ person.admin_note or '' }}</textarea></label>
+        <label class="builder-travel-toggle"><input type="checkbox" name="is_active" value="1"{% if person.is_active %} checked{% endif %}><span>Active crew identity</span></label>
+        {% if person.observed_positions or person.observed_vehicles %}<p class="muted">Observed: {{ person.observed_positions|join(", ") or "no positions" }}{% if person.observed_vehicles %} · Vehicles {{ person.observed_vehicles|join(", ") }}{% endif %}</p>{% endif %}
+        <button class="button button-compact" type="submit">Save identity</button>
+      </form>
+    </details>
+  </article>
 {% endmacro %}
 
 {% block title %}Admin - Re-Deputy{% endblock %}
@@ -645,21 +659,6 @@
     </div>
   </details>
 
-  <details class="table-panel team-management-panel">
-    <summary class="management-panel-summary"><span><strong>Crew teams</strong><small>{{ crew_teams|length }} configured</small></span><span>Workday priority and open-position eligibility</span></summary>
-    <div class="management-panel-body">
-      <form class="role-catalogue-add" action="/admin/teams/save" method="post"><input name="display_name" placeholder="Team name" required><input type="number" name="sort_order" value="1000" aria-label="Order"><input type="hidden" name="active" value="1"><button class="button button-secondary" type="submit">Add team</button></form>
-      <div class="crew-directory-list">
-        {% for team in crew_teams %}<details><summary>{{ team.display_name }} <span>{{ team.member_count }} members</span></summary>
-          <form class="role-catalogue-row" action="/admin/teams/save" method="post"><input type="hidden" name="team_id" value="{{ team.id }}"><input name="display_name" value="{{ team.display_name }}" aria-label="Team name"><input type="number" name="sort_order" value="{{ team.sort_order }}" aria-label="Order"><label class="compact-check"><input type="checkbox" name="active" value="1"{% if team.active %} checked{% endif %}> Active</label><button class="button button-secondary button-compact" type="submit">Save</button></form>
-          <form class="settings-action-row" action="/admin/teams/{{ team.id }}/members" method="post" data-team-member-form><label class="form-row"><span>Add crew</span><input type="search" list="crew-team-person-options" placeholder="Search/add crew" autocomplete="off" data-team-person-input required><input type="hidden" name="crew_person_id" data-team-person-id></label><label class="compact-check"><input type="checkbox" name="is_primary" value="1"> Primary team</label><button class="button button-secondary button-compact" name="action" value="add">Add</button></form>
-          <div class="builder-review-crew">{% for member in team.members %}<div class="builder-review-row"><span><strong>{{ member.canonical_display_name }}</strong>{% if member.is_primary %} <small>Primary</small>{% endif %}</span><form action="/admin/teams/{{ team.id }}/members" method="post"><input type="hidden" name="crew_person_id" value="{{ member.id }}"><button class="button button-secondary button-compact" name="action" value="remove">Remove</button></form></div>{% else %}<p class="muted">No crew assigned yet.</p>{% endfor %}</div>
-        </details>{% endfor %}
-      </div>
-      <datalist id="crew-team-person-options">{% for person in crew_picker_people %}<option value="{{ person.canonical_display_name }}" data-person-id="{{ person.id }}">{% endfor %}</datalist>
-    </div>
-  </details>
-
   <details class="table-panel vehicle-management-panel">
     <summary class="management-panel-summary"><span><strong>Crew vehicles</strong><small>{{ crew_vehicles|length }} known vehicles</small></span><span>Search aliases and display order</span></summary>
     <div class="management-panel-body">
@@ -702,18 +701,25 @@
 
   <details class="table-panel crew-directory-panel">
     <summary class="management-panel-summary">
-      <span><strong>Crew directory</strong><small>{{ crew_people|length }} known people</small></span>
-      <span>Names, Deputy IDs, aliases, and app links</span>
+      <span><strong>Crew</strong><small>{{ active_crew_count }} people · {{ northern_team_count }} Northern Team</small></span>
+      <span>Manage people, teams and identities</span>
     </summary>
     <div class="management-panel-body">
-      <p class="muted">A crew identity is the person Deputy rosters. An app login provides access to that identity; it is not a second crew member.</p>
-      <div class="crew-directory-list">
-        <details><summary>Linked people <span>{{ linked_crew_people|length }}</span></summary>{% for person in linked_crew_people %}{{ crew_person_row(person, app_users) }}{% endfor %}</details>
-        <details><summary>Crew without app logins <span>{{ unlinked_crew_people|length }}</span></summary>{% for person in unlinked_crew_people %}{{ crew_person_row(person, app_users) }}{% endfor %}</details>
-        <details><summary>Merged / retired identities <span>{{ merged_crew_people|length }}</span></summary>{% for person in merged_crew_people %}<article class="crew-directory-row is-inactive"><strong>{{ person.canonical_display_name }}</strong><small>Merged into crew person #{{ person.merged_into_person_id }} · {{ person.merged_at|datetime }}</small></article>{% endfor %}</details>
+      <div class="crew-management-filters">
+        <label class="form-row"><span>Search crew</span><input type="search" placeholder="Name or nickname" autocomplete="off" data-crew-search></label>
+        <label class="form-row"><span>Team</span><select data-crew-team-filter><option value="all">All teams</option>{% for team in active_crew_teams %}<option value="{{ team.id }}">{{ team.display_name }}</option>{% endfor %}<option value="none">No team assigned</option></select></label>
       </div>
+      <datalist id="active-team-options">{% for team in active_crew_teams %}<option value="{{ team.display_name }}" data-team-id="{{ team.id }}">{% endfor %}</datalist>
+      <div class="crew-management-list" data-crew-list>
+        {% for person in crew_people if person.is_active %}{{ crew_person_row(person, app_users, active_crew_teams) }}{% endfor %}
+        <p class="empty-state" hidden data-crew-empty>No matching crew.</p>
+      </div>
+      {% if merged_crew_people %}<details class="crew-retired-identities"><summary>Merged / retired identities <span>{{ merged_crew_people|length }}</span></summary>{% for person in merged_crew_people %}<article class="crew-directory-row is-inactive"><strong>{{ person.canonical_display_name }}</strong><small>Merged into crew person #{{ person.merged_into_person_id }} · {{ person.merged_at|datetime }}</small></article>{% endfor %}</details>{% endif %}
+      <details class="crew-team-labels"><summary>Team labels</summary><div class="role-catalogue-list">{% for team in crew_teams %}<form class="role-catalogue-row" action="/admin/teams/save" method="post"><input type="hidden" name="team_id" value="{{ team.id }}"><input name="display_name" value="{{ team.display_name }}" aria-label="Team name"><input type="number" name="sort_order" value="{{ team.sort_order }}" aria-label="Order"><label class="compact-check"><input type="checkbox" name="active" value="1"{% if team.active %} checked{% endif %}> Active</label><button class="button button-secondary button-compact" type="submit">Save</button></form>{% endfor %}</div></details>
     </div>
   </details>
+
+  <dialog class="builder-duplicate-dialog" data-create-team-dialog><form method="dialog"><h2>Create new team?</h2><p><strong data-create-team-name></strong> does not currently exist.</p><p>This will create the team and assign <strong data-create-team-person></strong> to it.</p><div class="dialog-actions"><button class="button button-secondary" value="cancel">Cancel</button><button class="button" value="create" data-confirm-create-team>Create team</button></div></form></dialog>
 
   <details class="table-panel">
     <summary class="management-panel-summary"><span><strong>Users</strong><small>{{ users|length }} accounts</small></span><span>Devices, login, PIN, and account controls</span></summary>
@@ -1042,19 +1048,77 @@
         });
       });
 
-      const teamPeople = new Map(
-        [...document.querySelectorAll('#crew-team-person-options option')].map((option) => [option.value.toLocaleLowerCase(), option.dataset.personId])
+      const normaliseCrewSearch = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const crewSearch = document.querySelector('[data-crew-search]');
+      const crewTeamFilter = document.querySelector('[data-crew-team-filter]');
+      const crewRows = [...document.querySelectorAll('[data-crew-row]')];
+      const filterCrew = () => {
+        const query = normaliseCrewSearch(crewSearch?.value);
+        const team = crewTeamFilter?.value || 'all';
+        let visible = 0;
+        crewRows.forEach((row) => {
+          const teamIds = (row.dataset.teamIds || '').split(',').filter(Boolean);
+          const teamMatch = team === 'all' || (team === 'none' ? !teamIds.length : teamIds.includes(team));
+          const match = teamMatch && (!query || normaliseCrewSearch(row.dataset.search).includes(query));
+          row.hidden = !match;
+          if (match) visible += 1;
+        });
+        const empty = document.querySelector('[data-crew-empty]');
+        if (empty) empty.hidden = visible > 0;
+      };
+      crewSearch?.addEventListener('input', filterCrew);
+      crewTeamFilter?.addEventListener('change', filterCrew);
+      document.querySelectorAll('[data-remove-team]').forEach((button) => {
+        button.addEventListener('click', (event) => {
+          if (!confirm(`Remove team?\n\nRemove ${button.dataset.personName} from ${button.dataset.teamName}?`)) event.preventDefault();
+        });
+      });
+
+      const teamKey = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+      const activeTeams = new Map(
+        [...document.querySelectorAll('#active-team-options option')].map((option) => [teamKey(option.value), { id: option.dataset.teamId, label: option.value }])
       );
-      document.querySelectorAll('[data-team-member-form]').forEach((form) => {
-        const input = form.querySelector('[data-team-person-input]');
-        const personId = form.querySelector('[data-team-person-id]');
-        const resolvePerson = () => {
-          personId.value = teamPeople.get(input.value.trim().toLocaleLowerCase()) || '';
-          if (personId.value) input.setCustomValidity('');
+      const createDialog = document.querySelector('[data-create-team-dialog]');
+      let pendingTeamForm = null;
+      const submitNewTeam = (form) => {
+        form.dataset.createConfirmed = '1';
+        form.querySelector('[data-team-action]').value = 'create';
+        form.requestSubmit();
+      };
+      createDialog?.addEventListener('close', () => {
+        if (createDialog.returnValue === 'create' && pendingTeamForm) submitNewTeam(pendingTeamForm);
+        pendingTeamForm = null;
+      });
+      document.querySelectorAll('[data-person-team-form]').forEach((form) => {
+        const input = form.querySelector('[data-team-input]');
+        const teamId = form.querySelector('[data-team-id]');
+        const teamName = form.querySelector('[data-team-name]');
+        const action = form.querySelector('[data-team-action]');
+        const button = form.querySelector('[data-team-submit]');
+        const resolveTeam = () => {
+          const existing = activeTeams.get(teamKey(input.value));
+          teamId.value = existing?.id || '';
+          teamName.value = input.value.trim().replace(/\s+/g, ' ');
+          action.value = existing ? 'add' : 'create';
+          button.textContent = existing ? 'Add team' : (teamName.value ? 'Create team' : 'Add team');
+          return existing;
         };
-        input.addEventListener('input', resolvePerson);
-        input.addEventListener('change', resolvePerson);
-        form.addEventListener('submit', (event) => { resolvePerson(); if (!personId.value) { event.preventDefault(); input.setCustomValidity('Choose a crew member from the list.'); input.reportValidity(); } });
+        input.addEventListener('input', resolveTeam);
+        input.addEventListener('change', resolveTeam);
+        form.addEventListener('submit', (event) => {
+          const existing = resolveTeam();
+          if (existing || form.dataset.createConfirmed === '1') return;
+          event.preventDefault();
+          if (!teamName.value) { input.reportValidity(); return; }
+          if (!createDialog?.showModal) {
+            if (confirm(`Create new team?\n\n"${teamName.value}" does not currently exist.\nThis will create the team and assign ${form.dataset.personName} to it.`)) submitNewTeam(form);
+            return;
+          }
+          pendingTeamForm = form;
+          createDialog.querySelector('[data-create-team-name]').textContent = `"${teamName.value}"`;
+          createDialog.querySelector('[data-create-team-person]').textContent = form.dataset.personName;
+          createDialog.showModal();
+        });
       });
     })();
   </script>

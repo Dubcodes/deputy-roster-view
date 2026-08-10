@@ -111,6 +111,11 @@ def main() -> None:
             )
             """
         )
+        for location_id, label in enumerate(("684", "685", "Back", "CCU 1 FCR", "Admin", "Abandoned"), start=9000):
+            conn.execute(
+                "INSERT INTO deputy_schedule_locations(location_id,name,updated_at) VALUES (?,?,?)",
+                (location_id, label, "2026-08-10T09:00:00+12:00"),
+            )
     planning_builder = client.get(f"/admin/roster-days/new?planning_id={planning_id}")
     for expected in ('value="2026-08-22"', '>Te Rapa</option>', 'value="12:25"', 'value="16:38"', 'value="8"'):
         if expected not in planning_builder.text:
@@ -208,8 +213,15 @@ def main() -> None:
     if "Use another Deputy location" not in race_editor.text:
         raise AssertionError("Exceptional Deputy locations are not available behind the advanced control.")
     normal_selector = race_editor.text.split('name="track_label"', 1)[1].split("</select>", 1)[0]
-    if any(label in normal_selector for label in (">Leave<", ">PubHol<", ">Travel<")):
+    if any(label in normal_selector for label in (">Leave<", ">PubHol<", ">Travel<", ">684<", ">685<", ">Back<", ">CCU 1 FCR<", ">Admin<", ">Abandoned<")):
         raise AssertionError("Operational Deputy labels leaked into the normal race venue selector.")
+    advanced_selector = race_editor.text.split('data-advanced-track', 1)[1].split("</select>", 1)[0]
+    if not all(f">{label}<" in advanced_selector for label in ("684", "685", "Back", "CCU 1 FCR", "Admin", "Abandoned")):
+        raise AssertionError("Exceptional Deputy locations were deleted instead of moving behind the advanced path.")
+    if 'name="assignment_state"' not in race_editor.text or "TBC / not offered" not in race_editor.text:
+        raise AssertionError("Person picker no longer controls the hidden Assigned/Open/TBC state.")
+    if "<span>Assignment</span>" in race_editor.text:
+        raise AssertionError("Redundant Assignment dropdown remained in advanced controls.")
     if "data-assignment-advanced open" in race_editor.text:
         raise AssertionError("Assignment advanced controls should be collapsed by default.")
     assert_redirect(client.post(f"/admin/roster-days/{race_id}/publish", follow_redirects=False), "Roster+version+1+published")

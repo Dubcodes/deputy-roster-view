@@ -203,7 +203,7 @@ from .public_holidays import holiday_for_date
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.10.1"
+APP_BUILD = "2026.08.10.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -2605,21 +2605,12 @@ def default_roster_race_type(track_label: object) -> str:
     return "thoroughbred"
 
 
-def regular_builder_race_location(label: object) -> bool:
-    text = str(label or "").strip()
-    key = schedule_label_key(text)
-    if not key:
-        return False
-    blocked_fragments = {
-        "leave", "office", "clowplace", "pubhol", "publicholiday", "vehicles",
-        "trackinstall", "prodshoot", "productionshoot", "travel", "outofregion",
-        "northernopscontractors", "accommodation", "training",
-    }
-    if key in blocked_fragments or any(fragment in key for fragment in blocked_fragments):
-        return False
-    if re.match(r"^\([a-z]\)\s*", text.lower()):
-        return False
-    return True
+def regular_builder_race_location(
+    label: object,
+    rules: dict[str, dict[str, object]] | None = None,
+) -> bool:
+    classification = classify_track_map_location(label, rules)
+    return str(classification.get("classification") or "") in {"venue", "alias"}
 
 
 def parse_hotel_assignments(value: object) -> list[dict[str, object]]:
@@ -5409,9 +5400,18 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
         if canonical_travel_base_label(item.get("base_label")) != "Office / Clow Place":
             continue
         travel_minutes.setdefault(str(item.get("track_key") or ""), int(item.get("travel_minutes") or 0))
-    regular_locations = [label for label in locations if regular_builder_race_location(label)]
-    if roster_day.get("track_label") and roster_day["track_label"] not in regular_locations:
-        regular_locations.append(str(roster_day["track_label"]))
+    location_rules = track_map_location_rule_index()
+    regular_locations: list[str] = []
+    seen_regular_keys: set[str] = set()
+    for label in locations:
+        classification = classify_track_map_location(label, location_rules)
+        if not regular_builder_race_location(label, location_rules):
+            continue
+        canonical_label = str(classification.get("canonical_label") or label).strip()
+        canonical_key = calendar_location_key(canonical_label)
+        if canonical_key and canonical_key not in seen_regular_keys:
+            seen_regular_keys.add(canonical_key)
+            regular_locations.append(canonical_label)
     track_options = [
         {
             "label": label,
@@ -5423,8 +5423,14 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
     ]
     advanced_track_options = [
         label for label in sorted(set(locations), key=str.lower)
-        if label not in regular_locations
+        if not regular_builder_race_location(label, location_rules)
     ]
+    exceptional_track_label = ""
+    if roster_day.get("track_label") and not regular_builder_race_location(roster_day["track_label"], location_rules):
+        exceptional_track_label = str(roster_day["track_label"])
+        if exceptional_track_label not in advanced_track_options:
+            advanced_track_options.append(exceptional_track_label)
+            advanced_track_options.sort(key=str.lower)
     current_snapshot = roster_day_snapshot(roster_day, assignments)
     published_snapshot = parse_roster_snapshot(roster_day.get("published_snapshot"))
     changes, changed_fields, changed_positions = roster_day_change_review(current_snapshot, published_snapshot)
@@ -5518,6 +5524,7 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
             "open_position_rows": open_position_rows,
             "track_options": track_options,
             "advanced_track_options": advanced_track_options,
+            "exceptional_track_label": exceptional_track_label,
             "place_options": list_known_place_labels(),
             "race_types": ROSTER_RACE_TYPES,
             "workday_types": WORKDAY_TYPES,
@@ -5588,6 +5595,28 @@ def admin_page_context(
         override_rows.append(item)
     all_crew_people = list_crew_people(include_merged=True)
     canonical_people = [item for item in all_crew_people if item.get("merged_into_person_id") is None]
+    crew_picker_people = crew_picker_records()
+    picker_people_by_id = {int(item["id"]): item for item in crew_picker_people}
+    crew_teams = list_crew_teams(include_inactive=True)
+    for person in canonical_people:
+        picker_person = picker_people_by_id.get(int(person["id"]), {})
+        person["team_ids"] = list(picker_person.get("team_ids") or [])
+        person["team_names"] = list(picker_person.get("team_names") or [])
+        person["search_text"] = str(picker_person.get("search_text") or "")
+        person["teams"] = []
+        for team in crew_teams:
+            member = next(
+                (member for member in team.get("members", []) if int(member["id"]) == int(person["id"])),
+                None,
+            )
+            if member is not None:
+                person["teams"].append({
+                    "id": int(team["id"]),
+                    "display_name": str(team.get("display_name") or ""),
+                    "active": int(team.get("active") or 0),
+                    "is_primary": bool(member.get("is_primary")),
+                })
+    northern_team = next((team for team in crew_teams if team.get("stable_key") == "northern-team"), None)
     return {
         "request": request,
         "notice": notice,
@@ -5628,8 +5657,11 @@ def admin_page_context(
         "travel_routes": [dict(row) for row in list_travel_routes()],
         "known_places": list_known_place_labels(),
         "crew_people": canonical_people,
-        "crew_picker_people": crew_picker_records(),
-        "crew_teams": list_crew_teams(include_inactive=True),
+        "crew_picker_people": crew_picker_people,
+        "crew_teams": crew_teams,
+        "active_crew_teams": [team for team in crew_teams if int(team.get("active") or 0)],
+        "active_crew_count": sum(1 for person in canonical_people if int(person.get("is_active") or 0)),
+        "northern_team_count": int((northern_team or {}).get("member_count") or 0),
         "crew_vehicles": list_crew_vehicles(include_inactive=True),
         "location_team_mappings": location_team_mappings,
         "linked_crew_people": [item for item in canonical_people if int(item.get("is_active") or 0) and item.get("app_user_id")],
@@ -6790,6 +6822,57 @@ async def admin_save_team_member(request: Request, team_id: int) -> RedirectResp
         is_primary=str(form.get("is_primary") or "") == "1",
         actor_user_id=int(user["id"]),
     )
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/crew/{person_id}/teams")
+async def admin_save_person_team(request: Request, person_id: int) -> RedirectResponse:
+    user = require_admin_user(request)
+    form = await request.form()
+    action = str(form.get("action") or "add").strip()
+    team_id_text = str(form.get("team_id") or "").strip()
+    team_id = int(team_id_text) if team_id_text.isdigit() else None
+    if action == "create":
+        team_name = re.sub(r"\s+", " ", str(form.get("team_name") or "").strip())[:100]
+        name_key = team_name.casefold()
+        existing = next(
+            (
+                team for team in list_crew_teams(include_inactive=True)
+                if re.sub(r"\s+", " ", str(team.get("display_name") or "").strip()).casefold() == name_key
+            ),
+            None,
+        )
+        if existing is not None:
+            team_id = int(existing["id"])
+            if not int(existing.get("active") or 0):
+                save_crew_team(
+                    team_id=team_id,
+                    display_name=str(existing.get("display_name") or team_name),
+                    active=True,
+                    sort_order=int(existing.get("sort_order") or 1000),
+                    actor_user_id=int(user["id"]),
+                )
+        else:
+            ok, message, team_id = save_crew_team(
+                team_id=None,
+                display_name=team_name,
+                active=True,
+                sort_order=1000,
+                actor_user_id=int(user["id"]),
+            )
+            if not ok or team_id is None:
+                return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+    if team_id is None:
+        return RedirectResponse(url=notice_url("/admin", "Choose a team."), status_code=303)
+    ok, message = set_crew_person_team(
+        person_id=person_id,
+        team_id=team_id,
+        active=action != "remove",
+        is_primary=str(form.get("is_primary") or "") == "1",
+        actor_user_id=int(user["id"]),
+    )
+    if ok and action == "create":
+        message = "Team created and assigned."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 

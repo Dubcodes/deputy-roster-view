@@ -3820,6 +3820,13 @@ textarea {
   grid-column: span 2;
 }
 
+.workday-open-eligibility {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .picker-field,
 .search-picker {
   min-width: 0;
@@ -5423,6 +5430,104 @@ th {
   padding: 0 11px 11px;
 }
 
+.crew-management-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 260px);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.crew-management-list {
+  display: grid;
+  gap: 8px;
+}
+
+.crew-management-row {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.crew-management-main {
+  display: grid;
+  grid-template-columns: minmax(180px, .8fr) minmax(280px, 1.2fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.crew-management-main > span small,
+.crew-identity-details > summary,
+.crew-retired-identities > summary,
+.crew-team-labels > summary {
+  color: var(--muted);
+}
+
+.crew-management-main > span small {
+  display: block;
+  margin-top: 2px;
+  font-size: .75rem;
+}
+
+.crew-team-editor,
+.crew-team-chips,
+.crew-team-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.crew-team-editor {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.crew-team-chips {
+  flex-wrap: wrap;
+}
+
+.team-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.team-chip small {
+  color: var(--muted);
+  font-size: .66rem;
+}
+
+.team-chip span {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.crew-team-add input[type="search"] {
+  width: min(210px, 42vw);
+}
+
+.crew-identity-details {
+  margin-top: 6px;
+}
+
+.crew-identity-details > summary,
+.crew-retired-identities > summary,
+.crew-team-labels > summary {
+  cursor: pointer;
+  font-size: .78rem;
+}
+
+.crew-retired-identities,
+.crew-team-labels {
+  margin-top: 12px;
+}
+
 .track-map-diagnostics > div {
   display: grid;
   grid-template-columns: minmax(130px, 1fr) auto auto;
@@ -5440,11 +5545,31 @@ th {
   .travel-route-row,
   .identity-diagnostic-list article,
   .crew-directory-row > summary,
+  .crew-management-main,
   .track-map-diagnostics > div,
   .track-map-admin-row,
   .track-map-classification-row,
   .track-map-decision-list > div {
     grid-template-columns: 1fr;
+  }
+
+  .crew-management-filters,
+  .workday-open-eligibility {
+    grid-template-columns: 1fr;
+  }
+
+  .crew-team-editor {
+    justify-content: flex-start;
+  }
+
+  .crew-team-add {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .crew-team-add input[type="search"] {
+    width: 100%;
+    flex: 1 1 180px;
   }
 
   .track-map-admin-actions,

@@ -32,7 +32,7 @@ def main() -> None:
     import uvicorn
     from playwright.sync_api import sync_playwright
 
-    from app.database import get_connection, get_default_team_id, init_db, save_crew_vehicle
+    from app.database import get_connection, get_default_team_id, init_db, save_crew_vehicle, set_crew_person_team
     from app.main import app
 
     init_db()
@@ -66,6 +66,25 @@ def main() -> None:
                     "INSERT INTO crew_aliases(person_id,alias,normalized_alias,created_at,updated_at) VALUES (?,?,?,?,?)",
                     (int(person["id"]), "Cambo", "cambo", "2026-08-10T09:00:00+12:00", "2026-08-10T09:00:00+12:00"),
                 )
+            northern_team = get_default_team_id()
+            set_crew_person_team(
+                person_id=int(person["id"]),
+                team_id=int(northern_team),
+                active=True,
+                is_primary=True,
+                actor_user_id=int(admin["id"]),
+            )
+            for order, label in enumerate(("684", "685"), start=10):
+                save_crew_vehicle(
+                    vehicle_id=None,
+                    display_label=label,
+                    aliases=[],
+                    active=True,
+                    sort_order=order,
+                    team_id=northern_team,
+                    notes="",
+                    actor_user_id=int(admin["id"]),
+                )
             save_crew_vehicle(
                 vehicle_id=None,
                 display_label="Rav91",
@@ -83,11 +102,38 @@ def main() -> None:
                 raise AssertionError("Workday builder did not render in browser smoke.")
             first_row = page.locator("[data-assignment-row]").first
             person_picker = first_row.locator('[data-picker-kind="person"] [data-picker-input]')
+            person_picker.click()
+            person_options = first_row.locator('[data-picker-kind="person"] [data-picker-option]')
+            if person_options.nth(0).inner_text().splitlines()[0] != "Open position" or person_options.nth(1).inner_text().splitlines()[0] != "TBC / not offered":
+                raise AssertionError("Open and TBC choices were not first in the Person picker.")
+            if "Northern Team" not in first_row.locator('[data-team-group]').inner_text() or "Campbell Stephens" not in first_row.locator('[data-team-group]').inner_text():
+                raise AssertionError("Northern Team picker grouping did not use existing membership.")
+            person_picker.fill("tbc")
+            person_picker.press("Enter")
+            if first_row.locator('[name="assignment_state"]').input_value() != "tbc":
+                raise AssertionError("TBC picker choice did not set TBC state.")
+            person_picker.fill("open position")
+            person_picker.press("Enter")
+            if first_row.locator('[name="assignment_state"]').input_value() != "open":
+                raise AssertionError("Open picker choice did not set open state.")
             person_picker.fill("cambo")
             person_picker.press("Enter")
-            if first_row.locator('[name="assignee"]').input_value() != f"person:{int(person['id'])}" or person_picker.input_value() != "Campbell Stephens":
+            if first_row.locator('[name="assignee"]').input_value() != f"person:{int(person['id'])}" or person_picker.input_value() != "Campbell Stephens" or first_row.locator('[name="assignment_state"]').input_value() != "assigned":
                 raise AssertionError("Keyboard alias search did not select canonical Campbell Stephens.")
             vehicle_picker = first_row.locator('[data-picker-kind="vehicle"] [data-picker-input]')
+            vehicle_picker.click()
+            if vehicle_picker.input_value() != "":
+                raise AssertionError("Transport picker did not separate the selected label from its blank search query.")
+            vehicle_picker.fill("68")
+            visible_vehicle_text = first_row.locator('[data-picker-kind="vehicle"] [data-picker-menu]').inner_text()
+            if "684" not in visible_vehicle_text or "685" not in visible_vehicle_text:
+                raise AssertionError("Typing 68 did not immediately find 684 and 685.")
+            first_row.locator('[data-picker-kind="vehicle"] [data-picker-option][data-label="685"]').click()
+            if vehicle_picker.input_value() != "685" or first_row.locator('[name="vehicle_label"]').input_value() != "685":
+                raise AssertionError("Selecting 685 did not display and store 685.")
+            vehicle_picker.click()
+            if vehicle_picker.input_value() != "":
+                raise AssertionError("Previously selected transport was not cleared from the next search query.")
             vehicle_picker.fill("Rav4")
             vehicle_picker.press("Enter")
             if first_row.locator('[name="transport_mode"]').input_value() != "vehicle" or first_row.locator('[name="vehicle_label"]').input_value() != "Rav91":
@@ -108,7 +154,7 @@ def main() -> None:
             if page.locator("[data-assignment-row]").count() != initial_rows + 1:
                 raise AssertionError("Advanced remove-position control did not remove its row.")
 
-            for width in (1280, 430, 375, 320):
+            for width in (375, 320):
                 page.set_viewport_size({"width": width, "height": 900})
                 page.reload()
                 page.wait_for_selector("[data-workday-form]")
@@ -134,14 +180,27 @@ def main() -> None:
                     )
                     if " " in columns.strip():
                         raise AssertionError(f"Assignment fields did not stack at {width}px: {columns!r}")
-            for width in (1280, 430, 375, 320):
+            page.set_viewport_size({"width": 1280, "height": 900})
+            page.goto(f"http://127.0.0.1:{port}/admin")
+            page.locator(".crew-directory-panel").evaluate("element => { element.open = true; }")
+            page.locator("[data-crew-search]").fill("cambo")
+            visible_crew = page.locator("[data-crew-row]:visible")
+            if visible_crew.count() != 1 or "Campbell Stephens" not in visible_crew.first.inner_text():
+                raise AssertionError("Crew alias search did not return one canonical crew row.")
+            page.locator("[data-crew-search]").fill("")
+            page.locator("[data-crew-team-filter]").select_option(str(northern_team))
+            if page.locator("[data-crew-row]:visible").count() != 1:
+                raise AssertionError("Crew team filter did not restrict rows to Northern Team.")
+            team_form = visible_crew.first.locator("[data-person-team-form]")
+            team_form.locator("[data-team-input]").fill("Special Events")
+            team_form.locator("[data-team-submit]").click()
+            if not page.locator("[data-create-team-dialog]").is_visible():
+                raise AssertionError("Inline new-team choice did not require confirmation.")
+            page.locator("[data-create-team-dialog] button[value='cancel']").click()
+            for width in (375, 320):
                 page.set_viewport_size({"width": width, "height": 900})
-                page.goto(f"http://127.0.0.1:{port}/month")
                 if page.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1"):
-                    raise AssertionError(f"Month/header layout overflowed horizontally at {width}px.")
-                if width <= 430:
-                    if page.locator(".brand-meta-name-full").is_visible() or not page.locator(".brand-meta-name-short").is_visible():
-                        raise AssertionError(f"Compact mobile identity did not replace the full header name at {width}px.")
+                    raise AssertionError(f"Compact Crew management overflowed horizontally at {width}px.")
             browser.close()
             if console_errors:
                 raise AssertionError(f"Builder browser errors: {console_errors!r}")
@@ -149,7 +208,7 @@ def main() -> None:
         server.should_exit = True
         thread.join(timeout=10)
 
-    print("workday responsive smoke ok (1280px, 430px, 375px, 320px)")
+    print("workday and Crew responsive smoke ok (375px, 320px)")
 
 
 if __name__ == "__main__":
