@@ -136,3 +136,9 @@ Show a small note in the app:
 App accounts and crew identities are deliberately separate. Authenticated personal Deputy captures establish the account's employee ID and canonical crew-person link. Unambiguous account-only duplicates are retired with an audited redirect; ambiguous evidence remains an Admin task. Manual-workday access is materialized from published canonical assignments and rebuilt after identity changes, so no republish is needed when an account is repaired or linked later.
 
 Per-user transport preferences are also separate from shared source data. A user can flag only their own stable event identity as self-travel; crew views receive the display overlay for planning, while Deputy rows and published manual-workday snapshots remain unchanged.
+
+## Operational Teams And Local Applications
+
+Teams are reusable and many-to-many. Northern Team is the first/default team for this installation, but no membership is inferred from names, roles, or location alone. Optional location mappings may classify future planning drafts and Deputy open-shift context without hiding unclassified source shifts.
+
+Published manual open positions may accept applications from the authenticated user's linked canonical person. Team eligibility and work conflicts are enforced server-side; admin acceptance rebuilds only Re-Deputy manual visibility and history. Deputy remains read-only. The resulting audit events are groundwork for future notifications, not notification delivery itself.

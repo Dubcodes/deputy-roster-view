@@ -191,3 +191,11 @@ An unambiguous employee-ID match may link the account directly or merge an accou
 ## Workday Review Flow
 
 The manual workday builder keeps its existing draft/version/publication boundary. Its compact editor supports searchable reusable roles, one-day custom roles, roleless attendees, open positions, and exceptional Deputy locations behind advanced controls. Saving redirects to a read-only review view; only an explicit publish action changes what crew can see. A saved Love Racing planning row may prefill a new private race-day draft, but remains planning evidence and never publishes automatically.
+
+## Teams, Pickers, Vehicles, And Applications
+
+`crew_teams` and `crew_person_teams` model reusable many-to-many operational teams. Northern Team is seeded as the default team, while membership remains empty until an admin classifies people. `location_team_mappings` may supply a team when a Love Racing planning row starts a draft. Existing workdays remain unclassified unless edited.
+
+`crew_identity_search_terms` is rebuilt from canonical names, Deputy observations/history, aliases, linked account display names/email, and employee IDs. The Admin-only builder receives normalized safe search metadata, renders one canonical result per `crew_people.id`, and saves that ID. `crew_vehicles` provides stable vehicle IDs, aliases, ordering, optional team affinity, and discovered/admin provenance.
+
+`workday_open_position_applications` stores local applications against stable assignment keys. Eligibility and overlap are checked server-side from the authenticated account's canonical person. Acceptance updates only the manual assignment, republishes the Re-Deputy snapshot/visibility, and writes local audit events. No application path calls Deputy capture or write APIs.

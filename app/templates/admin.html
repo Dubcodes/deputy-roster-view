@@ -576,6 +576,10 @@
               {% endfor %}
             </div>
             <div class="location-cell location-actions-cell" data-label="Actions">
+              <form class="location-active-form" action="/admin/location-team" method="post">
+                <input type="hidden" name="location_key" value="{{ location.location_key }}"><input type="hidden" name="location_label" value="{{ location.display_name }}">
+                <label><span class="visually-hidden">Primary team</span><select name="team_id" onchange="this.form.submit()"><option value="">No team</option>{% for team in crew_teams if team.active %}<option value="{{ team.id }}"{% if location.primary_team_id == team.id %} selected{% endif %}>{{ team.display_name }}</option>{% endfor %}</select></label>
+              </form>
               {% if location.planning_enabled is not none %}
                 <form class="location-active-form" action="/admin/planning-locations" method="post">
                   <input type="hidden" name="location_key" value="{{ location.location_key }}">
@@ -638,6 +642,29 @@
         {% endfor %}
       </div>
     {% endif %}
+    </div>
+  </details>
+
+  <details class="table-panel team-management-panel">
+    <summary class="management-panel-summary"><span><strong>Crew teams</strong><small>{{ crew_teams|length }} configured</small></span><span>Workday priority and open-position eligibility</span></summary>
+    <div class="management-panel-body">
+      <form class="role-catalogue-add" action="/admin/teams/save" method="post"><input name="display_name" placeholder="Team name" required><input type="number" name="sort_order" value="1000" aria-label="Order"><input type="hidden" name="active" value="1"><button class="button button-secondary" type="submit">Add team</button></form>
+      <div class="crew-directory-list">
+        {% for team in crew_teams %}<details><summary>{{ team.display_name }} <span>{{ team.member_count }} members</span></summary>
+          <form class="role-catalogue-row" action="/admin/teams/save" method="post"><input type="hidden" name="team_id" value="{{ team.id }}"><input name="display_name" value="{{ team.display_name }}" aria-label="Team name"><input type="number" name="sort_order" value="{{ team.sort_order }}" aria-label="Order"><label class="compact-check"><input type="checkbox" name="active" value="1"{% if team.active %} checked{% endif %}> Active</label><button class="button button-secondary button-compact" type="submit">Save</button></form>
+          <form class="settings-action-row" action="/admin/teams/{{ team.id }}/members" method="post" data-team-member-form><label class="form-row"><span>Add crew</span><input type="search" list="crew-team-person-options" placeholder="Search/add crew" autocomplete="off" data-team-person-input required><input type="hidden" name="crew_person_id" data-team-person-id></label><label class="compact-check"><input type="checkbox" name="is_primary" value="1"> Primary team</label><button class="button button-secondary button-compact" name="action" value="add">Add</button></form>
+          <div class="builder-review-crew">{% for member in team.members %}<div class="builder-review-row"><span><strong>{{ member.canonical_display_name }}</strong>{% if member.is_primary %} <small>Primary</small>{% endif %}</span><form action="/admin/teams/{{ team.id }}/members" method="post"><input type="hidden" name="crew_person_id" value="{{ member.id }}"><button class="button button-secondary button-compact" name="action" value="remove">Remove</button></form></div>{% else %}<p class="muted">No crew assigned yet.</p>{% endfor %}</div>
+        </details>{% endfor %}
+      </div>
+      <datalist id="crew-team-person-options">{% for person in crew_picker_people %}<option value="{{ person.canonical_display_name }}" data-person-id="{{ person.id }}">{% endfor %}</datalist>
+    </div>
+  </details>
+
+  <details class="table-panel vehicle-management-panel">
+    <summary class="management-panel-summary"><span><strong>Crew vehicles</strong><small>{{ crew_vehicles|length }} known vehicles</small></span><span>Search aliases and display order</span></summary>
+    <div class="management-panel-body">
+      <form class="role-catalogue-add" action="/admin/vehicles/save" method="post"><input name="display_label" placeholder="Vehicle label" required><input name="aliases" placeholder="Aliases, comma separated"><input type="number" name="sort_order" value="1000" aria-label="Order"><input type="hidden" name="active" value="1"><button class="button button-secondary" type="submit">Add vehicle</button></form>
+      <div class="role-catalogue-list">{% for vehicle in crew_vehicles %}<form class="role-catalogue-row" action="/admin/vehicles/save" method="post"><input type="hidden" name="vehicle_id" value="{{ vehicle.id }}"><input name="display_label" value="{{ vehicle.display_label }}" aria-label="Vehicle label"><input name="aliases" value="{{ vehicle.aliases|replace('[','')|replace(']','')|replace('"','') }}" aria-label="Aliases"><input type="number" name="sort_order" value="{{ vehicle.sort_order }}" aria-label="Order"><select name="team_id" aria-label="Team"><option value="">Any team</option>{% for team in crew_teams if team.active %}<option value="{{ team.id }}"{% if vehicle.team_id == team.id %} selected{% endif %}>{{ team.display_name }}</option>{% endfor %}</select><label class="compact-check"><input type="checkbox" name="active" value="1"{% if vehicle.active %} checked{% endif %}> Active</label><button class="button button-secondary button-compact" type="submit">Save</button></form>{% endfor %}</div>
     </div>
   </details>
 
@@ -1013,6 +1040,21 @@
             setStatus(button.dataset.copyTarget, copied ? "Copied." : "Selected. Use copy from your browser.");
           }
         });
+      });
+
+      const teamPeople = new Map(
+        [...document.querySelectorAll('#crew-team-person-options option')].map((option) => [option.value.toLocaleLowerCase(), option.dataset.personId])
+      );
+      document.querySelectorAll('[data-team-member-form]').forEach((form) => {
+        const input = form.querySelector('[data-team-person-input]');
+        const personId = form.querySelector('[data-team-person-id]');
+        const resolvePerson = () => {
+          personId.value = teamPeople.get(input.value.trim().toLocaleLowerCase()) || '';
+          if (personId.value) input.setCustomValidity('');
+        };
+        input.addEventListener('input', resolvePerson);
+        input.addEventListener('change', resolvePerson);
+        form.addEventListener('submit', (event) => { resolvePerson(); if (!personId.value) { event.preventDefault(); input.setCustomValidity('Choose a crew member from the list.'); input.reportValidity(); } });
       });
     })();
   </script>

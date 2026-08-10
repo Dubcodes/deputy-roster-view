@@ -80,7 +80,7 @@
                 </span>
                 <span class="list-shift-meta">
                   <span>{{ open_shift.time_range or "Time TBC" }}</span>
-                  <span>Open shift</span>
+                  <span>{{ open_shift.source_label or 'Deputy open shift' }}</span>
                 </span>
               </a>
             {% endfor %}

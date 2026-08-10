@@ -4,26 +4,49 @@
 
 {% macro assignment_row(assignment, index) %}
   <article class="workday-assignment" data-assignment-row>
+    <input type="hidden" name="assignment_key" value="{{ assignment.assignment_key or '' }}">
     <input type="hidden" name="role_key" value="{{ assignment.role_key or '' }}">
+    <input type="hidden" name="allow_multiple_roles" value="0" data-allow-multiple>
     <div class="workday-assignment-primary">
       <label class="form-row workday-role-field">
         <span>Position</span>
         <input type="search" name="role_label" list="workday-role-options" value="{{ assignment.role_label or assignment.position_label or '' }}" placeholder="Search or enter a position" data-role-input>
       </label>
-      <label class="form-row">
+      <label class="form-row picker-field">
         <span>Person</span>
-        <select name="assignee" data-person-select>
-          <option value="">Choose a person</option>
-          {% for person in crew_options %}
-            <option value="{{ person.value }}"{% if assignment.person_id == person.person_id or (not assignment.person_id and assignment.user_id == person.user_id) %} selected{% endif %}>{{ person.label }} · {{ person.meta }}</option>
-          {% endfor %}
-        </select>
+        <input type="hidden" name="assignee" value="{% if assignment.person_id %}person:{{ assignment.person_id }}{% endif %}" data-picker-value>
+        <div class="search-picker" data-search-picker data-picker-kind="person">
+          <input type="search" value="{% if assignment.person_id %}{{ assignment.person_display_name or assignment.assignee_label }}{% elif assignment.assignment_state == 'open' %}Open position{% elif assignment.assignment_state == 'tbc' %}TBC{% endif %}" placeholder="Search crew..." autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" data-picker-input>
+          <div class="search-picker-menu" role="listbox" hidden data-picker-menu>
+            <button type="button" role="option" class="search-picker-option is-open-position" data-picker-option data-value="" data-label="Open position" data-search="open position" data-state="open"><strong>Open position</strong><small>Available for eligible crew to apply</small></button>
+            <div class="search-picker-group" data-team-group><span data-team-group-label>{{ selected_team_label or 'Selected team' }}</span>
+              {% for person in crew_options if person.selected_team_member %}<button type="button" role="option" class="search-picker-option" data-picker-option data-value="person:{{ person.id }}" data-person-id="{{ person.id }}" data-team-ids="{{ person.team_ids|join(',') }}" data-label="{{ person.canonical_display_name }}" data-search="{{ person.search_text }}"><strong>{{ person.canonical_display_name }}</strong><small>{{ person.team_names|join(', ') }}</small></button>{% endfor %}
+            </div>
+            <div class="search-picker-group" data-other-group><span>Other crew</span>
+              {% for person in crew_options if not person.selected_team_member %}<button type="button" role="option" class="search-picker-option" data-picker-option data-value="person:{{ person.id }}" data-person-id="{{ person.id }}" data-team-ids="{{ person.team_ids|join(',') }}" data-label="{{ person.canonical_display_name }}" data-search="{{ person.search_text }}"><strong>{{ person.canonical_display_name }}</strong>{% if person.team_names %}<small>{{ person.team_names|join(', ') }}</small>{% endif %}</button>{% endfor %}
+            </div>
+            <p class="search-picker-empty" hidden data-picker-empty>No matching crew</p>
+          </div>
+        </div>
       </label>
-      <label class="form-row">
+      <label class="form-row picker-field">
         <span>Transport</span>
-        <select name="transport_mode" data-transport-mode>
-          {% for value, label in transport_modes %}<option value="{{ value }}"{% if (assignment.transport_mode or 'unassigned') == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
-        </select>
+        <input type="hidden" name="transport_mode" value="{{ assignment.transport_mode or 'unassigned' }}" data-transport-mode>
+        <input type="hidden" name="vehicle_id" value="{{ assignment.vehicle_id or '' }}" data-vehicle-id>
+        <input type="hidden" name="vehicle_label" value="{{ assignment.vehicle_label or '' }}" data-vehicle-label>
+        <div class="search-picker" data-search-picker data-picker-kind="vehicle">
+          <input type="search" value="{% if assignment.transport_mode == 'vehicle' %}{{ assignment.vehicle_label or 'Crew vehicle TBC' }}{% elif assignment.transport_mode == 'self_travel' %}Making own way{% elif assignment.transport_mode == 'not_required' %}No transport required{% elif assignment.transport_mode == 'custom' %}{{ assignment.custom_transport_text or 'Custom transport' }}{% else %}No transport assigned yet{% endif %}" placeholder="Search vehicles..." autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" data-picker-input>
+          <div class="search-picker-menu" role="listbox" hidden data-picker-menu>
+            <button type="button" role="option" class="search-picker-option" data-picker-option data-value="unassigned" data-label="No transport assigned yet" data-search="unassigned tbc no transport assigned"><strong>No transport assigned yet</strong></button>
+            <button type="button" role="option" class="search-picker-option" data-picker-option data-value="self_travel" data-label="Making own way" data-search="making own way self travel"><strong>Making own way</strong></button>
+            <button type="button" role="option" class="search-picker-option" data-picker-option data-value="not_required" data-label="No transport required" data-search="none no transport required"><strong>No transport required</strong></button>
+            <div class="search-picker-group"><span>Crew vehicles</span>
+              {% for vehicle in vehicles %}<button type="button" role="option" class="search-picker-option" data-picker-option data-value="vehicle:{{ vehicle.id }}" data-vehicle-id="{{ vehicle.id }}" data-label="{{ vehicle.display_label }}" data-search="{{ vehicle.display_label }} {{ vehicle.aliases|replace('[',' ')|replace(']',' ')|replace('"',' ') }}"><strong>{{ vehicle.display_label }}</strong>{% if vehicle.team_name %}<small>{{ vehicle.team_name }}</small>{% endif %}</button>{% endfor %}
+            </div>
+            <button type="button" role="option" class="search-picker-option" data-picker-option data-value="custom" data-label="Custom transport" data-search="custom taxi hire van other"><strong>Custom transport</strong></button>
+            <p class="search-picker-empty" hidden data-picker-empty>No matching transport</p>
+          </div>
+        </div>
       </label>
       <button class="icon-button workday-more-button" type="button" data-toggle-advanced aria-label="More options" title="More options">⋯</button>
     </div>
@@ -33,17 +56,14 @@
         <label class="form-row">
           <span>Assignment</span>
           <select name="assignment_state" data-assignment-state>
-            <option value="assigned"{% if assignment.assignment_state != 'open' %} selected{% endif %}>Assigned person</option>
-            <option value="open"{% if assignment.assignment_state == 'open' %} selected{% endif %}>Open / TBC role</option>
+            <option value="assigned"{% if assignment.assignment_state not in ('open','tbc','unused') %} selected{% endif %}>Assigned</option>
+            <option value="open"{% if assignment.assignment_state == 'open' %} selected{% endif %}>Open position</option>
+            <option value="tbc"{% if assignment.assignment_state == 'tbc' %} selected{% endif %}>TBC (not offered)</option>
+            <option value="unused"{% if assignment.assignment_state == 'unused' %} selected{% endif %}>Unused / remove</option>
           </select>
         </label>
-      <label class="form-row transport-detail" data-vehicle-field>
-        <span>Vehicle</span>
-        <select name="vehicle_label">
-          <option value="">Choose vehicle</option>
-          {% for vehicle in vehicles %}<option value="{{ vehicle }}"{% if assignment.vehicle_label == vehicle %} selected{% endif %}>{{ vehicle }}</option>{% endfor %}
-        </select>
-      </label>
+      <label class="form-row"><span>Eligible crew</span><select name="eligible_all_teams"><option value="0"{% if not assignment.eligible_all_teams %} selected{% endif %}>Selected team</option><option value="1"{% if assignment.eligible_all_teams %} selected{% endif %}>All teams</option></select></label>
+      <label class="form-row"><span>Eligible team</span><select name="eligible_team_id"><option value="">Workday team</option>{% for team in teams if team.active %}<option value="{{ team.id }}"{% if assignment.eligible_team_id == team.id %} selected{% endif %}>{{ team.display_name }}</option>{% endfor %}</select></label>
       <label class="form-row transport-detail" data-custom-transport-field>
         <span>Custom transport</span>
         <input type="text" name="custom_transport_text" value="{{ assignment.custom_transport_text or '' }}" placeholder="Taxi, hire van, other detail">
@@ -108,7 +128,7 @@
     {% if review_mode %}
       <section class="builder-review-sections" aria-label="Draft details">
         <details><summary>Timing <span>{{ roster_day.office_start or 'TBC' }}{% if roster_day.end_time %}–{{ roster_day.end_time }}{% endif %}</span></summary><p>On track {{ roster_day.on_track_time or 'TBC' }} · First race {{ roster_day.first_race_time or 'TBC' }} · Last race {{ roster_day.last_race_time or 'TBC' }}{% if roster_day.race_count %} · {{ roster_day.race_count }} races{% endif %}</p></details>
-        <details><summary>Crew <span>{{ review_summary.assigned_count }} assigned · {{ review_summary.open_count }} open</span></summary><div class="builder-review-crew">{% for item in assignment_rows %}{% if item.role_label or item.assignee_label %}<p><strong>{{ item.role_label or 'Attending' }}</strong><span>{{ 'TBC' if item.assignment_state == 'open' else item.assignee_label }}</span></p>{% endif %}{% endfor %}</div></details>
+        <details><summary>Crew <span>{{ review_summary.assigned_count }} assigned · {{ review_summary.open_count }} open</span></summary><div class="builder-review-crew">{% for item in assignment_rows %}{% if item.role_label or item.assignee_label %}<p><strong>{{ item.role_label or 'Attending' }}</strong><span>{% if item.assignment_state == 'open' %}Open position{% elif item.assignment_state == 'tbc' %}TBC{% else %}{{ item.assignee_label }}{% endif %}</span></p>{% endif %}{% endfor %}</div></details>
         <details><summary>Travel <span>{{ review_summary.vehicles|length }} vehicles · {{ review_summary.self_travel_count }} making own way</span></summary><p>{{ roster_day.start_origin or 'Start origin TBC' }} → {{ roster_day.finish_destination or 'Finish destination TBC' }}</p></details>
         <details><summary>Notes <span>{{ 'Added' if roster_day.notes else 'None' }}</span></summary><p>{{ roster_day.notes or 'No important notes.' }}</p>{% if roster_day.source_reference %}<p class="muted">Source: {{ roster_day.source_reference }}</p>{% endif %}</details>
       </section>
@@ -161,6 +181,7 @@
       <summary>Basic details <span>{{ roster_day.roster_date }} · {{ roster_day.track_label or roster_day.title or 'New work day' }}</span></summary>
       <div class="builder-race-grid">
         <label class="form-row"><span>Day type</span><select name="day_type" data-day-type>{% for value, label in workday_types %}<option value="{{ value }}"{% if roster_day.day_type == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+        <label class="form-row"><span>Team</span><select name="team_id" data-workday-team><option value="">Unclassified</option>{% for team in teams if team.active %}<option value="{{ team.id }}"{% if roster_day.team_id == team.id %} selected{% endif %}>{{ team.display_name }}</option>{% endfor %}</select></label>
         <label class="form-row"><span>Date</span><input type="date" name="roster_date" value="{{ roster_day.roster_date }}" required></label>
         <label class="form-row" data-general-field><span>Title / purpose</span><input type="text" name="title" value="{{ roster_day.title or '' }}" placeholder="Office work, equipment preparation, training"></label>
         <label class="form-row" data-general-field><span>Location</span><input type="text" name="custom_location" value="{{ roster_day.custom_location or 'Office / Clow Place' }}" list="known-place-options"></label>
@@ -217,6 +238,12 @@
       <template data-assignment-template>{{ assignment_row({}, '__INDEX__') }}</template>
     </details>
 
+    <dialog class="builder-duplicate-dialog" data-duplicate-dialog>
+      <h2>Crew member already assigned</h2>
+      <p data-duplicate-message>This person already has another position on this workday.</p>
+      <div class="dialog-actions"><button class="button" type="button" data-duplicate-move>Move to this position</button><button class="button button-secondary" type="button" data-duplicate-keep>Keep both</button><button class="button button-secondary" type="button" data-duplicate-cancel>Cancel</button></div>
+    </dialog>
+
     <details class="table-panel builder-section">
       <summary>Important notes <span>{{ 'Added' if roster_day.notes else 'Optional' }}</span></summary>
       <div class="workday-notes-grid">
@@ -227,6 +254,21 @@
 
     <div class="builder-save-bar"><button class="button" type="submit">Save &amp; review</button><span>Private until published</span></div>
   </form>
+
+  {% if open_position_rows %}
+    <details class="table-panel builder-application-panel" open>
+      <summary>Open-position applications <span>{{ open_position_rows|sum(attribute='application_count') }} pending</span></summary>
+      {% for position in open_position_rows %}
+        <article class="builder-application-position"><header><strong>{{ position.role_label }}</strong><span>{{ position.application_count }} application{% if position.application_count != 1 %}s{% endif %}</span></header>
+          {% for application in position.applications if application.status == 'pending' %}
+            <div class="builder-application-row"><span><strong>{{ application.applicant_name }}</strong>{% if application.conflicts %}<small>{{ application.conflicts[0].message }}</small>{% endif %}</span>
+              <form action="/admin/workday-applications/{{ application.id }}/review" method="post"><button class="button button-compact" name="action" value="accept" type="submit">Accept</button><button class="button button-secondary button-compact" name="action" value="decline" type="submit">Decline</button>{% if application.conflicts %}<label class="compact-check"><input type="checkbox" name="override_conflict" value="1"> Override conflict</label>{% endif %}</form>
+            </div>
+          {% else %}<p class="muted">No pending applications.</p>{% endfor %}
+        </article>
+      {% endfor %}
+    </details>
+  {% endif %}
 
   <details class="table-panel role-catalogue-panel">
     <summary>Reusable roles <span>{{ role_catalogue|length }} roles</span></summary>
@@ -258,30 +300,158 @@
       const list = form.querySelector('[data-assignment-list]');
       const template = form.querySelector('[data-assignment-template]');
       let rowIndex = list.querySelectorAll('[data-assignment-row]').length;
+      const normalise = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      let duplicateChoice = null;
+      const duplicateDialog = form.querySelector('[data-duplicate-dialog]');
+      const closeDuplicate = (choice) => { duplicateChoice?.(choice); duplicateChoice = null; duplicateDialog?.close(); };
+      duplicateDialog?.querySelector('[data-duplicate-move]')?.addEventListener('click', () => closeDuplicate('move'));
+      duplicateDialog?.querySelector('[data-duplicate-keep]')?.addEventListener('click', () => closeDuplicate('keep'));
+      duplicateDialog?.querySelector('[data-duplicate-cancel]')?.addEventListener('click', () => closeDuplicate('cancel'));
+      const askDuplicate = (message) => new Promise((resolve) => {
+        if (!duplicateDialog?.showModal) {
+          resolve(confirm(`${message}\n\nOK: Move to this position\nCancel: Keep both`) ? 'move' : 'keep');
+          return;
+        }
+        duplicateDialog.querySelector('[data-duplicate-message]').textContent = message;
+        duplicateChoice = resolve;
+        duplicateDialog.showModal();
+      });
+
+      const closePicker = (picker) => {
+        const menu = picker.querySelector('[data-picker-menu]');
+        const input = picker.querySelector('[data-picker-input]');
+        if (menu) menu.hidden = true;
+        input?.setAttribute('aria-expanded', 'false');
+      };
+      const openPicker = (picker) => {
+        document.querySelectorAll('[data-search-picker]').forEach((other) => { if (other !== picker) closePicker(other); });
+        const menu = picker.querySelector('[data-picker-menu]');
+        const input = picker.querySelector('[data-picker-input]');
+        if (menu) menu.hidden = false;
+        input?.setAttribute('aria-expanded', 'true');
+        filterPicker(picker, input?.value || '');
+      };
+      const visibleOptions = (picker) => [...picker.querySelectorAll('[data-picker-option]')].filter((option) => !option.hidden);
+      const setActiveOption = (picker, option) => {
+        picker.querySelectorAll('[data-picker-option]').forEach((item) => item.classList.toggle('is-active', item === option));
+        option?.scrollIntoView({ block: 'nearest' });
+      };
+      const filterPicker = (picker, query) => {
+        const needle = normalise(query);
+        let count = 0;
+        picker.querySelectorAll('[data-picker-option]').forEach((option) => {
+          const match = !needle || normalise(option.dataset.search || option.dataset.label).includes(needle);
+          option.hidden = !match;
+          if (match) count += 1;
+        });
+        picker.querySelectorAll('.search-picker-group').forEach((group) => { group.hidden = !group.querySelector('[data-picker-option]:not([hidden])'); });
+        const empty = picker.querySelector('[data-picker-empty]');
+        if (empty) empty.hidden = count > 0;
+        setActiveOption(picker, visibleOptions(picker)[0]);
+      };
+      const clearPersonRow = (row) => {
+        row.querySelector('[name="assignee"]').value = '';
+        const input = row.querySelector('[data-picker-kind="person"] [data-picker-input]');
+        if (input) input.value = '';
+        row.querySelector('[data-allow-multiple]').value = '0';
+      };
+      const choosePickerOption = async (picker, option) => {
+        const row = picker.closest('[data-assignment-row]');
+        const input = picker.querySelector('[data-picker-input]');
+        if (picker.dataset.pickerKind === 'person') {
+          const value = option.dataset.value || '';
+          const state = option.dataset.state || 'assigned';
+          if (value) {
+            const duplicate = [...list.querySelectorAll('[data-assignment-row]')].find((other) => other !== row && other.querySelector('[name="assignee"]')?.value === value && other.querySelector('[name="assignment_state"]')?.value === 'assigned');
+            if (duplicate) {
+              const role = duplicate.querySelector('[name="role_label"]')?.value || 'another position';
+              const choice = await askDuplicate(`${option.dataset.label} is already assigned to ${role}.`);
+              if (choice === 'cancel') { closePicker(picker); return; }
+              if (choice === 'move') clearPersonRow(duplicate);
+              if (choice === 'keep') row.querySelector('[data-allow-multiple]').value = '1';
+            }
+          }
+          row.querySelector('[name="assignee"]').value = value;
+          row.querySelector('[name="assignment_state"]').value = state;
+          if (input) input.value = option.dataset.label || '';
+        } else {
+          const value = option.dataset.value || 'unassigned';
+          const mode = value.startsWith('vehicle:') ? 'vehicle' : value;
+          row.querySelector('[name="transport_mode"]').value = mode;
+          row.querySelector('[name="vehicle_id"]').value = option.dataset.vehicleId || '';
+          row.querySelector('[name="vehicle_label"]').value = mode === 'vehicle' ? (option.dataset.label || '') : '';
+          if (input) input.value = option.dataset.label || '';
+        }
+        closePicker(picker);
+        refreshRow(row);
+        input?.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      const wirePicker = (picker) => {
+        const input = picker.querySelector('[data-picker-input]');
+        input?.addEventListener('focus', () => { input.select(); openPicker(picker); });
+        input?.addEventListener('input', () => { openPicker(picker); filterPicker(picker, input.value); });
+        input?.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') { closePicker(picker); return; }
+          if (event.key === 'Tab') { closePicker(picker); return; }
+          const options = visibleOptions(picker);
+          if (!options.length) return;
+          const current = picker.querySelector('[data-picker-option].is-active');
+          let index = Math.max(0, options.indexOf(current));
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            index = event.key === 'ArrowDown' ? Math.min(options.length - 1, index + 1) : Math.max(0, index - 1);
+            setActiveOption(picker, options[index]);
+          } else if (event.key === 'Enter') {
+            event.preventDefault();
+            choosePickerOption(picker, current || options[0]);
+          }
+        });
+        picker.querySelectorAll('[data-picker-option]').forEach((option) => option.addEventListener('click', () => choosePickerOption(picker, option)));
+      };
       const refreshRow = (row) => {
         const state = row.querySelector('[data-assignment-state]')?.value;
-        const person = row.querySelector('[data-person-select]');
-        if (person) {
-          person.hidden = state === 'open';
-          if (state === 'open') person.value = '';
+        const personValue = row.querySelector('[name="assignee"]');
+        const personInput = row.querySelector('[data-picker-kind="person"] [data-picker-input]');
+        row.classList.toggle('is-open', state === 'open');
+        row.classList.toggle('is-tbc', state === 'tbc');
+        if (state !== 'assigned' && personValue) {
+          personValue.value = '';
+          if (personInput) personInput.value = state === 'open' ? 'Open position' : state === 'tbc' ? 'TBC' : '';
         }
         const mode = row.querySelector('[data-transport-mode]')?.value;
-        const vehicle = row.querySelector('[data-vehicle-field]');
         const custom = row.querySelector('[data-custom-transport-field]');
-        if (vehicle) vehicle.hidden = mode !== 'vehicle';
         if (custom) custom.hidden = mode !== 'custom';
       };
       const wireRow = (row) => {
         const advanced = row.querySelector('[data-assignment-advanced]');
         row.querySelector('[data-toggle-advanced]')?.addEventListener('click', () => { if (advanced) advanced.open = !advanced.open; });
         row.querySelector('[data-assignment-state]')?.addEventListener('change', () => refreshRow(row));
-        row.querySelector('[data-transport-mode]')?.addEventListener('change', () => refreshRow(row));
+        row.querySelectorAll('[data-search-picker]').forEach(wirePicker);
         row.querySelector('[data-remove-row]')?.addEventListener('click', () => row.remove());
         row.querySelector('[data-move-up]')?.addEventListener('click', () => { if (row.previousElementSibling) list.insertBefore(row, row.previousElementSibling); });
         row.querySelector('[data-move-down]')?.addEventListener('click', () => { if (row.nextElementSibling) list.insertBefore(row.nextElementSibling, row); });
         refreshRow(row);
       };
       list.querySelectorAll('[data-assignment-row]').forEach(wireRow);
+      const refreshTeamGroups = () => {
+        const teamSelect = form.querySelector('[data-workday-team]');
+        const teamId = teamSelect?.value || '';
+        const teamLabel = teamSelect?.selectedOptions[0]?.textContent || 'Selected team';
+        form.querySelectorAll('[data-picker-kind="person"]').forEach((picker) => {
+          const teamGroup = picker.querySelector('[data-team-group]');
+          const otherGroup = picker.querySelector('[data-other-group]');
+          const groupLabel = picker.querySelector('[data-team-group-label]');
+          if (groupLabel) groupLabel.textContent = teamLabel;
+          const options = [...picker.querySelectorAll('[data-picker-option][data-person-id]')].sort((a, b) => (a.dataset.label || '').localeCompare(b.dataset.label || ''));
+          options.forEach((option) => {
+            const teamIds = (option.dataset.teamIds || '').split(',');
+            (teamId && teamIds.includes(teamId) ? teamGroup : otherGroup)?.append(option);
+          });
+          if (teamGroup) teamGroup.hidden = !teamGroup.querySelector('[data-picker-option]');
+        });
+      };
+      form.querySelector('[data-workday-team]')?.addEventListener('change', refreshTeamGroups);
+      refreshTeamGroups();
       const addRow = (state = 'assigned', role = '', focus = 'role') => {
         const fragment = template.content.cloneNode(true);
         const row = fragment.querySelector('[data-assignment-row]');
@@ -291,8 +461,9 @@
         row.querySelector('[name="role_label"]').value = role;
         list.append(fragment);
         wireRow(list.lastElementChild);
+        refreshTeamGroups();
         const added = list.lastElementChild;
-        (focus === 'person' ? added?.querySelector('[name="assignee"]') : added?.querySelector('[data-role-input]'))?.focus();
+        (focus === 'person' ? added?.querySelector('[data-picker-kind="person"] [data-picker-input]') : added?.querySelector('[data-role-input]'))?.focus();
       };
       form.querySelector('[data-add-position]')?.addEventListener('click', () => addRow('assigned', '', 'role'));
       form.querySelector('[data-add-attendee]')?.addEventListener('click', () => addRow('assigned', '', 'person'));
@@ -309,6 +480,9 @@
         preset.roles.forEach((role) => addRow('assigned', role));
         if (!preset.roles.length) addRow();
         refreshType();
+      });
+      document.addEventListener('pointerdown', (event) => {
+        document.querySelectorAll('[data-search-picker]').forEach((picker) => { if (!picker.contains(event.target)) closePicker(picker); });
       });
 
       const track = form.querySelector('[data-track-select]');

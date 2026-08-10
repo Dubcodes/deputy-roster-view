@@ -3808,7 +3808,8 @@ textarea {
   margin: 10px 0 0;
 }
 
-.builder-review-crew p {
+.builder-review-crew p,
+.builder-review-crew .builder-review-row {
   display: flex;
   justify-content: space-between;
   gap: 10px;
@@ -3817,6 +3818,144 @@ textarea {
 
 .workday-assignment-note {
   grid-column: span 2;
+}
+
+.picker-field,
+.search-picker {
+  min-width: 0;
+}
+
+.search-picker {
+  position: relative;
+}
+
+.search-picker > input {
+  width: 100%;
+}
+
+.search-picker-menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  width: max(100%, 260px);
+  max-width: min(360px, calc(100vw - 32px));
+  max-height: min(360px, 55vh);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+.search-picker-menu[hidden],
+.search-picker-option[hidden],
+.search-picker-group[hidden] {
+  display: none;
+}
+
+.search-picker-group > span {
+  display: block;
+  padding: 8px 9px 4px;
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.search-picker-option {
+  display: flex;
+  width: 100%;
+  min-height: 42px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+}
+
+.search-picker-option strong {
+  font-size: .88rem;
+}
+
+.search-picker-option small {
+  color: var(--muted);
+  font-size: .72rem;
+}
+
+.search-picker-option:hover,
+.search-picker-option.is-active,
+.search-picker-option:focus-visible {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-raised));
+  outline: none;
+}
+
+.search-picker-option.is-open-position {
+  border-bottom-color: var(--open-shift-border);
+  color: var(--open-shift-text);
+}
+
+.search-picker-empty {
+  margin: 0;
+  padding: 12px 9px;
+  color: var(--muted);
+}
+
+.workday-assignment.is-open {
+  border-left: 4px solid var(--open-shift-border);
+  background: var(--open-shift-bg);
+}
+
+.workday-assignment.is-tbc {
+  border-left: 4px solid var(--muted);
+}
+
+.builder-duplicate-dialog {
+  width: min(480px, calc(100vw - 32px));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface-raised);
+}
+
+.builder-duplicate-dialog::backdrop {
+  background: rgb(0 0 0 / .55);
+}
+
+.dialog-actions,
+.builder-application-row,
+.builder-application-row form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.builder-application-position {
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.builder-application-position header,
+.builder-application-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.builder-application-row {
+  padding-top: 8px;
+}
+
+.builder-application-row > span {
+  display: grid;
 }
 
 .workday-row-actions {
@@ -3949,6 +4088,21 @@ input[type="number"] {
     min-width: 0;
     padding: 8px;
     font-size: 0.82rem;
+  }
+
+  .search-picker-menu {
+    position: fixed;
+    z-index: 100;
+    top: max(72px, env(safe-area-inset-top));
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-width: none;
+    max-height: min(62vh, 520px);
+  }
+
+  .search-picker-option {
+    min-height: 48px;
   }
 
   .builder-save-bar span {

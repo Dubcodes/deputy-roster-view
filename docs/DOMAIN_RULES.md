@@ -197,7 +197,7 @@ For race days, the app may show a cached or admin-uploaded 2D course map at the 
 - A draft is private. Crew see the last published snapshot until a new version is deliberately published.
 - A person is the only generally required value for an assigned row. Role and transport are optional.
 - A blank role means no role has been assigned; display it neutrally as `Attending` without inventing a production position.
-- An unused preset row is omitted. An explicit open row is published as TBC. These states are not interchangeable.
+- An unused preset row is omitted. `Open position` is offered to eligible Re-Deputy users; `TBC` is deliberately unfilled and is not offered. Assigned, open, TBC, and unused are separate states.
 - Transport keeps operational distinctions: not assigned yet, making own way, not required, a known vehicle, or a custom note.
 - Custom role labels retain their capitalization and punctuation. Their normalized key is used only for matching. A role enters the reusable catalogue only when an admin deliberately saves it.
 - Presets are editable starting points. Removing RTS and adding Gimbal must not recreate RTS when the draft is reopened.
@@ -223,3 +223,14 @@ For race days, the app may show a cached or admin-uploaded 2D course map at the 
 - The preference is reversible. Removing it reveals the latest underlying roster vehicle or transport, including changes synced after the preference was set.
 - The toggle must not create a Changed badge or rewrite a shift, published snapshot, raw note, schedule row, or vehicle assignment.
 - Stable event and canonical-person IDs are required; date/name matching alone is not sufficient authorization.
+
+## Teams, Applications, And Vehicles
+
+- Northern Team is the default team for new local drafts, not an inferred membership list. People may belong to multiple teams and one membership may be primary.
+- Search aliases help an admin find a person but never become the stored or displayed assignment identity. Exact canonical `crew_person_id` remains authoritative.
+- Open-position eligibility defaults to the workday team. All-team eligibility must be deliberate; selecting someone from another team for a normal assignment remains allowed.
+- A user may apply only as the canonical crew person linked to their authenticated account. Repeated Apply is idempotent, and only that user may withdraw a pending application.
+- A known overlap blocks application. Another confirmed same-date job with incomplete timing is treated conservatively as a conflict until an admin explicitly overrides during review.
+- One person normally holds one simultaneous production role per manual event. Moving or keeping both roles must be deliberate and audited.
+- Vehicle selection stores `vehicle_id` plus the canonical vehicle label. Aliases are search-only and never silently rename the vehicle.
+- Team, vehicle, application, and Making own way actions are Re-Deputy-only and never write to Deputy.

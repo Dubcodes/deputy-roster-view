@@ -5,6 +5,8 @@ import re
 import hashlib
 import json
 import sqlite3
+import unicodedata
+import uuid
 from datetime import datetime, timedelta
 from typing import Iterable
 
@@ -305,6 +307,63 @@ def init_db(settings: Settings | None = None) -> None:
                 updated_at TEXT,
                 UNIQUE(person_id, normalized_alias),
                 FOREIGN KEY (person_id) REFERENCES crew_people(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS crew_identity_search_terms (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                crew_person_id INTEGER NOT NULL,
+                search_term TEXT NOT NULL,
+                normalized_term TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'observed',
+                created_at TEXT,
+                updated_at TEXT,
+                UNIQUE(crew_person_id, normalized_term, source),
+                FOREIGN KEY (crew_person_id) REFERENCES crew_people(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS crew_teams (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stable_key TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL DEFAULT 999999,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS crew_person_teams (
+                crew_person_id INTEGER NOT NULL,
+                team_id INTEGER NOT NULL,
+                is_primary INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (crew_person_id, team_id),
+                FOREIGN KEY (crew_person_id) REFERENCES crew_people(id) ON DELETE CASCADE,
+                FOREIGN KEY (team_id) REFERENCES crew_teams(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS crew_team_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action TEXT NOT NULL,
+                team_id INTEGER,
+                crew_person_id INTEGER,
+                actor_user_id INTEGER,
+                details TEXT DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (team_id) REFERENCES crew_teams(id) ON DELETE SET NULL,
+                FOREIGN KEY (crew_person_id) REFERENCES crew_people(id) ON DELETE SET NULL,
+                FOREIGN KEY (actor_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS location_team_mappings (
+                location_key TEXT PRIMARY KEY,
+                location_label TEXT NOT NULL,
+                primary_team_id INTEGER,
+                updated_by_user_id INTEGER,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (primary_team_id) REFERENCES crew_teams(id) ON DELETE SET NULL,
+                FOREIGN KEY (updated_by_user_id) REFERENCES app_users(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS app_user_deputy_identity (
@@ -696,6 +755,32 @@ def init_db(settings: Settings | None = None) -> None:
                 updated_at TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS crew_vehicles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stable_key TEXT NOT NULL UNIQUE,
+                display_label TEXT NOT NULL,
+                aliases TEXT NOT NULL DEFAULT '[]',
+                active INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL DEFAULT 999999,
+                team_id INTEGER,
+                notes TEXT,
+                source TEXT NOT NULL DEFAULT 'discovered',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (team_id) REFERENCES crew_teams(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS crew_vehicle_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action TEXT NOT NULL,
+                vehicle_id INTEGER,
+                actor_user_id INTEGER,
+                details TEXT DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (vehicle_id) REFERENCES crew_vehicles(id) ON DELETE SET NULL,
+                FOREIGN KEY (actor_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
             CREATE TABLE IF NOT EXISTS workday_assignments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 roster_day_id INTEGER NOT NULL,
@@ -717,6 +802,40 @@ def init_db(settings: Settings | None = None) -> None:
                 FOREIGN KEY (roster_day_id) REFERENCES roster_days(id) ON DELETE CASCADE,
                 FOREIGN KEY (person_id) REFERENCES crew_people(id) ON DELETE SET NULL,
                 FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS workday_open_position_applications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                roster_day_id INTEGER NOT NULL,
+                assignment_key TEXT NOT NULL,
+                crew_person_id INTEGER NOT NULL,
+                app_user_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                applied_at TEXT NOT NULL,
+                withdrawn_at TEXT,
+                reviewed_at TEXT,
+                reviewed_by_user_id INTEGER,
+                admin_note TEXT,
+                conflict_snapshot TEXT DEFAULT '{}',
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (roster_day_id) REFERENCES roster_days(id) ON DELETE CASCADE,
+                FOREIGN KEY (crew_person_id) REFERENCES crew_people(id) ON DELETE CASCADE,
+                FOREIGN KEY (app_user_id) REFERENCES app_users(id) ON DELETE CASCADE,
+                FOREIGN KEY (reviewed_by_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS workday_audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                roster_day_id INTEGER NOT NULL,
+                assignment_key TEXT,
+                event_type TEXT NOT NULL,
+                actor_user_id INTEGER,
+                crew_person_id INTEGER,
+                details TEXT DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (roster_day_id) REFERENCES roster_days(id) ON DELETE CASCADE,
+                FOREIGN KEY (actor_user_id) REFERENCES app_users(id) ON DELETE SET NULL,
+                FOREIGN KEY (crew_person_id) REFERENCES crew_people(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS workday_user_visibility (
@@ -786,6 +905,9 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_crew_people_name ON crew_people(canonical_display_name);
             CREATE INDEX IF NOT EXISTS idx_crew_aliases_normalized ON crew_aliases(normalized_alias);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_crew_aliases_unique_normalized ON crew_aliases(normalized_alias);
+            CREATE INDEX IF NOT EXISTS idx_crew_search_terms_normalized ON crew_identity_search_terms(normalized_term);
+            CREATE INDEX IF NOT EXISTS idx_crew_person_teams_team ON crew_person_teams(team_id, active, crew_person_id);
+            CREATE INDEX IF NOT EXISTS idx_crew_vehicles_team ON crew_vehicles(team_id, active, sort_order);
             CREATE INDEX IF NOT EXISTS idx_love_racing_meetings_date ON love_racing_meetings(meeting_date, racecourse_key);
             CREATE INDEX IF NOT EXISTS idx_love_racing_details_date ON love_racing_meeting_details(meeting_date, canonical_venue_key);
             CREATE INDEX IF NOT EXISTS idx_love_racing_jobs_due ON love_racing_detail_jobs(status, next_attempt_at, priority);
@@ -798,6 +920,10 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_roster_day_versions_day ON roster_day_versions(roster_day_id, version_number DESC);
             CREATE INDEX IF NOT EXISTS idx_workday_assignments_day ON workday_assignments(roster_day_id, sort_order);
             CREATE INDEX IF NOT EXISTS idx_workday_assignments_user ON workday_assignments(user_id, roster_day_id);
+            CREATE INDEX IF NOT EXISTS idx_workday_applications_position ON workday_open_position_applications(roster_day_id, assignment_key, status);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_workday_application_active
+                ON workday_open_position_applications(roster_day_id, assignment_key, crew_person_id)
+                WHERE status IN ('pending', 'accepted');
             CREATE INDEX IF NOT EXISTS idx_user_transport_pref_day ON user_event_transport_preferences(event_date, location_key, canonical_person_id);
             CREATE INDEX IF NOT EXISTS idx_workday_visibility_user ON workday_user_visibility(user_id, roster_day_id);
             CREATE INDEX IF NOT EXISTS idx_identity_deputy_employee ON app_user_deputy_identity(deputy_employee_id);
@@ -863,10 +989,20 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "roster_days", "linked_deputy_event_id", "TEXT")
         _ensure_column(conn, "roster_days", "duplicate_resolution", "TEXT DEFAULT 'keep_separate'")
         _ensure_column(conn, "roster_days", "canonical_location_key", "TEXT")
+        _ensure_column(conn, "roster_days", "team_id", "INTEGER")
         _ensure_column(conn, "crew_people", "merged_into_person_id", "INTEGER")
         _ensure_column(conn, "crew_people", "merged_at", "TEXT")
         _ensure_column(conn, "crew_people", "merged_by_user_id", "INTEGER")
         _ensure_column(conn, "crew_people", "merge_reason", "TEXT")
+        _ensure_column(conn, "workday_assignments", "assignment_key", "TEXT")
+        _ensure_column(conn, "workday_assignments", "vehicle_id", "INTEGER")
+        _ensure_column(conn, "workday_assignments", "eligible_team_id", "INTEGER")
+        _ensure_column(conn, "workday_assignments", "eligible_all_teams", "INTEGER DEFAULT 0")
+        _backfill_workday_assignment_keys(conn)
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_workday_assignment_key "
+            "ON workday_assignments(roster_day_id, assignment_key)"
+        )
         conn.execute(
             """
             UPDATE roster_days
@@ -919,7 +1055,21 @@ def init_db(settings: Settings | None = None) -> None:
         _reclassify_legacy_shift_changes(conn)
         _migrate_admin_overrides(conn)
         _seed_workday_role_catalogue(conn)
+        _seed_default_team(conn)
+        _sync_crew_search_terms(conn)
+        _sync_vehicle_catalogue(conn)
         _migrate_legacy_roster_assignments(conn)
+        if conn.execute("SELECT 1 FROM app_settings WHERE key='legacy_tbc_assignment_state_v1'").fetchone() is None:
+            conn.execute(
+                "UPDATE workday_assignments SET assignment_state='tbc' "
+                "WHERE legacy_assignment_id IS NOT NULL AND assignment_state='open' "
+                "AND LOWER(TRIM(COALESCE(assignee_label,'')))='tbc'"
+            )
+            conn.execute(
+                "INSERT INTO app_settings(key,value,updated_at) VALUES ('legacy_tbc_assignment_state_v1','done',?)",
+                (datetime.now(get_settings().timezone).isoformat(timespec="seconds"),),
+            )
+        _backfill_workday_assignment_keys(conn)
         _reconcile_authenticated_identities_conn(conn, apply=True, trigger_source="startup")
         conn.execute(
             """
@@ -971,6 +1121,130 @@ def _seed_workday_role_catalogue(conn: sqlite3.Connection) -> None:
         )
 
 
+def _backfill_workday_assignment_keys(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        UPDATE workday_assignments
+        SET assignment_key = 'assignment-' || id
+        WHERE TRIM(COALESCE(assignment_key, '')) = ''
+        """
+    )
+
+
+def _seed_default_team(conn: sqlite3.Connection) -> None:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO crew_teams(stable_key,display_name,active,sort_order,created_at,updated_at)
+        VALUES ('northern-team','Northern Team',1,10,?,?)
+        ON CONFLICT(stable_key) DO NOTHING
+        """,
+        (now, now),
+    )
+
+
+def _add_crew_search_term_conn(
+    conn: sqlite3.Connection,
+    person_id: int,
+    value: object,
+    source: str,
+) -> None:
+    label = re.sub(r"\s+", " ", str(value or "").strip())
+    key = normalise_person_identity(label)
+    if not key:
+        return
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    conn.execute(
+        """
+        INSERT INTO crew_identity_search_terms(
+            crew_person_id,search_term,normalized_term,source,created_at,updated_at
+        ) VALUES (?,?,?,?,?,?)
+        ON CONFLICT(crew_person_id,normalized_term,source) DO UPDATE SET
+            search_term=excluded.search_term,updated_at=excluded.updated_at
+        """,
+        (person_id, label[:250], key, source[:40], now, now),
+    )
+
+
+def _sync_crew_search_terms(conn: sqlite3.Connection) -> None:
+    for row in conn.execute(
+        """
+        SELECT p.id,p.canonical_display_name,p.current_deputy_name,p.deputy_employee_id,
+               u.display_name app_user_name,u.deputy_email app_user_email
+        FROM crew_people p
+        LEFT JOIN app_users u ON u.id=p.app_user_id
+        WHERE p.merged_into_person_id IS NULL
+        """
+    ).fetchall():
+        person_id = int(row["id"])
+        for value, source in (
+            (row["canonical_display_name"], "canonical"),
+            (row["current_deputy_name"], "deputy_observed"),
+            (row["app_user_name"], "app_account"),
+            (row["app_user_email"], "app_email"),
+            (row["deputy_employee_id"], "deputy_employee_id"),
+        ):
+            _add_crew_search_term_conn(conn, person_id, value, source)
+    for row in conn.execute("SELECT person_id,alias FROM crew_aliases").fetchall():
+        _add_crew_search_term_conn(conn, int(row["person_id"]), row["alias"], "alias")
+    for row in conn.execute(
+        """
+        SELECT DISTINCT p.id,s.employee_name
+        FROM crew_people p
+        JOIN deputy_schedule_shifts s ON s.employee_id=p.deputy_employee_id
+        WHERE TRIM(COALESCE(s.employee_name,'')) != ''
+        """
+    ).fetchall():
+        _add_crew_search_term_conn(conn, int(row["id"]), row["employee_name"], "deputy_history")
+
+
+def _vehicle_catalogue_key(value: object) -> str:
+    return normalise_person_identity(value)
+
+
+def _looks_like_crew_vehicle(value: object) -> bool:
+    label = str(value or "").strip()
+    return bool(
+        re.fullmatch(r"\d{3}", label)
+        or re.fullmatch(r"Rav[0-9A-Za-z]+", label, re.IGNORECASE)
+        or label.casefold() in {"ob", "tender", "transit"}
+    )
+
+
+def _sync_vehicle_catalogue(conn: sqlite3.Connection) -> None:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    observed = {
+        str(row["area_name"] or "").strip()
+        for row in conn.execute(
+            "SELECT DISTINCT area_name FROM deputy_schedule_shifts WHERE TRIM(COALESCE(area_name,'')) != ''"
+        ).fetchall()
+        if _looks_like_crew_vehicle(row["area_name"])
+    }
+    observed.update(
+        str(row["vehicle_label"] or "").strip()
+        for row in conn.execute(
+            "SELECT DISTINCT vehicle_label FROM workday_assignments WHERE TRIM(COALESCE(vehicle_label,'')) != ''"
+        ).fetchall()
+        if _looks_like_crew_vehicle(row["vehicle_label"])
+    )
+    common_order = {"684": 10, "685": 20, "rav91": 30, "transit": 40, "tender": 50, "ob": 60}
+    for label in sorted(observed, key=lambda item: (common_order.get(item.casefold(), 999), item.casefold())):
+        key = _vehicle_catalogue_key(label)
+        if not key:
+            continue
+        conn.execute(
+            """
+            INSERT INTO crew_vehicles(
+                stable_key,display_label,aliases,active,sort_order,source,created_at,updated_at
+            ) VALUES (?,?,'[]',1,?,'discovered',?,?)
+            ON CONFLICT(stable_key) DO UPDATE SET
+                display_label=CASE WHEN crew_vehicles.source='discovered' THEN excluded.display_label ELSE crew_vehicles.display_label END,
+                updated_at=excluded.updated_at
+            """,
+            (key, label[:100], common_order.get(label.casefold(), 999), now, now),
+        )
+
+
 def _migrate_legacy_roster_assignments(conn: sqlite3.Connection) -> None:
     migration_key = "workday_assignments_migrated_v1"
     migrated = conn.execute(
@@ -991,7 +1265,7 @@ def _migrate_legacy_roster_assignments(conn: sqlite3.Connection) -> None:
         role_label = str(row["position_label"] or "").strip()
         assignee_label = str(row["assignee_label"] or "").strip()
         vehicle_label = str(row["vehicle_label"] or "").strip()
-        assignment_state = "open" if assignee_label.casefold() == "tbc" else "assigned"
+        assignment_state = "tbc" if assignee_label.casefold() == "tbc" else "assigned"
         conn.execute(
             """
             INSERT OR IGNORE INTO workday_assignments (
@@ -1189,11 +1463,13 @@ def row_to_dict(row: sqlite3.Row | None) -> dict | None:
 
 
 def calendar_location_key(value: object) -> str:
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+    folded = unicodedata.normalize("NFKD", str(value or ""))
+    return re.sub(r"[^a-z0-9]+", "", folded.encode("ascii", "ignore").decode().lower())
 
 
 def normalise_person_identity(value: object) -> str:
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+    folded = unicodedata.normalize("NFKD", str(value or ""))
+    return re.sub(r"[^a-z0-9]+", "", folded.encode("ascii", "ignore").decode().lower())
 
 
 def canonical_travel_base_label(value: object) -> str:
@@ -2500,6 +2776,233 @@ def list_workday_roles(*, include_disabled: bool = False) -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def list_crew_teams(*, include_inactive: bool = False) -> list[dict[str, object]]:
+    with get_connection() as conn:
+        where = "" if include_inactive else "WHERE t.active=1"
+        rows = [dict(row) for row in conn.execute(
+            f"""
+            SELECT t.*,
+                   (SELECT COUNT(*) FROM crew_person_teams m
+                    WHERE m.team_id=t.id AND m.active=1) member_count
+            FROM crew_teams t {where}
+            ORDER BY t.sort_order,LOWER(t.display_name),t.id
+            """
+        ).fetchall()]
+        for team in rows:
+            team["members"] = [dict(row) for row in conn.execute(
+                """
+                SELECT p.id,p.canonical_display_name,m.is_primary
+                FROM crew_person_teams m
+                JOIN crew_people p ON p.id=m.crew_person_id
+                WHERE m.team_id=? AND m.active=1 AND p.is_active=1
+                  AND p.merged_into_person_id IS NULL
+                ORDER BY m.is_primary DESC,LOWER(p.canonical_display_name)
+                """,
+                (int(team["id"]),),
+            ).fetchall()]
+        return rows
+
+
+def get_default_team_id() -> int | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM crew_teams WHERE stable_key='northern-team' AND active=1 LIMIT 1"
+        ).fetchone()
+        return int(row["id"]) if row else None
+
+
+def save_crew_team(
+    *, team_id: int | None, display_name: str, active: bool,
+    sort_order: int, actor_user_id: int,
+) -> tuple[bool, str, int | None]:
+    label = re.sub(r"\s+", " ", str(display_name or "").strip())[:100]
+    if not label:
+        return False, "Team name is required.", None
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        if team_id is None:
+            base = re.sub(r"[^a-z0-9]+", "-", unicodedata.normalize("NFKD", label).encode("ascii", "ignore").decode().lower()).strip("-") or "team"
+            key = base
+            suffix = 1
+            while conn.execute("SELECT 1 FROM crew_teams WHERE stable_key=?", (key,)).fetchone():
+                suffix += 1
+                key = f"{base}-{suffix}"
+            cursor = conn.execute(
+                "INSERT INTO crew_teams(stable_key,display_name,active,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                (key, label, 1 if active else 0, int(sort_order), now, now),
+            )
+            saved_id = int(cursor.lastrowid)
+            action = "team_created"
+        else:
+            existing = conn.execute("SELECT id FROM crew_teams WHERE id=?", (team_id,)).fetchone()
+            if not existing:
+                return False, "Team was not found.", None
+            conn.execute(
+                "UPDATE crew_teams SET display_name=?,active=?,sort_order=?,updated_at=? WHERE id=?",
+                (label, 1 if active else 0, int(sort_order), now, team_id),
+            )
+            saved_id = int(team_id)
+            action = "team_updated"
+        conn.execute(
+            "INSERT INTO crew_team_audit(action,team_id,actor_user_id,details,created_at) VALUES (?,?,?,?,?)",
+            (action, saved_id, actor_user_id, json.dumps({"display_name": label, "active": active, "sort_order": int(sort_order)}), now),
+        )
+    return True, "Team saved.", saved_id
+
+
+def set_crew_person_team(
+    *, person_id: int, team_id: int, active: bool,
+    is_primary: bool, actor_user_id: int,
+) -> tuple[bool, str]:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        person_id = _canonical_person_id_conn(conn, person_id) or 0
+        if not person_id or not conn.execute("SELECT 1 FROM crew_teams WHERE id=?", (team_id,)).fetchone():
+            return False, "Crew member or team was not found."
+        if is_primary and active:
+            conn.execute("UPDATE crew_person_teams SET is_primary=0,updated_at=? WHERE crew_person_id=?", (now, person_id))
+        conn.execute(
+            """
+            INSERT INTO crew_person_teams(crew_person_id,team_id,is_primary,active,created_at,updated_at)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(crew_person_id,team_id) DO UPDATE SET
+                is_primary=excluded.is_primary,active=excluded.active,updated_at=excluded.updated_at
+            """,
+            (person_id, team_id, 1 if is_primary and active else 0, 1 if active else 0, now, now),
+        )
+        conn.execute(
+            "INSERT INTO crew_team_audit(action,team_id,crew_person_id,actor_user_id,details,created_at) VALUES (?,?,?,?,?,?)",
+            ("member_added" if active else "member_removed", team_id, person_id, actor_user_id, json.dumps({"primary": bool(is_primary and active)}), now),
+        )
+    return True, "Team membership saved."
+
+
+def set_location_primary_team(
+    *, location_key: str, location_label: str, team_id: int | None,
+    actor_user_id: int,
+) -> bool:
+    key = calendar_location_key(location_key or location_label)
+    label = re.sub(r"\s+", " ", str(location_label or "").strip())[:200]
+    if not key or not label:
+        return False
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        if team_id is not None and not conn.execute("SELECT 1 FROM crew_teams WHERE id=?", (team_id,)).fetchone():
+            return False
+        conn.execute(
+            """
+            INSERT INTO location_team_mappings(location_key,location_label,primary_team_id,updated_by_user_id,updated_at)
+            VALUES (?,?,?,?,?)
+            ON CONFLICT(location_key) DO UPDATE SET location_label=excluded.location_label,
+                primary_team_id=excluded.primary_team_id,updated_by_user_id=excluded.updated_by_user_id,
+                updated_at=excluded.updated_at
+            """,
+            (key, label, team_id, actor_user_id, now),
+        )
+    return True
+
+
+def list_location_team_mappings() -> dict[str, dict[str, object]]:
+    with get_connection() as conn:
+        return {
+            str(row["location_key"]): dict(row)
+            for row in conn.execute(
+                """
+                SELECT m.*,t.display_name team_name
+                FROM location_team_mappings m
+                LEFT JOIN crew_teams t ON t.id=m.primary_team_id
+                """
+            ).fetchall()
+        }
+
+
+def crew_picker_records(selected_team_id: int | None = None) -> list[dict[str, object]]:
+    refresh_crew_directory()
+    with get_connection() as conn:
+        _sync_crew_search_terms(conn)
+        rows = [dict(row) for row in conn.execute(
+            """
+            SELECT p.id,p.canonical_display_name,p.deputy_employee_id,
+                   GROUP_CONCAT(DISTINCT CASE WHEN m.active=1 THEN m.team_id END) team_ids,
+                   GROUP_CONCAT(DISTINCT CASE WHEN m.active=1 THEN t.display_name END) team_names
+            FROM crew_people p
+            LEFT JOIN crew_person_teams m ON m.crew_person_id=p.id
+            LEFT JOIN crew_teams t ON t.id=m.team_id AND t.active=1
+            WHERE p.is_active=1 AND p.merged_into_person_id IS NULL
+            GROUP BY p.id
+            ORDER BY LOWER(p.canonical_display_name),p.id
+            """
+        ).fetchall()]
+        terms_by_person: dict[int, list[str]] = {}
+        for term in conn.execute(
+            "SELECT crew_person_id,normalized_term FROM crew_identity_search_terms ORDER BY id"
+        ).fetchall():
+            terms_by_person.setdefault(int(term["crew_person_id"]), []).append(str(term["normalized_term"]))
+    for row in rows:
+        team_ids = [int(value) for value in str(row.get("team_ids") or "").split(",") if value.isdigit()]
+        row["team_ids"] = team_ids
+        row["team_names"] = [value for value in str(row.get("team_names") or "").split(",") if value]
+        row["selected_team_member"] = bool(selected_team_id and selected_team_id in team_ids)
+        row["search_text"] = " ".join(dict.fromkeys(terms_by_person.get(int(row["id"]), []) + [normalise_person_identity(row["canonical_display_name"])]))
+    return sorted(rows, key=lambda row: (not bool(row["selected_team_member"]), str(row["canonical_display_name"]).casefold()))
+
+
+def list_crew_vehicles(*, include_inactive: bool = False) -> list[dict[str, object]]:
+    with get_connection() as conn:
+        _sync_vehicle_catalogue(conn)
+        where = "" if include_inactive else "WHERE v.active=1"
+        return [dict(row) for row in conn.execute(
+            f"""
+            SELECT v.*,t.display_name team_name FROM crew_vehicles v
+            LEFT JOIN crew_teams t ON t.id=v.team_id
+            {where}
+            ORDER BY v.sort_order,LOWER(v.display_label),v.id
+            """
+        ).fetchall()]
+
+
+def save_crew_vehicle(
+    *, vehicle_id: int | None, display_label: str, aliases: list[str],
+    active: bool, sort_order: int, team_id: int | None, notes: str,
+    actor_user_id: int,
+) -> tuple[bool, str, int | None]:
+    label = re.sub(r"\s+", " ", str(display_label or "").strip())[:100]
+    key = _vehicle_catalogue_key(label)
+    if not key:
+        return False, "Vehicle label is required.", None
+    clean_aliases = list(dict.fromkeys(re.sub(r"\s+", " ", str(value).strip())[:100] for value in aliases if str(value).strip()))
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        if vehicle_id is None:
+            cursor = conn.execute(
+                """
+                INSERT INTO crew_vehicles(stable_key,display_label,aliases,active,sort_order,team_id,notes,source,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,'admin',?,?)
+                ON CONFLICT(stable_key) DO UPDATE SET display_label=excluded.display_label,
+                    aliases=excluded.aliases,active=excluded.active,sort_order=excluded.sort_order,
+                    team_id=excluded.team_id,notes=excluded.notes,source='admin',updated_at=excluded.updated_at
+                """,
+                (key, label, json.dumps(clean_aliases), 1 if active else 0, int(sort_order), team_id, notes.strip()[:500], now, now),
+            )
+            row = conn.execute("SELECT id FROM crew_vehicles WHERE stable_key=?", (key,)).fetchone()
+            saved_id = int(row["id"] if row else cursor.lastrowid)
+            action = "vehicle_created"
+        else:
+            if not conn.execute("SELECT 1 FROM crew_vehicles WHERE id=?", (vehicle_id,)).fetchone():
+                return False, "Vehicle was not found.", None
+            conn.execute(
+                "UPDATE crew_vehicles SET display_label=?,aliases=?,active=?,sort_order=?,team_id=?,notes=?,source='admin',updated_at=? WHERE id=?",
+                (label, json.dumps(clean_aliases), 1 if active else 0, int(sort_order), team_id, notes.strip()[:500], now, vehicle_id),
+            )
+            saved_id = vehicle_id
+            action = "vehicle_updated"
+        conn.execute(
+            "INSERT INTO crew_vehicle_audit(action,vehicle_id,actor_user_id,details,created_at) VALUES (?,?,?,?,?)",
+            (action, saved_id, actor_user_id, json.dumps({"label": label, "aliases": clean_aliases, "active": active}), now),
+        )
+    return True, "Vehicle saved.", saved_id
+
+
 def save_workday_role(
     *,
     role_key: str,
@@ -2567,6 +3070,7 @@ def save_roster_day(
     provenance: str = "manual",
     linked_deputy_event_id: str = "",
     duplicate_resolution: str = "keep_separate",
+    team_id: int | None = None,
     updated_by_user_id: int,
     assignments: list[dict[str, object]],
 ) -> int:
@@ -2596,10 +3100,10 @@ def save_roster_day(
                     on_track_time, first_race_time, last_race_time, race_count,
                     notes, hotel_assignments, title, custom_location, end_time,
                     break_minutes, source_reference, provenance, linked_deputy_event_id,
-                    duplicate_resolution, status, published_snapshot, created_by_user_id,
+                    duplicate_resolution, team_id, status, published_snapshot, created_by_user_id,
                     updated_by_user_id, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', '', ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', '', ?, ?, ?, ?)
                 """,
                 (
                     roster_date, identity_key, canonical_location_key, track_label, race_type, day_type,
@@ -2607,7 +3111,7 @@ def save_roster_day(
                     on_track_time, first_race_time, last_race_time, race_count,
                     notes, hotel_assignments, title, custom_location, end_time,
                     max(0, int(break_minutes or 0)), source_reference, provenance,
-                    linked_deputy_event_id, duplicate_resolution,
+                    linked_deputy_event_id, duplicate_resolution, team_id,
                     updated_by_user_id, updated_by_user_id, now, now,
                 ),
             )
@@ -2623,7 +3127,7 @@ def save_roster_day(
                     on_track_time = ?, first_race_time = ?,
                     last_race_time = ?, race_count = ?, notes = ?, hotel_assignments = ?, status = ?,
                     title = ?, custom_location = ?, end_time = ?, break_minutes = ?,
-                    source_reference = ?, provenance = ?, linked_deputy_event_id = ?, duplicate_resolution = ?,
+                    source_reference = ?, provenance = ?, linked_deputy_event_id = ?, duplicate_resolution = ?, team_id = ?,
                     updated_by_user_id = ?, updated_at = ?
                 WHERE id = ?
                 """,
@@ -2633,11 +3137,17 @@ def save_roster_day(
                     on_track_time, first_race_time, last_race_time, race_count,
                     notes, hotel_assignments, status,
                     title, custom_location, end_time, max(0, int(break_minutes or 0)),
-                    source_reference, provenance, linked_deputy_event_id, duplicate_resolution,
+                    source_reference, provenance, linked_deputy_event_id, duplicate_resolution, team_id,
                     updated_by_user_id, now, saved_id,
                 ),
             )
 
+        prior_rows = [dict(row) for row in conn.execute(
+            "SELECT assignment_key,assignment_state,person_id,role_label FROM workday_assignments WHERE roster_day_id=?",
+            (saved_id,),
+        ).fetchall()]
+        prior_by_key = {str(row.get("assignment_key") or ""): row for row in prior_rows}
+        saved_assignment_keys: set[str] = set()
         conn.execute("DELETE FROM workday_assignments WHERE roster_day_id = ?", (saved_id,))
         for assignment in assignments:
             person_id = _canonical_person_id_conn(conn, _optional_int(assignment.get("person_id")))
@@ -2652,15 +3162,35 @@ def save_roster_day(
                     continue
                 canonical_user_id = _optional_int(person["app_user_id"])
                 canonical_label = str(person["canonical_display_name"] or canonical_label)
+            assignment_key = str(assignment.get("assignment_key") or "").strip()[:80]
+            if not assignment_key or assignment_key in {
+                str(item.get("assignment_key") or "") for item in assignments
+                if item is not assignment and str(item.get("assignment_key") or "")
+            }:
+                assignment_key = f"position-{uuid.uuid4().hex}"
+            vehicle_id = _optional_int(assignment.get("vehicle_id"))
+            vehicle_label = str(assignment.get("vehicle_label") or "").strip()
+            vehicle_key = str(assignment.get("vehicle_key") or "").strip()
+            if vehicle_id is not None:
+                vehicle_row = conn.execute(
+                    "SELECT id,stable_key,display_label FROM crew_vehicles WHERE id=? AND active=1",
+                    (vehicle_id,),
+                ).fetchone()
+                if vehicle_row is None:
+                    vehicle_id = None
+                else:
+                    vehicle_key = str(vehicle_row["stable_key"])
+                    vehicle_label = str(vehicle_row["display_label"])
             conn.execute(
                 """
                 INSERT INTO workday_assignments (
                     roster_day_id, person_id, user_id, assignee_label,
                     role_key, role_label, assignment_state, transport_mode,
-                    vehicle_key, vehicle_label, custom_transport_text,
-                    assignment_note, sort_order, created_at, updated_at
+                    vehicle_key, vehicle_label, vehicle_id, custom_transport_text,
+                    assignment_note, sort_order, assignment_key, eligible_team_id,
+                    eligible_all_teams, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     saved_id,
@@ -2671,14 +3201,66 @@ def save_roster_day(
                     str(assignment.get("role_label") or "").strip(),
                     str(assignment.get("assignment_state") or "assigned").strip(),
                     str(assignment.get("transport_mode") or "unassigned").strip(),
-                    str(assignment.get("vehicle_key") or "").strip(),
-                    str(assignment.get("vehicle_label") or "").strip(),
+                    vehicle_key,
+                    vehicle_label,
+                    vehicle_id,
                     str(assignment.get("custom_transport_text") or "").strip(),
                     str(assignment.get("assignment_note") or "").strip(),
                     int(assignment.get("sort_order")) if assignment.get("sort_order") is not None else 999999,
+                    assignment_key,
+                    _optional_int(assignment.get("eligible_team_id")) or team_id,
+                    1 if assignment.get("eligible_all_teams") else 0,
                     now,
                     now,
                 ),
+            )
+            saved_assignment_keys.add(assignment_key)
+            prior = prior_by_key.get(assignment_key)
+            if prior and (
+                str(prior.get("assignment_state") or "") != str(assignment.get("assignment_state") or "")
+                or _optional_int(prior.get("person_id")) != person_id
+            ):
+                conn.execute(
+                    "INSERT INTO workday_audit_events(roster_day_id,assignment_key,event_type,actor_user_id,crew_person_id,details,created_at) VALUES (?,?,?,?,?,?,?)",
+                    (saved_id, assignment_key, "assignment_changed", updated_by_user_id, person_id,
+                     json.dumps({"old_state": prior.get("assignment_state"), "new_state": assignment.get("assignment_state"), "role": assignment.get("role_label")}), now),
+                )
+        for removed_key in set(prior_by_key) - saved_assignment_keys:
+            prior = prior_by_key[removed_key]
+            conn.execute(
+                "INSERT INTO workday_audit_events(roster_day_id,assignment_key,event_type,actor_user_id,crew_person_id,details,created_at) VALUES (?,?,?,?,?,?,?)",
+                (
+                    saved_id,
+                    removed_key,
+                    "assignment_removed",
+                    updated_by_user_id,
+                    _optional_int(prior.get("person_id")),
+                    json.dumps({"state": prior.get("assignment_state"), "role": prior.get("role_label")}),
+                    now,
+                ),
+            )
+        active_open_keys = {
+            str(item.get("assignment_key") or "")
+            for item in assignments
+            if str(item.get("assignment_state") or "") == "open"
+        }
+        removed_open_keys = {
+            str(item.get("assignment_key") or "")
+            for item in prior_rows
+            if str(item.get("assignment_state") or "") == "open"
+        } - active_open_keys
+        for assignment_key in removed_open_keys:
+            conn.execute(
+                """
+                UPDATE workday_open_position_applications
+                SET status='cancelled_position',reviewed_at=?,reviewed_by_user_id=?,updated_at=?
+                WHERE roster_day_id=? AND assignment_key=? AND status='pending'
+                """,
+                (now, updated_by_user_id, now, saved_id, assignment_key),
+            )
+            conn.execute(
+                "INSERT INTO workday_audit_events(roster_day_id,assignment_key,event_type,actor_user_id,details,created_at) VALUES (?,?,?,?,?,?)",
+                (saved_id, assignment_key, "open_position_removed", updated_by_user_id, "{}", now),
             )
     return saved_id
 
@@ -2730,6 +3312,341 @@ def visible_workday_ids_for_user(start_date: str, end_date: str, user_id: int) -
                 (user_id, start_date, end_date),
             ).fetchall()
         }
+
+
+def _workday_window(row: sqlite3.Row | dict[str, object]) -> tuple[datetime | None, datetime | None]:
+    values = dict(row)
+    date_text = str(values.get("roster_date") or "")
+    start_text = str(values.get("office_start") or "")
+    end_text = str(values.get("end_time") or "")
+    try:
+        timezone = get_settings().timezone
+        start = datetime.fromisoformat(f"{date_text}T{start_text}").replace(tzinfo=timezone) if start_text else None
+        finish = datetime.fromisoformat(f"{date_text}T{end_text}").replace(tzinfo=timezone) if end_text else None
+    except ValueError:
+        return None, None
+    if start and finish and finish <= start:
+        finish += timedelta(days=1)
+    return start, finish
+
+
+def workday_assignment_conflicts(
+    *, crew_person_id: int, roster_day_id: int,
+) -> list[dict[str, object]]:
+    conflicts: list[dict[str, object]] = []
+    with get_connection() as conn:
+        person_id = _canonical_person_id_conn(conn, crew_person_id)
+        target = conn.execute("SELECT * FROM roster_days WHERE id=?", (roster_day_id,)).fetchone()
+        if person_id is None or target is None:
+            return [{"reason": "identity", "message": "Crew identity or workday was not found."}]
+        target_start, target_end = _workday_window(target)
+        target_date = str(target["roster_date"] or "")
+        same_day_role = conn.execute(
+            """
+            SELECT role_label FROM workday_assignments
+            WHERE roster_day_id=? AND person_id=? AND assignment_state='assigned'
+            ORDER BY sort_order,id LIMIT 1
+            """,
+            (roster_day_id, person_id),
+        ).fetchone()
+        if same_day_role:
+            role = str(same_day_role["role_label"] or "another position")
+            conflicts.append({"reason": "same_event", "message": f"Already assigned to {role} on this workday."})
+        app_user = conn.execute("SELECT app_user_id FROM crew_people WHERE id=?", (person_id,)).fetchone()
+        app_user_id = _optional_int(app_user["app_user_id"]) if app_user else None
+        if app_user_id is not None:
+            for shift in conn.execute(
+                """
+                SELECT id,title,start_at,end_at,date FROM shifts
+                WHERE owner_user_id=? AND date=? AND deleted_from_source=0
+                """,
+                (app_user_id, target_date),
+            ).fetchall():
+                try:
+                    other_start = datetime.fromisoformat(str(shift["start_at"] or ""))
+                    other_end = datetime.fromisoformat(str(shift["end_at"] or ""))
+                    if other_start.tzinfo is None:
+                        other_start = other_start.replace(tzinfo=get_settings().timezone)
+                    if other_end.tzinfo is None:
+                        other_end = other_end.replace(tzinfo=get_settings().timezone)
+                except ValueError:
+                    other_start = other_end = None
+                overlap = not all((target_start, target_end, other_start, other_end)) or (
+                    target_start < other_end and other_start < target_end
+                )
+                if overlap:
+                    conflicts.append({
+                        "reason": "deputy_overlap" if all((target_start, target_end, other_start, other_end)) else "same_date_unknown",
+                        "message": "Not available - already rostered." if all((target_start, target_end, other_start, other_end)) else "Already rostered that day.",
+                        "source": "Deputy",
+                        "event_id": int(shift["id"]),
+                    })
+        for other in conn.execute(
+            """
+            SELECT d.*,a.role_label FROM roster_days d
+            JOIN workday_assignments a ON a.roster_day_id=d.id
+            WHERE d.id!=? AND d.roster_date=?
+              AND TRIM(COALESCE(d.published_snapshot,''))!=''
+              AND a.person_id=? AND a.assignment_state='assigned'
+            """,
+            (roster_day_id, target_date, person_id),
+        ).fetchall():
+            other_start, other_end = _workday_window(other)
+            overlap = not all((target_start, target_end, other_start, other_end)) or (
+                target_start < other_end and other_start < target_end
+            )
+            if overlap:
+                known = all((target_start, target_end, other_start, other_end))
+                conflicts.append({
+                    "reason": "manual_overlap" if known else "same_date_unknown",
+                    "message": "Not available - already rostered." if known else "Already rostered that day.",
+                    "source": "Re-Deputy",
+                    "event_id": int(other["id"]),
+                    "role": str(other["role_label"] or ""),
+                })
+    unique: dict[tuple[str, object], dict[str, object]] = {}
+    for item in conflicts:
+        unique[(str(item.get("reason")), item.get("event_id") or item.get("message"))] = item
+    return list(unique.values())
+
+
+def list_open_workday_positions(
+    start_date: str,
+    end_date: str,
+    *,
+    app_user_id: int | None,
+    include_all_for_admin: bool = False,
+) -> list[dict[str, object]]:
+    with get_connection() as conn:
+        person_id = None
+        team_ids: set[int] = set()
+        if app_user_id is not None:
+            person = conn.execute(
+                "SELECT id FROM crew_people WHERE app_user_id=? AND is_active=1 AND merged_into_person_id IS NULL",
+                (app_user_id,),
+            ).fetchone()
+            if person:
+                person_id = int(person["id"])
+                team_ids = {
+                    int(row["team_id"])
+                    for row in conn.execute(
+                        "SELECT team_id FROM crew_person_teams WHERE crew_person_id=? AND active=1",
+                        (person_id,),
+                    ).fetchall()
+                }
+        rows = [dict(row) for row in conn.execute(
+            """
+            SELECT a.*,d.roster_date,d.track_label,d.custom_location,d.title,d.day_type,
+                   d.office_start,d.end_time,d.team_id workday_team_id,t.display_name team_name
+            FROM workday_assignments a
+            JOIN roster_days d ON d.id=a.roster_day_id
+            LEFT JOIN crew_teams t ON t.id=COALESCE(a.eligible_team_id,d.team_id)
+            WHERE d.roster_date BETWEEN ? AND ?
+              AND TRIM(COALESCE(d.published_snapshot,''))!=''
+              AND a.assignment_state='open'
+            ORDER BY d.roster_date,d.office_start,a.sort_order,a.id
+            """,
+            (start_date, end_date),
+        ).fetchall()]
+        applications_by_key: dict[tuple[int, str], list[dict[str, object]]] = {}
+        for application in conn.execute(
+            """
+            SELECT ap.*,p.canonical_display_name applicant_name
+            FROM workday_open_position_applications ap
+            JOIN crew_people p ON p.id=ap.crew_person_id
+            WHERE ap.roster_day_id IN (
+                SELECT id FROM roster_days WHERE roster_date BETWEEN ? AND ?
+            ) ORDER BY ap.applied_at,ap.id
+            """,
+            (start_date, end_date),
+        ).fetchall():
+            item = dict(application)
+            applications_by_key.setdefault((int(item["roster_day_id"]), str(item["assignment_key"])), []).append(item)
+    result = []
+    for row in rows:
+        eligible_team_id = _optional_int(row.get("eligible_team_id")) or _optional_int(row.get("workday_team_id"))
+        eligible = bool(row.get("eligible_all_teams")) or eligible_team_id is None or eligible_team_id in team_ids
+        if not include_all_for_admin and not eligible:
+            continue
+        key = (int(row["roster_day_id"]), str(row.get("assignment_key") or ""))
+        applications = applications_by_key.get(key, [])
+        for application in applications:
+            application["conflicts"] = workday_assignment_conflicts(
+                crew_person_id=int(application["crew_person_id"]),
+                roster_day_id=int(row["roster_day_id"]),
+            ) if application.get("status") == "pending" else []
+        own = next((item for item in reversed(applications) if _optional_int(item.get("app_user_id")) == app_user_id), None)
+        conflicts = workday_assignment_conflicts(crew_person_id=person_id, roster_day_id=int(row["roster_day_id"])) if person_id else []
+        row.update({
+            "source_kind": "manual_open_position",
+            "source_label": "Re-Deputy open position",
+            "location_label": str(row.get("custom_location") or row.get("track_label") or row.get("title") or "Work day"),
+            "area_display": str(row.get("role_label") or "Open position"),
+            "date": str(row.get("roster_date") or ""),
+            "time_range": f"{row.get('office_start') or 'TBC'}-{row.get('end_time') or 'TBC'}",
+            "eligible": eligible,
+            "conflicts": conflicts,
+            "can_apply": bool(eligible and person_id and not conflicts and (not own or own.get("status") not in {"pending", "accepted"})),
+            "own_application": own,
+            "applications": applications,
+            "application_count": sum(1 for item in applications if item.get("status") == "pending"),
+        })
+        result.append(row)
+    return result
+
+
+def apply_for_open_workday_position(
+    *, roster_day_id: int, assignment_key: str, app_user_id: int,
+) -> tuple[bool, str, int | None]:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        person = conn.execute(
+            "SELECT id FROM crew_people WHERE app_user_id=? AND is_active=1 AND merged_into_person_id IS NULL",
+            (app_user_id,),
+        ).fetchone()
+        if not person:
+            return False, "Your app account is not linked to a crew identity.", None
+        person_id = int(person["id"])
+        position = conn.execute(
+            """
+            SELECT a.*,d.team_id workday_team_id,d.published_snapshot
+            FROM workday_assignments a JOIN roster_days d ON d.id=a.roster_day_id
+            WHERE a.roster_day_id=? AND a.assignment_key=? AND a.assignment_state='open'
+            """,
+            (roster_day_id, assignment_key),
+        ).fetchone()
+        if not position or not str(position["published_snapshot"] or "").strip():
+            return False, "This open position is no longer available.", None
+        eligible_team_id = _optional_int(position["eligible_team_id"]) or _optional_int(position["workday_team_id"])
+        if not int(position["eligible_all_teams"] or 0) and eligible_team_id is not None:
+            member = conn.execute(
+                "SELECT 1 FROM crew_person_teams WHERE crew_person_id=? AND team_id=? AND active=1",
+                (person_id, eligible_team_id),
+            ).fetchone()
+            if not member:
+                return False, "This position is offered to another team.", None
+        existing = conn.execute(
+            """
+            SELECT id,status FROM workday_open_position_applications
+            WHERE roster_day_id=? AND assignment_key=? AND crew_person_id=?
+              AND status IN ('pending','accepted') ORDER BY id DESC LIMIT 1
+            """,
+            (roster_day_id, assignment_key, person_id),
+        ).fetchone()
+        if existing:
+            return True, "Application already sent.", int(existing["id"])
+    conflicts = workday_assignment_conflicts(crew_person_id=person_id, roster_day_id=roster_day_id)
+    if conflicts:
+        return False, str(conflicts[0].get("message") or "Already rostered that day."), None
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO workday_open_position_applications(
+                roster_day_id,assignment_key,crew_person_id,app_user_id,status,
+                applied_at,conflict_snapshot,updated_at
+            ) VALUES (?,?,?,?, 'pending',?,?,?)
+            """,
+            (roster_day_id, assignment_key, person_id, app_user_id, now, "[]", now),
+        )
+        application_id = int(cursor.lastrowid)
+        conn.execute(
+            "INSERT INTO workday_audit_events(roster_day_id,assignment_key,event_type,actor_user_id,crew_person_id,details,created_at) VALUES (?,?,?,?,?,?,?)",
+            (roster_day_id, assignment_key, "application_created", app_user_id, person_id, json.dumps({"application_id": application_id}), now),
+        )
+    return True, "Application sent.", application_id
+
+
+def withdraw_open_workday_application(
+    *, roster_day_id: int, assignment_key: str, app_user_id: int,
+) -> tuple[bool, str]:
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM workday_open_position_applications
+            WHERE roster_day_id=? AND assignment_key=? AND app_user_id=? AND status='pending'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (roster_day_id, assignment_key, app_user_id),
+        ).fetchone()
+        if not row:
+            return False, "No pending application was found."
+        conn.execute(
+            "UPDATE workday_open_position_applications SET status='withdrawn',withdrawn_at=?,updated_at=? WHERE id=?",
+            (now, now, int(row["id"])),
+        )
+        conn.execute(
+            "INSERT INTO workday_audit_events(roster_day_id,assignment_key,event_type,actor_user_id,crew_person_id,details,created_at) VALUES (?,?,?,?,?,?,?)",
+            (roster_day_id, assignment_key, "application_withdrawn", app_user_id, int(row["crew_person_id"]), json.dumps({"application_id": int(row["id"])}), now),
+        )
+    return True, "Application withdrawn."
+
+
+def review_open_workday_application(
+    *, application_id: int, action: str, reviewer_user_id: int,
+    override_conflict: bool = False, admin_note: str = "",
+) -> tuple[bool, str, int | None]:
+    if action not in {"accept", "decline"}:
+        return False, "Choose accept or decline.", None
+    with get_connection() as conn:
+        application = conn.execute(
+            "SELECT * FROM workday_open_position_applications WHERE id=? AND status='pending'",
+            (application_id,),
+        ).fetchone()
+        if not application:
+            return False, "Pending application was not found.", None
+        roster_day_id = int(application["roster_day_id"])
+        assignment_key = str(application["assignment_key"])
+        person_id = int(application["crew_person_id"])
+    conflicts = workday_assignment_conflicts(crew_person_id=person_id, roster_day_id=roster_day_id) if action == "accept" else []
+    if conflicts and not override_conflict:
+        return False, str(conflicts[0].get("message") or "The applicant is now unavailable."), roster_day_id
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        if action == "decline":
+            conn.execute(
+                "UPDATE workday_open_position_applications SET status='declined',reviewed_at=?,reviewed_by_user_id=?,admin_note=?,updated_at=? WHERE id=?",
+                (now, reviewer_user_id, admin_note.strip()[:500], now, application_id),
+            )
+            event_type = "application_declined"
+            message = "Application declined."
+        else:
+            person = conn.execute(
+                "SELECT canonical_display_name,app_user_id FROM crew_people WHERE id=? AND is_active=1",
+                (person_id,),
+            ).fetchone()
+            position = conn.execute(
+                "SELECT id FROM workday_assignments WHERE roster_day_id=? AND assignment_key=? AND assignment_state='open'",
+                (roster_day_id, assignment_key),
+            ).fetchone()
+            if not person or not position:
+                return False, "This position is no longer open.", roster_day_id
+            conn.execute(
+                """
+                UPDATE workday_assignments SET person_id=?,user_id=?,assignee_label=?,
+                    assignment_state='assigned',updated_at=? WHERE id=?
+                """,
+                (person_id, person["app_user_id"], person["canonical_display_name"], now, int(position["id"])),
+            )
+            conn.execute(
+                "UPDATE workday_open_position_applications SET status='accepted',reviewed_at=?,reviewed_by_user_id=?,admin_note=?,conflict_snapshot=?,updated_at=? WHERE id=?",
+                (now, reviewer_user_id, admin_note.strip()[:500], json.dumps(conflicts), now, application_id),
+            )
+            conn.execute(
+                """
+                UPDATE workday_open_position_applications SET status='declined',reviewed_at=?,
+                    reviewed_by_user_id=?,updated_at=?
+                WHERE roster_day_id=? AND assignment_key=? AND id!=? AND status='pending'
+                """,
+                (now, reviewer_user_id, now, roster_day_id, assignment_key, application_id),
+            )
+            event_type = "application_accepted_conflict_override" if conflicts else "application_accepted"
+            message = "Applicant assigned locally in Re-Deputy."
+        conn.execute(
+            "INSERT INTO workday_audit_events(roster_day_id,assignment_key,event_type,actor_user_id,crew_person_id,details,created_at) VALUES (?,?,?,?,?,?,?)",
+            (roster_day_id, assignment_key, event_type, reviewer_user_id, person_id, json.dumps({"application_id": application_id, "conflicts": conflicts}), now),
+        )
+    return True, message, roster_day_id
 
 
 def resolve_workday_snapshot_assignments(assignments: list[object]) -> list[dict[str, object]]:
@@ -5122,15 +6039,18 @@ def fetch_open_deputy_schedule_shifts(limit: int = 8) -> list[sqlite3.Row]:
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT *
-            FROM deputy_schedule_shifts
-            WHERE is_open = 1
-               OR TRIM(COALESCE(employee_name, '')) = ''
+            SELECT s.*,COALESCE(s.area_location_id,a.location_id) schedule_location_id,
+                   l.name location_name
+            FROM deputy_schedule_shifts s
+            LEFT JOIN deputy_schedule_areas a ON a.area_id=s.area_id
+            LEFT JOIN deputy_schedule_locations l ON l.location_id=COALESCE(s.area_location_id,a.location_id)
+            WHERE s.is_open = 1
+               OR TRIM(COALESCE(s.employee_name, '')) = ''
             ORDER BY
-                date ASC,
-                start_at ASC,
-                COALESCE(area_roster_sort_order, 999999),
-                area_name ASC
+                s.date ASC,
+                s.start_at ASC,
+                COALESCE(s.area_roster_sort_order, 999999),
+                s.area_name ASC
             LIMIT ?
             """,
             (limit,),
@@ -5142,18 +6062,21 @@ def fetch_open_deputy_schedule_between(start_date: str, end_date: str) -> list[s
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT *
-            FROM deputy_schedule_shifts
-            WHERE date BETWEEN ? AND ?
+            SELECT s.*,COALESCE(s.area_location_id,a.location_id) schedule_location_id,
+                   l.name location_name
+            FROM deputy_schedule_shifts s
+            LEFT JOIN deputy_schedule_areas a ON a.area_id=s.area_id
+            LEFT JOIN deputy_schedule_locations l ON l.location_id=COALESCE(s.area_location_id,a.location_id)
+            WHERE s.date BETWEEN ? AND ?
               AND (
-                is_open = 1
-                OR TRIM(COALESCE(employee_name, '')) = ''
+                s.is_open = 1
+                OR TRIM(COALESCE(s.employee_name, '')) = ''
               )
             ORDER BY
-                date ASC,
-                start_at ASC,
-                COALESCE(area_roster_sort_order, 999999),
-                area_name ASC
+                s.date ASC,
+                s.start_at ASC,
+                COALESCE(s.area_roster_sort_order, 999999),
+                s.area_name ASC
             """,
             (start_date, end_date),
         ).fetchall()
@@ -5654,9 +6577,12 @@ def _event_person_identity(
             """
             SELECT DISTINCT p.id, p.canonical_display_name
             FROM crew_people p
-            LEFT JOIN crew_aliases a ON a.crew_person_id = p.id AND a.is_active = 1
+            LEFT JOIN crew_aliases a ON a.person_id = p.id
             WHERE p.is_active = 1
-              AND (p.normalized_name = ? OR a.normalized_alias = ?)
+              AND (
+                REPLACE(REPLACE(LOWER(p.canonical_display_name),'-',''),' ','') = ?
+                OR a.normalized_alias = ?
+              )
             """,
             (name_key, name_key),
         ).fetchall()

@@ -94,6 +94,11 @@ from .database import (
     list_known_place_labels,
     list_crew_work_location_labels,
     list_crew_people,
+    list_crew_teams,
+    list_crew_vehicles,
+    list_location_team_mappings,
+    list_open_workday_positions,
+    crew_picker_records,
     crew_identity_records,
     crew_link_change_preview,
     identity_link_diagnostics,
@@ -109,6 +114,10 @@ from .database import (
     purge_app_user,
     purge_old_inactive_records,
     publish_roster_day,
+    apply_for_open_workday_position,
+    withdraw_open_workday_application,
+    review_open_workday_application,
+    workday_assignment_conflicts,
     merge_crew_people,
     reconcile_authenticated_identities,
     resolve_workday_snapshot_assignments,
@@ -121,6 +130,11 @@ from .database import (
     set_user_event_self_travel,
     save_roster_day,
     save_workday_role,
+    save_crew_team,
+    set_crew_person_team,
+    set_location_primary_team,
+    save_crew_vehicle,
+    get_default_team_id,
     upsert_travel_time_default,
     delete_travel_time_default,
     update_travel_time_default,
@@ -189,7 +203,7 @@ from .public_holidays import holiday_for_date
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.09.1"
+APP_BUILD = "2026.08.10.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -2643,6 +2657,7 @@ def roster_day_snapshot(roster_day: dict[str, object], assignments: list[dict[st
         "provenance": str(roster_day.get("provenance") or "manual"),
         "linked_deputy_event_id": str(roster_day.get("linked_deputy_event_id") or ""),
         "duplicate_resolution": str(roster_day.get("duplicate_resolution") or "keep_separate"),
+        "team_id": int(roster_day["team_id"]) if roster_day.get("team_id") not in (None, "") else None,
         "hotel_assignments": parse_hotel_assignments(roster_day.get("hotel_assignments")),
         "assignments": [
             {
@@ -2653,8 +2668,12 @@ def roster_day_snapshot(roster_day: dict[str, object], assignments: list[dict[st
                 "role_label": str(item.get("role_label") or item.get("position_label") or ""),
                 "position_label": str(item.get("role_label") or item.get("position_label") or ""),
                 "assignment_state": str(item.get("assignment_state") or "assigned"),
+                "assignment_key": str(item.get("assignment_key") or ""),
                 "transport_mode": str(item.get("transport_mode") or "unassigned"),
+                "vehicle_id": int(item["vehicle_id"]) if item.get("vehicle_id") not in (None, "") else None,
                 "vehicle_label": str(item.get("vehicle_label") or ""),
+                "eligible_team_id": int(item["eligible_team_id"]) if item.get("eligible_team_id") not in (None, "") else None,
+                "eligible_all_teams": bool(item.get("eligible_all_teams")),
                 "custom_transport_text": str(item.get("custom_transport_text") or ""),
                 "transport_label": transport_display(
                     item.get("transport_mode"), item.get("vehicle_label"), item.get("custom_transport_text")
@@ -2698,6 +2717,9 @@ def roster_day_change_review(current: dict[str, object], published: dict[str, ob
             "new": str(current.get(key) if current.get(key) not in (None, "") else "Not set"),
         })
     def assignment_identity(item: dict[str, object], index: int) -> str:
+        stable_key = str(item.get("assignment_key") or "").strip()
+        if stable_key:
+            return stable_key
         person = item.get("person_id") or item.get("user_id") or normalise_role_key(item.get("assignee_label"))
         role = item.get("role_key") or normalise_role_key(item.get("role_label") or item.get("position_label"))
         return f"{item.get('assignment_state', 'assigned')}:{person}:{role}:{index if not person and not role else ''}"
@@ -4028,24 +4050,52 @@ def deputy_schedule_label_for_shifts(base_label: str, shifts: list[dict[str, obj
     return f"{base_label} - {', '.join(labels)}"
 
 
-def open_schedule_by_date(start_date: str, end_date: str) -> dict[str, list[dict[str, object]]]:
+def open_schedule_by_date(
+    start_date: str, end_date: str, *, app_user_id: int | None = None,
+    include_all_manual: bool = False,
+) -> dict[str, list[dict[str, object]]]:
     by_date: dict[str, list[dict[str, object]]] = {}
+    location_teams = list_location_team_mappings()
     for row in fetch_open_deputy_schedule_between(start_date, end_date):
         item = decorate_schedule_row(row)
         if schedule_area_is_hidden(str(item.get("area_display") or "")):
             continue
+        item["source_kind"] = "deputy_open_shift"
+        item["source_label"] = "Deputy open shift"
+        mapping = location_teams.get(calendar_location_key(item.get("location_name") or ""), {})
+        item["team_classification_id"] = mapping.get("primary_team_id")
+        item["team_classification_label"] = mapping.get("team_name") or "Unclassified"
+        by_date.setdefault(str(item.get("date") or ""), []).append(item)
+    for item in list_open_workday_positions(
+        start_date,
+        end_date,
+        app_user_id=app_user_id,
+        include_all_for_admin=include_all_manual,
+    ):
         by_date.setdefault(str(item.get("date") or ""), []).append(item)
     return by_date
 
 
-def visible_open_schedule_shifts(limit: int = 8) -> list[dict[str, object]]:
+def visible_open_schedule_shifts(limit: int = 8, *, app_user_id: int | None = None) -> list[dict[str, object]]:
     shifts = []
+    location_teams = list_location_team_mappings()
     for row in fetch_open_deputy_schedule_shifts(limit=limit):
         item = decorate_schedule_row(row)
         if schedule_area_is_hidden(str(item.get("area_display") or "")):
             continue
+        item["source_kind"] = "deputy_open_shift"
+        item["source_label"] = "Deputy open shift"
+        mapping = location_teams.get(calendar_location_key(item.get("location_name") or ""), {})
+        item["team_classification_id"] = mapping.get("primary_team_id")
+        item["team_classification_label"] = mapping.get("team_name") or "Unclassified"
         shifts.append(item)
-    return shifts
+    today = datetime.now(get_settings().timezone).date()
+    manual = list_open_workday_positions(
+        today.isoformat(),
+        (today + timedelta(days=90)).isoformat(),
+        app_user_id=app_user_id,
+    )
+    return sorted(shifts + manual, key=lambda item: (str(item.get("date") or ""), str(item.get("office_start") or item.get("start_at") or "")))[:limit]
 
 
 def location_compare_key(*values: object) -> str:
@@ -5295,6 +5345,16 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
     if row is None and planning_id_text.isdigit():
         planning_seed_row = get_love_racing_planning_meeting(int(planning_id_text))
         planning_seed = dict(planning_seed_row) if planning_seed_row is not None else None
+    teams = list_crew_teams(include_inactive=True)
+    default_team_id = get_default_team_id()
+    location_team_mappings = list_location_team_mappings()
+    seed_location_key = calendar_location_key((planning_seed or {}).get("racecourse") or "")
+    mapped_seed_team_id = (
+        int(location_team_mappings[seed_location_key]["primary_team_id"])
+        if seed_location_key in location_team_mappings
+        and location_team_mappings[seed_location_key].get("primary_team_id") is not None
+        else None
+    )
     roster_day = dict(row) if row else {
         "id": 0,
         "roster_date": str((planning_seed or {}).get("meeting_date") or datetime.now(settings.timezone).date().isoformat()),
@@ -5319,6 +5379,7 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
         "provenance": "manual",
         "linked_deputy_event_id": "",
         "duplicate_resolution": "keep_separate",
+        "team_id": mapped_seed_team_id if planning_seed else default_team_id,
         "hotel_assignments": "[]",
         "status": "draft",
         "published_snapshot": "",
@@ -5327,7 +5388,6 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
     assignments = [dict(item) for item in get_roster_day_assignments(int(roster_day["id"]))] if roster_day.get("id") else []
     hotel_assignments = parse_hotel_assignments(roster_day.get("hotel_assignments"))
     hotel_rows = hotel_assignments + [{} for _index in range(max(1, 3 - len(hotel_assignments)))]
-    area_names = list_roster_builder_area_names()
     role_rows = [dict(item) for item in list_workday_roles(include_disabled=True)]
     if not assignments and not row:
         assignments = [
@@ -5368,21 +5428,13 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
     current_snapshot = roster_day_snapshot(roster_day, assignments)
     published_snapshot = parse_roster_snapshot(roster_day.get("published_snapshot"))
     changes, changed_fields, changed_positions = roster_day_change_review(current_snapshot, published_snapshot)
-    directory_people = [person for person in list_crew_people() if int(person.get("is_active") or 0)]
-    crew_options = [
-        {
-            "value": f"person:{person['id']}",
-            "label": str(person.get("canonical_display_name") or "Crew"),
-            "user_id": person.get("app_user_id"),
-            "person_id": person.get("id"),
-            "meta": (
-                f"Deputy #{person['deputy_employee_id']} · "
-                + ("App account linked" if person.get("app_user_id") else "No app login")
-                if person.get("deputy_employee_id") else ("App account linked" if person.get("app_user_id") else "Crew identity")
-            ),
-        }
-        for person in directory_people
-    ]
+    selected_team_id = int(roster_day["team_id"]) if roster_day.get("team_id") not in (None, "") else None
+    selected_team_label = next(
+        (str(team.get("display_name") or "") for team in teams if int(team.get("id") or 0) == selected_team_id),
+        "Selected team",
+    )
+    crew_options = crew_picker_records(selected_team_id)
+    vehicle_catalogue = list_crew_vehicles(include_inactive=True)
     duplicate_candidates = []
     candidate_location_key = calendar_location_key(
         roster_day.get("custom_location") or roster_day.get("track_label") or ""
@@ -5416,7 +5468,18 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
             )
             previous_version_snapshot = version_snapshot
         version_history.reverse()
-    assigned_rows = [item for item in assignments if str(item.get("assignment_state") or "assigned") != "open"]
+    assigned_rows = [item for item in assignments if str(item.get("assignment_state") or "assigned") == "assigned"]
+    open_position_rows = []
+    if roster_day.get("id"):
+        open_position_rows = [
+            item for item in list_open_workday_positions(
+                str(roster_day.get("roster_date") or ""),
+                str(roster_day.get("roster_date") or ""),
+                app_user_id=int(user["id"]),
+                include_all_for_admin=True,
+            )
+            if int(item.get("roster_day_id") or 0) == int(roster_day["id"])
+        ]
     review_summary = {
         "assigned_count": len(assigned_rows),
         "roleless_count": sum(1 for item in assigned_rows if not str(item.get("role_label") or item.get("position_label") or "").strip()),
@@ -5445,9 +5508,14 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
             "roster_day": roster_day,
             "assignment_rows": assignment_rows,
             "hotel_rows": hotel_rows,
-            "vehicles": roster_builder_vehicles(area_names),
+            "vehicles": [item for item in vehicle_catalogue if int(item.get("active") or 0)],
+            "vehicle_catalogue": vehicle_catalogue,
             "users": [dict(item) for item in list_app_users() if int(item["is_active"] or 0)],
             "crew_options": crew_options,
+            "teams": teams,
+            "selected_team_id": selected_team_id,
+            "selected_team_label": selected_team_label,
+            "open_position_rows": open_position_rows,
             "track_options": track_options,
             "advanced_track_options": advanced_track_options,
             "place_options": list_known_place_labels(),
@@ -5490,6 +5558,11 @@ def admin_page_context(
         today)
     planning_locations = list_planning_locations()
     location_rows = admin_location_rows(planning_locations, travel_defaults)
+    location_team_mappings = list_location_team_mappings()
+    for location in location_rows:
+        mapping = location_team_mappings.get(calendar_location_key(location.get("location_key") or location.get("display_name") or ""), {})
+        location["primary_team_id"] = mapping.get("primary_team_id")
+        location["primary_team_name"] = mapping.get("team_name")
     track_map_data = track_map_admin_data()
     override_rows = []
     for row in list_admin_overrides():
@@ -5555,6 +5628,10 @@ def admin_page_context(
         "travel_routes": [dict(row) for row in list_travel_routes()],
         "known_places": list_known_place_labels(),
         "crew_people": canonical_people,
+        "crew_picker_people": crew_picker_records(),
+        "crew_teams": list_crew_teams(include_inactive=True),
+        "crew_vehicles": list_crew_vehicles(include_inactive=True),
+        "location_team_mappings": location_team_mappings,
         "linked_crew_people": [item for item in canonical_people if int(item.get("is_active") or 0) and item.get("app_user_id")],
         "unlinked_crew_people": [item for item in canonical_people if int(item.get("is_active") or 0) and not item.get("app_user_id")],
         "merged_crew_people": [item for item in all_crew_people if item.get("merged_into_person_id") is not None],
@@ -5959,7 +6036,9 @@ def month_view(
     grid_end = month_weeks[-1][-1].isoformat()
     rows = [] if global_view else fetch_shifts_between(grid_start, grid_end, owner_user_id=owner_user_id)
     schedule_role_rows = fetch_deputy_schedule_between(grid_start, grid_end)
-    open_shifts_by_date = {} if global_view else open_schedule_by_date(grid_start, grid_end)
+    open_shifts_by_date = {} if global_view else open_schedule_by_date(
+        grid_start, grid_end, app_user_id=owner_user_id,
+    )
     manual_rosters_by_date = published_rosters_by_date(
         grid_start,
         grid_end,
@@ -6390,7 +6469,9 @@ def day_view(
     enrich_shifts_with_love_racing(shifts, date_text, date_text)
 
 
-    open_shifts = open_schedule_by_date(date_text, date_text).get(date_text, [])
+    open_shifts = open_schedule_by_date(
+        date_text, date_text, app_user_id=owner_user_id,
+    ).get(date_text, [])
     planning_meetings = love_racing_by_date(
         date_text,
         date_text,
@@ -6679,6 +6760,73 @@ async def admin_save_workday_role(request: Request) -> RedirectResponse:
     return RedirectResponse(url=notice_url(return_path, message), status_code=303)
 
 
+@app.post("/admin/teams/save")
+async def admin_save_crew_team(request: Request) -> RedirectResponse:
+    user = require_admin_user(request)
+    form = await request.form()
+    team_id_text = str(form.get("team_id") or "").strip()
+    order_text = str(form.get("sort_order") or "1000").strip()
+    ok, message, _team_id = save_crew_team(
+        team_id=int(team_id_text) if team_id_text.isdigit() else None,
+        display_name=str(form.get("display_name") or ""),
+        active=str(form.get("active") or "") == "1",
+        sort_order=int(order_text) if order_text.lstrip("-").isdigit() else 1000,
+        actor_user_id=int(user["id"]),
+    )
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/teams/{team_id}/members")
+async def admin_save_team_member(request: Request, team_id: int) -> RedirectResponse:
+    user = require_admin_user(request)
+    form = await request.form()
+    person_text = str(form.get("crew_person_id") or "").strip()
+    if not person_text.isdigit():
+        return RedirectResponse(url=notice_url("/admin", "Choose a crew member."), status_code=303)
+    ok, message = set_crew_person_team(
+        person_id=int(person_text),
+        team_id=team_id,
+        active=str(form.get("action") or "add") != "remove",
+        is_primary=str(form.get("is_primary") or "") == "1",
+        actor_user_id=int(user["id"]),
+    )
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/vehicles/save")
+async def admin_save_crew_vehicle(request: Request) -> RedirectResponse:
+    user = require_admin_user(request)
+    form = await request.form()
+    vehicle_id_text = str(form.get("vehicle_id") or "").strip()
+    team_id_text = str(form.get("team_id") or "").strip()
+    order_text = str(form.get("sort_order") or "1000").strip()
+    ok, message, _vehicle_id = save_crew_vehicle(
+        vehicle_id=int(vehicle_id_text) if vehicle_id_text.isdigit() else None,
+        display_label=str(form.get("display_label") or ""),
+        aliases=[value.strip() for value in str(form.get("aliases") or "").split(",") if value.strip()],
+        active=str(form.get("active") or "") == "1",
+        sort_order=int(order_text) if order_text.lstrip("-").isdigit() else 1000,
+        team_id=int(team_id_text) if team_id_text.isdigit() else None,
+        notes=str(form.get("notes") or ""),
+        actor_user_id=int(user["id"]),
+    )
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/location-team")
+async def admin_save_location_team(request: Request) -> RedirectResponse:
+    user = require_admin_user(request)
+    form = await request.form()
+    team_id_text = str(form.get("team_id") or "").strip()
+    ok = set_location_primary_team(
+        location_key=str(form.get("location_key") or ""),
+        location_label=str(form.get("location_label") or ""),
+        team_id=int(team_id_text) if team_id_text.isdigit() else None,
+        actor_user_id=int(user["id"]),
+    )
+    return RedirectResponse(url=notice_url("/admin", "Location team saved." if ok else "Location team could not be saved."), status_code=303)
+
+
 @app.post("/admin/roster-days/save")
 async def admin_save_roster_day(request: Request) -> RedirectResponse:
     user = require_admin_user(request)
@@ -6736,9 +6884,14 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
     role_labels = list(form.getlist("role_label")) or list(form.getlist("position_label"))
     role_keys = list(form.getlist("role_key"))
     assignees = list(form.getlist("assignee"))
+    assignment_keys = list(form.getlist("assignment_key"))
     assignment_states = list(form.getlist("assignment_state"))
     transport_modes = list(form.getlist("transport_mode"))
+    vehicle_ids = list(form.getlist("vehicle_id"))
     vehicles = list(form.getlist("vehicle_label"))
+    eligible_team_ids = list(form.getlist("eligible_team_id"))
+    eligible_all_teams = list(form.getlist("eligible_all_teams"))
+    allow_multiple_rows = list(form.getlist("allow_multiple_roles"))
     custom_transports = list(form.getlist("custom_transport_text"))
     assignment_notes = list(form.getlist("assignment_note"))
     save_roles = set(str(value) for value in form.getlist("save_role_index"))
@@ -6755,12 +6908,16 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
             role_aliases[normalise_role_key(alias)] = role_key
     assignments: list[dict[str, object]] = []
     seen_person_roles: set[tuple[int, str]] = set()
+    seen_people: dict[int, str] = {}
     for index, role_value in enumerate(role_labels):
         role_label = str(role_value or "").strip()[:100]
         submitted_role_key = str(role_keys[index] if index < len(role_keys) else "").strip()
         assignee = str(assignees[index] if index < len(assignees) else "").strip()
+        assignment_key = str(assignment_keys[index] if index < len(assignment_keys) else "").strip()[:80]
         state = str(assignment_states[index] if index < len(assignment_states) else "assigned").strip()
-        state = "open" if state == "open" else "assigned"
+        state = state if state in {"assigned", "open", "tbc", "unused"} else "assigned"
+        if state == "unused":
+            continue
         transport_mode = str(
             transport_modes[index]
             if index < len(transport_modes)
@@ -6769,11 +6926,17 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
         if transport_mode not in TRANSPORT_LABELS:
             transport_mode = "unassigned"
         vehicle = str(vehicles[index] if index < len(vehicles) else "").strip()
+        vehicle_id_text = str(vehicle_ids[index] if index < len(vehicle_ids) else "").strip()
+        vehicle_id = int(vehicle_id_text) if vehicle_id_text.isdigit() else None
+        eligible_team_text = str(eligible_team_ids[index] if index < len(eligible_team_ids) else "").strip()
+        eligible_team_id = int(eligible_team_text) if eligible_team_text.isdigit() else None
+        eligible_all = str(eligible_all_teams[index] if index < len(eligible_all_teams) else "0") == "1"
+        allow_multiple = str(allow_multiple_rows[index] if index < len(allow_multiple_rows) else "0") == "1"
         custom_transport = str(custom_transports[index] if index < len(custom_transports) else "").strip()[:200]
         assignment_note = str(assignment_notes[index] if index < len(assignment_notes) else "").strip()[:500]
-        if state == "open" and not role_label:
+        if state in {"open", "tbc"} and not role_label:
             continue
-        if state != "open" and not assignee:
+        if state == "assigned" and not assignee:
             continue
         user_id = int(assignee) if assignee.isdigit() and int(assignee) in active_users else None
         if user_id is not None:
@@ -6781,16 +6944,23 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
         else:
             directory_person = directory_people.get(assignee)
         person_id = int(directory_person["id"]) if directory_person else None
-        if state != "open" and user_id is None and directory_person is None:
+        if state == "assigned" and user_id is None and directory_person is None:
             continue
         if directory_person and user_id is None and directory_person.get("app_user_id") in active_users:
             user_id = int(directory_person["app_user_id"])
         role_key = canonical_role_key(submitted_role_key or role_label, role_aliases) if role_label else ""
-        if state != "open" and person_id is not None:
+        if state == "assigned" and person_id is not None:
             identity_key = (person_id, role_key)
             if identity_key in seen_person_roles:
                 continue
             seen_person_roles.add(identity_key)
+            if person_id in seen_people and not allow_multiple:
+                target = f"/admin/roster-days/{roster_day_id}" if roster_day_id else "/admin/roster-days/new"
+                return RedirectResponse(
+                    url=notice_url(target, f"{directory_person.get('canonical_display_name') or 'That crew member'} is already assigned to {seen_people[person_id] or 'another position'}. Choose Keep both deliberately."),
+                    status_code=303,
+                )
+            seen_people.setdefault(person_id, role_label)
         if role_label and str(index) in save_roles:
             save_workday_role(
                 role_key=role_key,
@@ -6799,7 +6969,13 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
                 display_order=1000 + index,
                 is_active=True,
             )
+        if state != "assigned":
+            transport_mode = "unassigned"
+            vehicle_id = None
+            vehicle = ""
+            custom_transport = ""
         if transport_mode != "vehicle":
+            vehicle_id = None
             vehicle = ""
         if transport_mode != "custom":
             custom_transport = ""
@@ -6807,21 +6983,27 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
             "person_id": person_id,
             "user_id": user_id,
             "assignee_label": (
-                "TBC" if state == "open"
+                "TBC" if state in {"open", "tbc"}
                 else str(active_users[user_id].get("display_name") or active_users[user_id].get("deputy_email") or "Crew") if user_id is not None
                 else str(directory_person.get("canonical_display_name") or "Crew")
             ),
             "role_key": role_key,
             "role_label": role_label,
             "assignment_state": state,
+            "assignment_key": assignment_key,
             "transport_mode": transport_mode,
+            "vehicle_id": vehicle_id,
             "vehicle_key": normalise_role_key(vehicle),
             "vehicle_label": vehicle,
             "custom_transport_text": custom_transport,
             "assignment_note": assignment_note,
+            "eligible_team_id": eligible_team_id,
+            "eligible_all_teams": eligible_all,
             "sort_order": index,
         })
     track_key, clean_track_label = canonical_travel_track(track_label, track_label)
+    team_id_text = str(form.get("team_id") or "").strip()
+    team_id = int(team_id_text) if team_id_text.isdigit() else None
     saved_id = save_roster_day(
         roster_day_id=roster_day_id,
         roster_date=roster_date,
@@ -6846,6 +7028,7 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
         provenance="manual",
         linked_deputy_event_id=str(form.get("linked_deputy_event_id") or "").strip()[:200],
         duplicate_resolution=str(form.get("duplicate_resolution") or "keep_separate")[:30],
+        team_id=team_id,
         updated_by_user_id=int(user["id"]),
         assignments=assignments,
     )
@@ -6874,6 +7057,57 @@ def admin_publish_roster_day(request: Request, roster_day_id: int) -> RedirectRe
     snapshot = roster_day_snapshot(dict(row), assignments)
     version = publish_roster_day(roster_day_id, json.dumps(snapshot, separators=(",", ":")), int(user["id"]))
     return RedirectResponse(url=notice_url(f"/admin/roster-days/{roster_day_id}", f"Roster version {version} published to assigned crew."), status_code=303)
+
+
+@app.post("/workdays/{roster_day_id}/positions/{assignment_key}/apply")
+def apply_for_workday_position(request: Request, roster_day_id: int, assignment_key: str) -> RedirectResponse:
+    user = current_user(request)
+    if not user or user.get("id") is None:
+        return RedirectResponse(url="/login", status_code=303)
+    ok, message, _application_id = apply_for_open_workday_position(
+        roster_day_id=roster_day_id,
+        assignment_key=assignment_key,
+        app_user_id=int(user["id"]),
+    )
+    row = get_roster_day(roster_day_id)
+    target_date = str(row["roster_date"] or "") if row else ""
+    return RedirectResponse(url=notice_url(f"/day/{target_date}" if target_date else "/month", message), status_code=303)
+
+
+@app.post("/workdays/{roster_day_id}/positions/{assignment_key}/withdraw")
+def withdraw_workday_position_application(request: Request, roster_day_id: int, assignment_key: str) -> RedirectResponse:
+    user = current_user(request)
+    if not user or user.get("id") is None:
+        return RedirectResponse(url="/login", status_code=303)
+    ok, message = withdraw_open_workday_application(
+        roster_day_id=roster_day_id,
+        assignment_key=assignment_key,
+        app_user_id=int(user["id"]),
+    )
+    row = get_roster_day(roster_day_id)
+    target_date = str(row["roster_date"] or "") if row else ""
+    return RedirectResponse(url=notice_url(f"/day/{target_date}" if target_date else "/month", message), status_code=303)
+
+
+@app.post("/admin/workday-applications/{application_id}/review")
+async def admin_review_workday_application(request: Request, application_id: int) -> RedirectResponse:
+    user = require_admin_user(request)
+    form = await request.form()
+    ok, message, roster_day_id = review_open_workday_application(
+        application_id=application_id,
+        action=str(form.get("action") or ""),
+        reviewer_user_id=int(user["id"]),
+        override_conflict=str(form.get("override_conflict") or "") == "1",
+        admin_note=str(form.get("admin_note") or ""),
+    )
+    if ok and roster_day_id is not None:
+        row = get_roster_day(roster_day_id)
+        if row is not None and str(row["published_snapshot"] or "").strip():
+            assignments = [dict(item) for item in get_roster_day_assignments(roster_day_id)]
+            snapshot = roster_day_snapshot(dict(row), assignments)
+            publish_roster_day(roster_day_id, json.dumps(snapshot, separators=(",", ":")), int(user["id"]))
+    target = f"/admin/roster-days/{roster_day_id}?mode=review" if roster_day_id else "/admin"
+    return RedirectResponse(url=notice_url(target, message), status_code=303)
 
 
 @app.post("/day/{date_text}/mark-viewed")
@@ -7019,7 +7253,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "deputy_schedule_snapshot": schedule_snapshot,
             "roster_snapshot": roster_snapshot,
             "roster_insights": roster_insights,
-            "open_schedule_shifts": visible_open_schedule_shifts(),
+            "open_schedule_shifts": visible_open_schedule_shifts(app_user_id=owner_user_id),
             "theme_groups": THEME_GROUPS,
             "current_theme": current_theme,
             "current_theme_label": THEME_LABELS.get(current_theme, "Jade dark"),

@@ -100,7 +100,7 @@
               {% for person in crew_rows %}
                 <div class="crew-roster-row{% if not person.role_label and not person.position_label %} is-placeholder{% endif %}" role="row">
                   <span role="cell">{{ person.role_label or person.position_label or 'Attending' }}</span>
-                  <strong role="cell">{{ 'TBC' if person.assignment_state == 'open' else person.assignee_label }}</strong>
+                  <strong role="cell">{% if person.assignment_state == 'open' %}Open position{% elif person.assignment_state == 'tbc' %}TBC{% else %}{{ person.assignee_label }}{% endif %}</strong>
                   <span role="cell">{{ person.transport_label or person.vehicle_label or 'TBC' }}</span>
                 </div>
                 {% if person.assignment_note %}<p class="manual-assignment-note">{{ person.assignee_label or person.role_label }} · {{ person.assignment_note }}</p>{% endif %}
@@ -156,9 +156,21 @@
         {% for open_shift in open_shifts %}
           <article class="open-shift-row">
             <strong>{{ open_shift.date|datetime("%a %d %b") if open_shift.date else date_text }}</strong>
+            {% if open_shift.location_label %}<span>{{ open_shift.location_label }}</span>{% endif %}
             <span>{{ open_shift.area_display }}</span>
             <span>{{ open_shift.time_range or "Time TBC" }}</span>
-            <span>{{ open_shift.status_label or "Open" }}</span>
+            <span>{{ open_shift.source_label or open_shift.status_label or "Open" }}</span>
+            {% if open_shift.source_kind == 'manual_open_position' %}
+              {% if open_shift.own_application and open_shift.own_application.status == 'pending' %}
+                <span class="badge">Application sent</span><form action="/workdays/{{ open_shift.roster_day_id }}/positions/{{ open_shift.assignment_key }}/withdraw" method="post"><button class="button button-secondary button-compact" type="submit">Withdraw application</button></form>
+              {% elif open_shift.own_application and open_shift.own_application.status == 'accepted' %}
+                <span class="badge">Assigned</span>
+              {% elif open_shift.can_apply %}
+                <form action="/workdays/{{ open_shift.roster_day_id }}/positions/{{ open_shift.assignment_key }}/apply" method="post"><button class="button button-compact" type="submit">Apply</button></form>
+              {% elif open_shift.conflicts %}
+                <span class="badge badge-warn">{{ open_shift.conflicts[0].message }}</span>
+              {% endif %}
+            {% endif %}
           </article>
         {% endfor %}
       </div>

@@ -42,11 +42,14 @@ python scripts\smoke_workday_builder.py
 python scripts\smoke_workday_responsive.py
 python scripts\smoke_identity_reconciliation.py
 python scripts\smoke_self_travel.py
+python scripts\smoke_crew_teams_applications.py
 ```
 
 The Admin override smoke covers legacy-row migration, field/value normalization, active precedence, historical days, immediate recalculation, replacement, disable fallback, canonical venue scope, and Changed-badge isolation. For deployed-data migration confidence, run `init_db()` against a disposable database copy only; never point migration tests at the live file.
 
 The identity reconciliation smoke covers employee-ID account linking, conservative conflicting-evidence review, Jayden/Alf/Nate duplicate retirement, already-correct links, trusted-device preservation, historical redirects, the 6 August Office Day across personal/global/day/Next Up/timesheet views, Admin transfer/merge confirmation, merge audit/idempotency, builder deduplication, and visibility gained by linking an account after publication.
+
+The crew/team/application smoke covers Campbell/Cambo and Otm685/Alf canonical search, team priority and cross-team search, Open versus TBC, team eligibility, idempotent self-only applications, overlap and unknown-time conflicts, local acceptance/visibility, vehicle aliases, and zero Deputy writes. The responsive builder smoke exercises keyboard person/vehicle search and picker bounds at 1280, 430, 375, and 320 pixels.
 
 ## Manual App Checks
 
@@ -74,6 +77,9 @@ After Portainer redeploy:
 - Open `/admin/roster-days/new`, create an office day with a roleless attendee, save it privately, publish it, and confirm calendar, Next Up, day, weekly total, global view, and timesheet all agree.
 - Apply the Thoroughbred preset, remove RTS, add Gimbal and an explicit open Gimbal Assist row, then reopen the draft and confirm removed roles stay removed.
 - Confirm Making own way, No transport required, an assigned vehicle, and transport TBC remain visually distinct on phone and desktop.
+- Search `cambo` in Person and confirm only Campbell Stephens is shown. Select Open position and confirm it appears in Available/Open Shifts while a TBC row does not.
+- Apply from an eligible linked account, withdraw it, and have an admin accept a fresh application. Confirm conflicts block Apply and Deputy data is unchanged.
+- In Admin, add/remove a team member, change team order, add a vehicle alias, and confirm the builder still displays canonical person and vehicle labels.
 - Expand Travel day and hotels, assign two crew to different hotels, and confirm each published user sees only their own hotel.
 - Confirm FCR context, H-Cambridge, and Travel then Overnighter are absent from production positions.
 - In Settings, expand Your roster stats and confirm weekday cards show rostered hours and shift counts, today is excluded from completed totals, and the location-hours summary remains readable.

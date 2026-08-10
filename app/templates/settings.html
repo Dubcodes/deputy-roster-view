@@ -389,6 +389,7 @@
               <span>{{ shift.date|day_short }}</span>
               <strong>{{ shift.area_display }}</strong>
               <span>{{ shift.time_range or "Time TBC" }}</span>
+              <small>{{ shift.source_label or 'Deputy open shift' }}</small>
               {% if shift.changed %}
                 <span class="badge badge-warn">Changed</span>
               {% endif %}

@@ -189,3 +189,11 @@ The `Making my own way` choice is stored separately from Deputy and manual roste
 ## Review Before Publishing Manual Work
 
 Builder saves remain private drafts and now land on a compact read-only review. Editing and publishing are separate explicit actions. Love Racing can seed date, venue, and cached programme facts into a new draft, but cannot skip review or publication. Regular racecourse choices exclude operational Deputy labels; unusual source locations remain available in an advanced selector without being discarded.
+
+## Search Canonical Crew, Not Assignment Strings
+
+The builder uses a client-side combobox over server-produced safe search terms, then submits a canonical person ID. This keeps 60-plus crew fast on phones without making aliases, email, or account names part of roster identity. Northern Team results lead for the selected workday, but search always covers all active crew.
+
+## Keep Local Open Positions Separate From Deputy
+
+Open positions and their applications live beside manual workdays and use stable assignment keys. They share the existing Available/Open presentation but retain a subtle Re-Deputy source label. Conflict checks, review, acceptance, history, and visibility remain local. This gives the workflow a clean future notification event stream without introducing Deputy writeback.
