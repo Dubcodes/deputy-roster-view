@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Contractor access - Re-Deputy{% endblock %}
+{% block content %}
+<section class="login-shell"><article class="login-card">
+  <p class="eyebrow">Re-Deputy Contractor Access</p>
+  {% if invite and invite.consumed_at and not invite.revoked_at %}
+    <h1>{{ invite.canonical_display_name }}</h1><p>Enter your PIN to return to My work.</p>
+    <form method="post" class="settings-form"><label class="form-row"><span>PIN</span><input name="pin" type="password" inputmode="numeric" minlength="4" required></label><button class="button" type="submit">Log in</button></form>
+  {% elif invite and invite.available %}
+    <h1>{{ invite.canonical_display_name }}</h1>
+    <p>Choose a PIN for your restricted contractor account.</p>
+    <form method="post" class="settings-form">
+      <label class="form-row"><span>PIN</span><input name="pin" type="password" inputmode="numeric" minlength="4" required></label>
+      <label class="form-row"><span>Confirm PIN</span><input name="pin_confirm" type="password" inputmode="numeric" minlength="4" required></label>
+      <button class="button" type="submit">Activate access</button>
+    </form>
+  {% else %}<h1>Invite unavailable</h1><p>This invite is invalid, expired, revoked, or already used.</p>{% endif %}
+</article></section>
+{% endblock %}

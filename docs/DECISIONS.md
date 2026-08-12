@@ -209,4 +209,12 @@ Every eventual Deputy write must follow one identity chain: logged-in Re-Deputy
 account to that same person's authenticated Deputy identity to that same person's
 API credential. There is no shared or fallback credential path. Early write builds
 must use explicit confirmation and read-back status while the workflow is proven.
-This decision is architecture only; Deputy remains read-only.
+This remains the governing boundary. Build 2026.08.13.1 implements only the controlled, exact-host disposable-trial workflow described below; ordinary and production Deputy use remains read-only.
+# 2026.08.13.1 decisions
+
+- Production Deputy write mode is intentionally absent. The only enabled state is exact-host trial-only.
+- OAuth tokens belong to one app user and cannot be selected from, delegated to, or retried under another account.
+- Local stable assignment keys and persisted prepared operations are the idempotency boundary because Deputy exposes no reliable create idempotency key.
+- A linked Timesheet (`canEdit=false`, Timesheet ID, or MatchedByTimesheet) is a hard stop. No workaround is offered.
+- Historical Changed-time data is kept as evidence because its start/finish meaning is ambiguous; it is not guessed into the new personal fields.
+- Contractor identity remains the existing canonical crew person plus a restricted app account, never a second crew identity model.

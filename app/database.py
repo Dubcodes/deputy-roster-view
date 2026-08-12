@@ -76,6 +76,8 @@ def init_db(settings: Settings | None = None) -> None:
                 timing_adjustment_time TEXT,
                 timing_adjustment_last_race INTEGER DEFAULT 0,
                 timing_adjustment_day_finished INTEGER DEFAULT 0,
+                personal_start_time TEXT,
+                personal_finish_time TEXT,
                 updated_at TEXT,
                 FOREIGN KEY (shift_id) REFERENCES shifts(id) ON DELETE CASCADE
             );
@@ -123,6 +125,173 @@ def init_db(settings: Settings | None = None) -> None:
                 updated_at TEXT,
                 last_seen_at TEXT,
                 deactivated_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS app_role_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor_user_id INTEGER NOT NULL,
+                target_user_id INTEGER NOT NULL,
+                old_is_admin INTEGER NOT NULL,
+                new_is_admin INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (actor_user_id) REFERENCES app_users(id),
+                FOREIGN KEY (target_user_id) REFERENCES app_users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS contractor_invites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_hash TEXT NOT NULL UNIQUE,
+                crew_person_id INTEGER NOT NULL,
+                created_by_user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                revoked_at TEXT,
+                activated_user_id INTEGER,
+                FOREIGN KEY (crew_person_id) REFERENCES crew_people(id),
+                FOREIGN KEY (created_by_user_id) REFERENCES app_users(id),
+                FOREIGN KEY (activated_user_id) REFERENCES app_users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_oauth_config (
+                id INTEGER PRIMARY KEY CHECK (id=1),
+                client_id TEXT,
+                encrypted_client_secret TEXT,
+                authorize_path TEXT NOT NULL DEFAULT '/oauth/authorize',
+                token_path TEXT NOT NULL DEFAULT '/oauth/access_token',
+                write_mode TEXT NOT NULL DEFAULT 'off',
+                allowed_trial_hosts TEXT NOT NULL DEFAULT '[]',
+                updated_by_user_id INTEGER,
+                updated_at TEXT,
+                FOREIGN KEY (updated_by_user_id) REFERENCES app_users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_oauth_states (
+                state_hash TEXT PRIMARY KEY,
+                app_user_id INTEGER NOT NULL,
+                tenant_host TEXT NOT NULL,
+                redirect_origin TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                FOREIGN KEY (app_user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_oauth_connections (
+                app_user_id INTEGER PRIMARY KEY,
+                tenant_host TEXT NOT NULL,
+                deputy_user_id INTEGER NOT NULL,
+                deputy_employee_id INTEGER NOT NULL,
+                display_label TEXT,
+                encrypted_access_token TEXT NOT NULL,
+                encrypted_refresh_token TEXT,
+                token_expires_at TEXT,
+                permissions_json TEXT NOT NULL DEFAULT '[]',
+                permission_hash TEXT NOT NULL,
+                last_verified_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'connected',
+                unavailable_reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (app_user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_reference_employees (
+                app_user_id INTEGER NOT NULL,
+                tenant_host TEXT NOT NULL,
+                deputy_employee_id INTEGER NOT NULL,
+                deputy_user_id INTEGER,
+                display_name TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                last_observed_at TEXT NOT NULL,
+                PRIMARY KEY (app_user_id, tenant_host, deputy_employee_id),
+                FOREIGN KEY (app_user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_reference_units (
+                app_user_id INTEGER NOT NULL,
+                tenant_host TEXT NOT NULL,
+                deputy_unit_id INTEGER NOT NULL,
+                display_name TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                show_on_roster INTEGER NOT NULL DEFAULT 1,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                last_observed_at TEXT NOT NULL,
+                PRIMARY KEY (app_user_id, tenant_host, deputy_unit_id),
+                FOREIGN KEY (app_user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_person_mappings (
+                tenant_host TEXT NOT NULL,
+                crew_person_id INTEGER NOT NULL,
+                deputy_employee_id INTEGER NOT NULL,
+                updated_by_user_id INTEGER NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (tenant_host, crew_person_id),
+                UNIQUE (tenant_host, deputy_employee_id),
+                FOREIGN KEY (crew_person_id) REFERENCES crew_people(id),
+                FOREIGN KEY (updated_by_user_id) REFERENCES app_users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_unit_mappings (
+                tenant_host TEXT NOT NULL,
+                mapping_key TEXT NOT NULL,
+                context_type TEXT NOT NULL,
+                deputy_unit_id INTEGER NOT NULL,
+                updated_by_user_id INTEGER NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (tenant_host, mapping_key),
+                FOREIGN KEY (updated_by_user_id) REFERENCES app_users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_roster_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_host TEXT NOT NULL,
+                workday_id INTEGER NOT NULL,
+                stable_assignment_key TEXT NOT NULL,
+                crew_person_id INTEGER,
+                deputy_employee_id INTEGER NOT NULL,
+                deputy_unit_id INTEGER NOT NULL,
+                deputy_roster_id INTEGER,
+                context_type TEXT NOT NULL DEFAULT 'production',
+                ownership TEXT NOT NULL DEFAULT 'observed',
+                last_desired_hash TEXT,
+                last_verified_hash TEXT,
+                last_verified_state TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (tenant_host, stable_assignment_key),
+                FOREIGN KEY (workday_id) REFERENCES roster_days(id),
+                FOREIGN KEY (crew_person_id) REFERENCES crew_people(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_write_operations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                operation_uuid TEXT NOT NULL UNIQUE,
+                app_user_id INTEGER NOT NULL,
+                tenant_host TEXT NOT NULL,
+                deputy_user_id INTEGER NOT NULL,
+                deputy_employee_id INTEGER NOT NULL,
+                permission_hash TEXT NOT NULL,
+                permission_snapshot TEXT NOT NULL,
+                workday_id INTEGER,
+                stable_assignment_key TEXT NOT NULL,
+                operation_type TEXT NOT NULL,
+                desired_state TEXT NOT NULL,
+                before_state TEXT,
+                deputy_roster_id INTEGER,
+                attempt_number INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'prepared',
+                error_class TEXT,
+                sanitized_result TEXT,
+                readback_verified INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                sending_at TEXT,
+                completed_at TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (app_user_id) REFERENCES app_users(id),
+                FOREIGN KEY (workday_id) REFERENCES roster_days(id)
             );
 
             CREATE TABLE IF NOT EXISTS trusted_devices (
@@ -869,6 +1038,20 @@ def init_db(settings: Settings | None = None) -> None:
                 FOREIGN KEY (canonical_person_id) REFERENCES crew_people(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS user_event_time_overrides (
+                user_id INTEGER NOT NULL,
+                canonical_person_id INTEGER NOT NULL,
+                event_kind TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                event_date TEXT NOT NULL,
+                personal_start_time TEXT,
+                personal_finish_time TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id,event_kind,event_id),
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE,
+                FOREIGN KEY (canonical_person_id) REFERENCES crew_people(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS push_subscriptions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 app_user_id INTEGER NOT NULL,
@@ -1018,6 +1201,14 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "shift_marks", "timing_adjustment_time", "TEXT")
         _ensure_column(conn, "shift_marks", "timing_adjustment_last_race", "INTEGER DEFAULT 0")
         _ensure_column(conn, "shift_marks", "timing_adjustment_day_finished", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "shift_marks", "personal_start_time", "TEXT")
+        _ensure_column(conn, "shift_marks", "personal_finish_time", "TEXT")
+        _ensure_column(conn, "app_users", "account_type", "TEXT NOT NULL DEFAULT 'user'")
+        _ensure_column(conn, "app_users", "contractor_person_id", "INTEGER")
+        _ensure_column(conn, "app_users", "last_activity_at", "TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_contractor_invites_person ON contractor_invites(crew_person_id, expires_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_deputy_write_status ON deputy_write_operations(status, created_at DESC)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_deputy_active_assignment_operation ON deputy_write_operations(tenant_host, stable_assignment_key) WHERE status IN ('prepared','sending','unknown')")
         _ensure_column(conn, "admin_overrides", "target_track_key", "TEXT")
         _ensure_column(conn, "admin_overrides", "field_key", "TEXT")
         _ensure_column(conn, "admin_overrides", "normalized_value", "TEXT")
@@ -2292,8 +2483,8 @@ def update_app_user_seen(user_id: int) -> None:
     now = datetime.now().isoformat(timespec="seconds")
     with get_connection() as conn:
         conn.execute(
-            "UPDATE app_users SET last_seen_at = ? WHERE id = ?",
-            (now, user_id),
+            "UPDATE app_users SET last_seen_at = ?, last_activity_at = CASE WHEN account_type='contractor' THEN ? ELSE last_activity_at END WHERE id = ?",
+            (now, now, user_id),
         )
 
 
@@ -2331,6 +2522,8 @@ def get_trusted_device(token_hash: str, now: str | None = None) -> sqlite3.Row |
                 u.display_theme,
                 u.is_admin,
                 u.is_active,
+                u.account_type,
+                u.contractor_person_id,
                 s.last_sync_at,
                 s.last_status,
                 s.last_message,
@@ -5798,6 +5991,7 @@ def fetch_shifts_between(
                    m.early_start, m.gear_needed, m.travel_needed, m.pay_check,
                    m.private_note, m.custom_colour, m.timing_adjustment_time,
                    m.timing_adjustment_last_race, m.timing_adjustment_day_finished,
+                   m.personal_start_time, m.personal_finish_time,
                    m.updated_at AS marks_updated_at
             FROM shifts s
             LEFT JOIN shift_marks m ON m.shift_id = s.id
@@ -5827,6 +6021,7 @@ def fetch_shift(shift_id: int, owner_user_id: int | None = None) -> sqlite3.Row 
                    m.early_start, m.gear_needed, m.travel_needed, m.pay_check,
                    m.private_note, m.custom_colour, m.timing_adjustment_time,
                    m.timing_adjustment_last_race, m.timing_adjustment_day_finished,
+                   m.personal_start_time, m.personal_finish_time,
                    m.updated_at AS marks_updated_at
             FROM shifts s
             LEFT JOIN shift_marks m ON m.shift_id = s.id
@@ -5836,6 +6031,23 @@ def fetch_shift(shift_id: int, owner_user_id: int | None = None) -> sqlite3.Row 
             params,
         ).fetchone()
     return row
+
+
+def fetch_user_time_overrides_between(user_id: int, start_date: str, end_date: str) -> list[dict[str, object]]:
+    with get_connection() as conn:
+        return [dict(row) for row in conn.execute("SELECT * FROM user_event_time_overrides WHERE user_id=? AND event_date BETWEEN ? AND ?", (user_id, start_date, end_date)).fetchall()]
+
+
+def set_user_event_personal_time(*, user_id: int, canonical_person_id: int, event_kind: str, event_id: str, event_date: str, personal_start_time: str, personal_finish_time: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_connection() as conn:
+        if not personal_start_time and not personal_finish_time:
+            conn.execute("DELETE FROM user_event_time_overrides WHERE user_id=? AND event_kind=? AND event_id=?", (user_id, event_kind, event_id))
+            return
+        conn.execute("""INSERT INTO user_event_time_overrides(user_id,canonical_person_id,event_kind,event_id,event_date,personal_start_time,personal_finish_time,updated_at)
+                      VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(user_id,event_kind,event_id) DO UPDATE SET canonical_person_id=excluded.canonical_person_id,
+                      event_date=excluded.event_date,personal_start_time=excluded.personal_start_time,personal_finish_time=excluded.personal_finish_time,updated_at=excluded.updated_at""",
+                     (user_id, canonical_person_id, event_kind, event_id, event_date, personal_start_time, personal_finish_time, now))
 
 
 def update_shift_marks(shift_id: int, values: dict[str, object], owner_user_id: int | None = None) -> bool:
@@ -5865,6 +6077,8 @@ def update_shift_marks(shift_id: int, values: dict[str, object], owner_user_id: 
                 timing_adjustment_time = ?,
                 timing_adjustment_last_race = ?,
                 timing_adjustment_day_finished = ?,
+                personal_start_time = ?,
+                personal_finish_time = ?,
                 updated_at = ?
             WHERE shift_id = ?
             """,
@@ -5882,6 +6096,8 @@ def update_shift_marks(shift_id: int, values: dict[str, object], owner_user_id: 
                 values.get("timing_adjustment_time", ""),
                 values.get("timing_adjustment_last_race", 0),
                 values.get("timing_adjustment_day_finished", 0),
+                values.get("personal_start_time", ""),
+                values.get("personal_finish_time", ""),
                 datetime.now().isoformat(timespec="seconds"),
                 shift_id,
             ),

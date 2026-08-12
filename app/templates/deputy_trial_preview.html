@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Deputy trial sync - Re-Deputy{% endblock %}
+{% block content %}
+<section class="page-heading compact-heading"><div><p class="eyebrow">Deputy writes · TRIAL ONLY</p><h1>Review Deputy trial changes</h1><p>{{ preview.tenant_host }}</p></div></section>
+<section class="settings-grid">
+  <article class="settings-panel"><span>CREATE</span><strong>{{ preview.counts.create }}</strong></article>
+  <article class="settings-panel"><span>UPDATE</span><strong>{{ preview.counts.update }}</strong></article>
+  <article class="settings-panel"><span>DELETE</span><strong>{{ preview.counts.delete }}</strong></article>
+  <article class="settings-panel"><span>UNCHANGED</span><strong>{{ preview.counts.unchanged }}</strong></article>
+  <article class="settings-panel"><span>LOCAL ONLY</span><strong>{{ preview.counts.local_only }}</strong></article>
+</section>
+<section class="table-panel"><h2>Dry preview</h2>
+{% for action in preview.actions %}<p><strong>{{ action.operation|upper }}</strong> · {{ action.role_label or action.assignment_key }} · Employee #{{ action.desired.employee }} · Area #{{ action.desired.area }} · {{ action.desired.start }}–{{ action.desired.end }}</p>{% endfor %}
+{% for action in preview.local_only %}<p><strong>LOCAL ONLY</strong> · {{ action.assignment_key }} · {{ action.reason }}</p>{% endfor %}
+</section>
+{% if preview.counts.create or preview.counts.update or preview.counts.delete %}<section class="table-panel"><h2>Monitored confirmation</h2><p>This can create, change, or delete Re-Deputy-owned assigned shifts only on <strong>{{ preview.tenant_host }}</strong>. Deputy deletes remove the roster; Re-Deputy retains the audited before-image. Production mode does not exist.</p>
+<form method="post" action="/admin/roster-days/{{ preview.workday_id }}/deputy-trial/execute" class="settings-form"><input type="hidden" name="tenant_host" value="{{ preview.tenant_host }}"><label class="form-row"><span>Type CONFIRM</span><input name="confirm" autocomplete="off" required></label><button class="button" type="submit">Execute monitored trial sync</button></form></section>{% endif %}
+{% if results %}<dialog open class="builder-duplicate-dialog"><div><h2>Deputy trial result</h2>{% for result in results %}<p><strong>{{ result.status|upper }}</strong> · operation {{ result.operation_uuid[:8] }}{% if result.roster_id %} · Roster #{{ result.roster_id }}{% endif %} · read-back {{ 'verified' if result.readback_verified else 'not verified' }}{% if result.message %}<br>{{ result.message }}{% endif %}</p>{% endfor %}<div class="dialog-actions"><a class="button" href="/admin/roster-days/{{ preview.workday_id }}">Close</a><a class="button button-secondary" href="/admin">View audit</a></div></div></dialog>{% endif %}
+{% endblock %}

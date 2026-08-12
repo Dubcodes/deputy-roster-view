@@ -46,10 +46,12 @@ from .database import (
     fetch_love_racing_meetings_between,
     fetch_love_racing_details_between,
     fetch_self_travel_preferences_between,
+    fetch_user_time_overrides_between,
     fetch_deputy_schedule_for_date,
     fetch_deputy_schedule_areas_for_locations,
     fetch_shifts_for_travel_learning,
     get_calendar_url,
+    get_connection,
     get_calendar_url_source,
     get_app_setting,
     get_deputy_user_secret,
@@ -130,6 +132,7 @@ from .database import (
     set_app_user_active,
     set_planning_location_enabled,
     set_user_event_self_travel,
+    set_user_event_personal_time,
     save_roster_day,
     save_workday_role,
     save_crew_team,
@@ -213,11 +216,37 @@ from .notifications import (
     save_notification_preferences,
 )
 from .push_identity import ensure_push_identity
+from .contractors import (
+    activate_invite,
+    authenticate_contractor_link,
+    contractor_admin_rows,
+    create_invite,
+    deactivate_inactive_contractors,
+    invite_details,
+    revoke_invite,
+)
+from .deputy_integration import (
+    begin_oauth,
+    build_trial_preview,
+    complete_oauth,
+    connection_status,
+    disconnect as disconnect_deputy_api,
+    execute_operation,
+    load_config as load_deputy_api_config,
+    mapping_snapshot,
+    prepare_operation,
+    refresh_references,
+    save_config as save_deputy_api_config,
+    save_person_mapping,
+    save_unit_mapping,
+    verify_readiness,
+    write_audit_summary,
+)
 
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.12.4"
+APP_BUILD = "2026.08.13.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -1740,7 +1769,7 @@ def shift_header_vehicle_label(segments: list[dict[str, str]]) -> str:
         role = str(segment.get("role") or "").strip()
         if role and role not in vehicles:
             vehicles.append(role)
-    return ", ".join(vehicles)
+    return canonical_vehicle_labels(", ".join(vehicles))
 
 
 def format_change_value(field_name: str, value: str | None) -> str:
@@ -2341,6 +2370,26 @@ def apply_timing_math(shift: dict[str, object]) -> None:
             "hours": roster_hours,
             "hours_label": roster_hours_label,
         }
+    personal_start = clean_time_value(str(shift.get("personal_start_time") or ""))
+    personal_finish = clean_time_value(str(shift.get("personal_finish_time") or ""))
+    normal_start = str(display_window["start_label"] or "")
+    normal_finish = str(display_window["end_label"] or "")
+    if personal_start:
+        display_window["start_label"] = personal_start
+    if personal_finish:
+        display_window["end_label"] = personal_finish
+    if personal_start or personal_finish:
+        display_window["source"] = "personal"
+        display_window["personal_override"] = True
+        effective_start = clean_time_value(str(display_window["start_label"] or ""))
+        effective_finish = clean_time_value(str(display_window["end_label"] or ""))
+        if effective_start and effective_finish:
+            start_minutes = int(effective_start[:2]) * 60 + int(effective_start[3:])
+            finish_minutes = int(effective_finish[:2]) * 60 + int(effective_finish[3:])
+            if finish_minutes < start_minutes:
+                finish_minutes += 24 * 60
+            display_window["hours"] = round((finish_minutes - start_minutes) / 60, 4)
+            display_window["hours_label"] = format_hours(display_window["hours"])
     display_time_range = (
         f"{display_window['start_label']}–{display_window['end_label']}"
         if display_window["start_label"] and display_window["end_label"]
@@ -2359,6 +2408,11 @@ def apply_timing_math(shift: dict[str, object]) -> None:
     shift["time_range"] = display_time_range
     shift["display_hours"] = display_window["hours"]
     shift["display_hours_label"] = display_window["hours_label"]
+    shift["personal_start_time"] = personal_start
+    shift["personal_finish_time"] = personal_finish
+    shift["personal_time_active"] = bool(personal_start or personal_finish)
+    shift["normal_start_label"] = normal_start
+    shift["normal_finish_label"] = normal_finish
     shift["timing_math"] = {
         "segments": segments,
         "start_label": roster_start_label,
@@ -2967,6 +3021,10 @@ def apply_schedule_self_travel(
 def published_rosters_by_date(start_date: str, end_date: str, user_id: int | None) -> dict[str, list[dict[str, object]]]:
     result: dict[str, list[dict[str, object]]] = {}
     self_travel_preferences = fetch_self_travel_preferences_between(start_date, end_date)
+    time_overrides = {
+        (str(item.get("event_kind") or ""), str(item.get("event_id") or "")): item
+        for item in (fetch_user_time_overrides_between(user_id, start_date, end_date) if user_id is not None else [])
+    }
     visible_ids = visible_workday_ids_for_user(start_date, end_date, user_id) if user_id is not None else None
     for row in fetch_published_roster_days_between(start_date, end_date):
         if visible_ids is not None and int(row["id"]) not in visible_ids:
@@ -3050,6 +3108,19 @@ def published_rosters_by_date(start_date: str, end_date: str, user_id: int | Non
         )
         item["effective_start_time"] = effective_personal_start(item, personal_assignment)
         item["hours"] = effective_personal_hours(item, personal_assignment, float(item["hours"] or 0))
+        personal_time = time_overrides.get(("manual_workday", str(item["id"])), {})
+        item["personal_start_time"] = clean_time_value(str(personal_time.get("personal_start_time") or ""))
+        item["personal_finish_time"] = clean_time_value(str(personal_time.get("personal_finish_time") or ""))
+        if item["personal_start_time"]:
+            item["effective_start_time"] = item["personal_start_time"]
+        if item["personal_finish_time"]:
+            item["display_end_time"] = item["personal_finish_time"]
+        item["personal_time_active"] = bool(item["personal_start_time"] or item["personal_finish_time"])
+        if item["effective_start_time"] and item["display_end_time"] and item["personal_time_active"]:
+            start_minutes = int(str(item["effective_start_time"])[:2]) * 60 + int(str(item["effective_start_time"])[3:5])
+            finish_minutes = int(str(item["display_end_time"])[:2]) * 60 + int(str(item["display_end_time"])[3:5])
+            if finish_minutes < start_minutes: finish_minutes += 24 * 60
+            item["hours"] = (finish_minutes - start_minutes) / 60
         item["hours_label"] = format_hours(item["hours"])
         item["time_range"] = f"{item.get('effective_start_time') or item.get('office_start') or 'Time TBC'}-{item.get('display_end_time') or 'TBC'}"
         result.setdefault(str(item.get("roster_date") or row["roster_date"]), []).append(item)
@@ -5401,6 +5472,7 @@ def on_startup() -> None:
     ensure_push_identity()
     migrate_existing_track_map_aliases()
     purge_old_inactive_records(days=30)
+    deactivate_inactive_contractors()
     reset_incomplete_user_syncs()
     start_scheduler()
 
@@ -5411,8 +5483,83 @@ def on_shutdown() -> None:
 
 
 @app.get("/")
-def home() -> RedirectResponse:
-    return RedirectResponse(url="/month", status_code=303)
+def home(request: Request) -> RedirectResponse:
+    user = current_user(request)
+    return RedirectResponse(url="/contractor" if user and user.get("account_type") == "contractor" else "/month", status_code=303)
+
+
+@app.get("/contractor/invite/{token}")
+def contractor_invite_view(request: Request, token: str, notice: str | None = None) -> object:
+    invite = invite_details(token)
+    return templates.TemplateResponse("contractor_invite.html", {"request": request, "notice": notice, "invite": invite, "token": token})
+
+
+@app.post("/contractor/invite/{token}")
+async def contractor_invite_activate(request: Request, token: str) -> RedirectResponse:
+    form = await request.form()
+    pin = str(form.get("pin") or "")
+    details = invite_details(token)
+    if details and details.get("consumed_at"):
+        try:
+            user = authenticate_contractor_link(token, pin)
+        except ValueError as exc:
+            return RedirectResponse(url=notice_url(f"/contractor/invite/{token}", str(exc)), status_code=303)
+        response = RedirectResponse(url="/contractor", status_code=303)
+        set_trusted_device_cookie(response, user, request)
+        return response
+    if pin != str(form.get("pin_confirm") or ""):
+        return RedirectResponse(url=notice_url(f"/contractor/invite/{token}", "PIN entries did not match."), status_code=303)
+    try:
+        user = activate_invite(token, pin)
+    except ValueError as exc:
+        return RedirectResponse(url=notice_url(f"/contractor/invite/{token}", str(exc)), status_code=303)
+    response = RedirectResponse(url="/contractor", status_code=303)
+    set_trusted_device_cookie(response, user, request)
+    return response
+
+
+@app.get("/contractor")
+def contractor_home(request: Request, notice: str | None = None) -> object:
+    user = current_user(request)
+    if not user or user.get("account_type") != "contractor":
+        raise HTTPException(status_code=403, detail="Contractor access required")
+    today = datetime.now(get_settings().timezone).date()
+    by_date = published_rosters_by_date(today.isoformat(), (today + timedelta(days=180)).isoformat(), int(user["id"]))
+    rows = [{"date": key, "assignments": value} for key, value in sorted(by_date.items()) if value]
+    return templates.TemplateResponse("contractor_home.html", {"request": request, "notice": notice, "current_user": user, "header_mode": "contractor", "workdays": rows})
+
+
+@app.post("/contractor/workdays/{roster_day_id}/personal-time")
+async def contractor_personal_time(request: Request, roster_day_id: int) -> RedirectResponse:
+    user = current_user(request); require_same_origin(request)
+    if not user or user.get("account_type") != "contractor":
+        raise HTTPException(status_code=403, detail="Contractor access required")
+    workday = get_roster_day(roster_day_id)
+    if workday is None:
+        raise HTTPException(status_code=404, detail="Workday not found")
+    date_text = str(workday["roster_date"] or "")
+    if roster_day_id not in visible_workday_ids_for_user(date_text, date_text, int(user["id"])):
+        raise HTTPException(status_code=403, detail="This workday is not assigned to you")
+    form = await request.form(); person_id = get_user_canonical_person_id(int(user["id"]))
+    if person_id is None: raise HTTPException(status_code=403, detail="Contractor crew link unavailable")
+    set_user_event_personal_time(user_id=int(user["id"]), canonical_person_id=person_id, event_kind="manual_workday", event_id=str(roster_day_id), event_date=date_text,
+                                 personal_start_time=clean_time_value(str(form.get("personal_start_time") or "")), personal_finish_time=clean_time_value(str(form.get("personal_finish_time") or "")))
+    return RedirectResponse(url=notice_url("/contractor", "Personal time saved."), status_code=303)
+
+
+@app.post("/contractor/workdays/{roster_day_id}/self-travel")
+async def contractor_self_travel(request: Request, roster_day_id: int) -> RedirectResponse:
+    user = current_user(request); require_same_origin(request)
+    if not user or user.get("account_type") != "contractor": raise HTTPException(status_code=403, detail="Contractor access required")
+    workday = get_roster_day(roster_day_id)
+    if workday is None: raise HTTPException(status_code=404, detail="Workday not found")
+    date_text = str(workday["roster_date"] or "")
+    if roster_day_id not in visible_workday_ids_for_user(date_text, date_text, int(user["id"])): raise HTTPException(status_code=403, detail="This workday is not assigned to you")
+    form = await request.form(); person_id = get_user_canonical_person_id(int(user["id"]))
+    if person_id is None: raise HTTPException(status_code=403, detail="Contractor crew link unavailable")
+    set_user_event_self_travel(user_id=int(user["id"]), canonical_person_id=person_id, event_kind="manual_workday", event_id=str(roster_day_id), event_date=date_text,
+                               location_key=calendar_location_key(workday["track_label"] or ""), self_travel=str(form.get("self_travel") or "") == "1")
+    return RedirectResponse(url=notice_url("/contractor", "Travel preference saved."), status_code=303)
 
 
 @app.get("/help")
@@ -5751,6 +5898,7 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
             "notice": notice,
             "header_mode": "settings",
             "current_user": user,
+            "deputy_trial_ready": bool(connection_status(int(user["id"])).get("ready")),
             "roster_day": roster_day,
             "assignment_rows": assignment_rows,
             "hotel_rows": hotel_rows,
@@ -5923,6 +6071,10 @@ def admin_page_context(
         ),
         "integrity": get_roster_integrity_diagnostics(),
         "notification_summary": notification_admin_summary(),
+        "contractors": contractor_admin_rows(),
+        "deputy_api_config": load_deputy_api_config(),
+        "deputy_write_audit": write_audit_summary(),
+        "deputy_mappings": mapping_snapshot(int(user["id"])),
     }
 
 
@@ -5941,6 +6093,108 @@ def admin_revoke_device(request: Request, user_id: int, device_id: int) -> Redir
     revoked = revoke_trusted_device_for_user(user_id, device_id)
     message = "Trusted device revoked." if revoked else "That device was already revoked or could not be found."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/users/{user_id}/role")
+async def admin_change_role(request: Request, user_id: int) -> RedirectResponse:
+    actor = require_admin_user(request)
+    require_same_origin(request)
+    form = await request.form()
+    make_admin = str(form.get("is_admin") or "") == "1"
+    target = get_app_user(user_id)
+    if target is None:
+        return RedirectResponse(url=notice_url("/admin", "User not found."), status_code=303)
+    if str(target["account_type"] or "user") == "contractor" and make_admin:
+        return RedirectResponse(url=notice_url("/admin", "Contractors cannot become Admins."), status_code=303)
+    if not make_admin and int(target["is_admin"] or 0) and count_active_admins(excluding_user_id=user_id) < 1:
+        return RedirectResponse(url=notice_url("/admin", "Keep at least one active Admin account."), status_code=303)
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        conn.execute("UPDATE app_users SET is_admin=?,updated_at=? WHERE id=? AND is_active=1", (1 if make_admin else 0, now, user_id))
+        conn.execute("INSERT INTO app_role_audit(actor_user_id,target_user_id,old_is_admin,new_is_admin,created_at) VALUES(?,?,?,?,?)",
+                     (int(actor["id"]), user_id, int(target["is_admin"] or 0), 1 if make_admin else 0, now))
+    return RedirectResponse(url=notice_url("/admin", "Admin permission updated."), status_code=303)
+
+
+@app.post("/admin/contractors/invites")
+async def admin_create_contractor_invite(request: Request) -> RedirectResponse:
+    actor = require_admin_user(request)
+    require_same_origin(request)
+    form = await request.form()
+    try:
+        invite = create_invite(int(form.get("person_id") or 0), int(actor["id"]))
+    except ValueError as exc:
+        return RedirectResponse(url=notice_url("/admin", str(exc)), status_code=303)
+    origin = str(request.base_url).rstrip("/")
+    return RedirectResponse(url=notice_url("/admin", f"Invite (copy now): {origin}/contractor/invite/{invite['token']}"), status_code=303)
+
+
+@app.post("/admin/contractors/invites/{invite_id}/revoke")
+def admin_revoke_contractor_invite(request: Request, invite_id: int) -> RedirectResponse:
+    require_admin_user(request); require_same_origin(request)
+    revoke_invite(invite_id)
+    return RedirectResponse(url=notice_url("/admin", "Contractor invite revoked."), status_code=303)
+
+
+@app.post("/admin/deputy-api/config")
+async def admin_save_deputy_api(request: Request) -> RedirectResponse:
+    actor = require_admin_user(request); require_same_origin(request)
+    form = await request.form()
+    try:
+        save_deputy_api_config(client_id=str(form.get("client_id") or ""), client_secret=str(form.get("client_secret") or ""),
+                               write_mode=str(form.get("write_mode") or "off"), allowed_hosts=str(form.get("allowed_hosts") or ""), actor_user_id=int(actor["id"]))
+    except ValueError as exc:
+        return RedirectResponse(url=notice_url("/admin", str(exc)), status_code=303)
+    return RedirectResponse(url=notice_url("/admin", "Deputy API configuration saved."), status_code=303)
+
+
+@app.post("/admin/deputy-api/person-mapping")
+async def admin_save_person_mapping(request: Request) -> RedirectResponse:
+    actor = require_admin_user(request); require_same_origin(request); form = await request.form()
+    try:
+        save_person_mapping(app_user_id=int(actor["id"]), crew_person_id=int(form.get("crew_person_id") or 0), deputy_employee_id=int(form.get("deputy_employee_id") or 0))
+        message = "Deputy employee mapping saved."
+    except (ValueError, PermissionError) as exc: message = str(exc)
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.post("/admin/deputy-api/unit-mapping")
+async def admin_save_unit_mapping(request: Request) -> RedirectResponse:
+    actor = require_admin_user(request); require_same_origin(request); form = await request.form()
+    try:
+        save_unit_mapping(app_user_id=int(actor["id"]), mapping_key=str(form.get("mapping_key") or ""), context_type=str(form.get("context_type") or "production_role"), deputy_unit_id=int(form.get("deputy_unit_id") or 0))
+        message = "Deputy Operational Unit mapping saved."
+    except (ValueError, PermissionError) as exc: message = str(exc)
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+
+
+@app.get("/admin/roster-days/{roster_day_id}/deputy-trial")
+def deputy_trial_preview_view(request: Request, roster_day_id: int, notice: str | None = None) -> object:
+    actor = require_admin_user(request)
+    try:
+        preview = build_trial_preview(int(actor["id"]), roster_day_id)
+    except (ValueError, PermissionError) as exc:
+        return RedirectResponse(url=notice_url(f"/admin/roster-days/{roster_day_id}", str(exc)), status_code=303)
+    return templates.TemplateResponse("deputy_trial_preview.html", {"request": request, "notice": notice, "current_user": actor, "header_mode": "settings", "preview": preview, "results": []})
+
+
+@app.post("/admin/roster-days/{roster_day_id}/deputy-trial/execute")
+async def deputy_trial_execute(request: Request, roster_day_id: int) -> object:
+    actor = require_admin_user(request); require_same_origin(request); form = await request.form()
+    preview = build_trial_preview(int(actor["id"]), roster_day_id)
+    if str(form.get("confirm") or "") != "CONFIRM" or str(form.get("tenant_host") or "") != str(preview["tenant_host"]):
+        raise HTTPException(status_code=400, detail="Monitored trial confirmation did not match.")
+    results = []
+    for action in preview["actions"]:
+        if action["operation"] not in {"create", "update", "delete"}: continue
+        prepared = prepare_operation(app_user_id=int(actor["id"]), workday_id=roster_day_id, assignment_key=str(action["assignment_key"]), operation_type=str(action["operation"]), desired=dict(action["desired"]), roster_id=action.get("roster_id"))
+        results.append(execute_operation(str(prepared["operation_uuid"]), int(actor["id"])))
+    verified_ids = [int(row["roster_id"]) for row in results if row.get("status") == "verified" and row.get("roster_id")]
+    verified_ids.extend(int(action["roster_id"]) for action in preview["actions"] if action["operation"] == "unchanged" and action.get("roster_id"))
+    if verified_ids:
+        prepared = prepare_operation(app_user_id=int(actor["id"]), workday_id=roster_day_id, assignment_key=f"publish:{roster_day_id}", operation_type="publish", desired={"roster_ids": verified_ids})
+        results.append(execute_operation(str(prepared["operation_uuid"]), int(actor["id"])))
+    return templates.TemplateResponse("deputy_trial_preview.html", {"request": request, "notice": None, "current_user": actor, "header_mode": "settings", "preview": preview, "results": results})
 
 
 @app.post("/admin/users/{user_id}/pin")
@@ -7509,6 +7763,8 @@ async def save_shift_marks(shift_id: int, request: Request) -> RedirectResponse:
     values["private_note"] = str(form.get("private_note") or "").strip()
     values["custom_colour"] = clean_colour(str(form.get("custom_colour") or ""))
     values["timing_adjustment_time"] = clean_time_value(str(form.get("timing_adjustment_time") or ""))
+    values["personal_start_time"] = clean_time_value(str(form.get("personal_start_time") or ""))
+    values["personal_finish_time"] = clean_time_value(str(form.get("personal_finish_time") or ""))
     values["timing_adjustment_last_race"] = 1 if form.get("timing_adjustment_last_race") else 0
     values["timing_adjustment_day_finished"] = 1 if form.get("timing_adjustment_day_finished") else 0
     update_shift_marks(shift_id, values, owner_user_id=owner_user_id)
@@ -7616,8 +7872,60 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "notification_status": notification_status(owner_user_id) if owner_user_id is not None else None,
             "push_available": bool(push_identity and push_identity.ready),
             "vapid_public_key": push_identity.public_key if push_identity and push_identity.ready else "",
+            "deputy_api_connection": connection_status(owner_user_id) if owner_user_id is not None else {"connected": False},
         },
     )
+
+
+@app.post("/settings/deputy-api/connect")
+async def settings_deputy_api_connect(request: Request) -> RedirectResponse:
+    require_same_origin(request)
+    user = current_user(request)
+    if not user or user.get("account_type") == "contractor":
+        raise HTTPException(status_code=403, detail="Deputy connection is unavailable")
+    form = await request.form()
+    try:
+        url = begin_oauth(app_user_id=int(user["id"]), tenant=str(form.get("tenant") or ""), origin=str(request.base_url))
+    except ValueError as exc:
+        return RedirectResponse(url=notice_url("/settings", str(exc)), status_code=303)
+    return RedirectResponse(url=url, status_code=303)
+
+
+@app.get("/settings/deputy-api/callback")
+def settings_deputy_api_callback(request: Request, state: str = "", code: str = "") -> RedirectResponse:
+    user = current_user(request)
+    if not user or user.get("account_type") == "contractor":
+        raise HTTPException(status_code=403, detail="Login required")
+    try:
+        complete_oauth(state=state, code=code, current_user_id=int(user["id"]))
+    except ValueError as exc:
+        return RedirectResponse(url=notice_url("/settings", str(exc)), status_code=303)
+    return RedirectResponse(url=notice_url("/settings", "Deputy API connected and identity verified."), status_code=303)
+
+
+@app.post("/settings/deputy-api/recheck")
+def settings_deputy_api_recheck(request: Request) -> RedirectResponse:
+    require_same_origin(request)
+    user = current_user(request)
+    if not user or user.get("account_type") == "contractor":
+        raise HTTPException(status_code=403, detail="Login required")
+    try:
+        verify_readiness(int(user["id"]), require_trial=False)
+        refresh_references(int(user["id"]))
+        message = "Deputy identity and roster access rechecked. Reference data refreshed."
+    except (ValueError, PermissionError) as exc:
+        message = str(exc)
+    return RedirectResponse(url=notice_url("/settings", message), status_code=303)
+
+
+@app.post("/settings/deputy-api/disconnect")
+def settings_deputy_api_disconnect(request: Request) -> RedirectResponse:
+    require_same_origin(request)
+    user = current_user(request)
+    if not user or user.get("account_type") == "contractor":
+        raise HTTPException(status_code=403, detail="Login required")
+    disconnect_deputy_api(int(user["id"]))
+    return RedirectResponse(url=notice_url("/settings", "Deputy API disconnected."), status_code=303)
 
 
 @app.post("/settings/notifications/preferences")

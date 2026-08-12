@@ -256,4 +256,10 @@ For race days, the app may show a cached or admin-uploaded 2D course map at the 
   Cross-user, shared-user, boss, developer, or fallback credentials are forbidden.
 - This invariant must be enforced server-side. Early write-enabled builds should
   conspicuously confirm the target, action, and Deputy account before execution,
-  then report read-back verification or failure. No write path exists today.
+  then report read-back verification or failure. Build 2026.08.13.1 supplies that path only for exact-host disposable trial tenants; production remains blocked.
+# Personal timing and Deputy authority (2026.08.13.1)
+
+- Explicit My start/My finish values independently override only the current user's effective presentation and notifications. Blank falls back through legitimate personal/workday timing, truck timing, Deputy/calculated timing, then TBC. Raw Deputy evidence and the historical Changed-time field are preserved.
+- Re-Deputy Admin authority is separate from Deputy authority. Every Deputy action uses the initiating app user's own encrypted OAuth connection; there is no shared or cross-user fallback.
+- `Employee.Id` is the canonical Deputy employee identity. `/me` `UserId` and `EmployeeId` are independently bound and checked. Supervisor was the lowest fully tested lab role, but readiness is based on `/me` capability (`Can_Roster_Manage`) and readable targets, not Employee.Role.
+- Only assigned real-person shifts can enter the trial write preview. TBC and Open Position remain local only. Weak legacy travel-note inference never generates a Deputy write.

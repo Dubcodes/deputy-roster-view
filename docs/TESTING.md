@@ -117,3 +117,10 @@ The route smoke also verifies that Office/Clow Place travel defaults collapse to
 The self-travel smoke confirms owner-only today/future authorization, stable identity linkage, reversible local overlay, preservation of a later roster vehicle update, append-only preference audit, and isolation from Deputy evidence and Changed state. The responsive builder smoke covers 1280px, 430px, 375px, and 320px widths.
 
 `python scripts\smoke_notifications.py` covers truck-time payloads, multiple devices, owner isolation, reminders, published-manual changes and cancellation, scheduled tests, deduplication, draft exclusion, open-position push filtering, and safe service-worker links.
+# 2026.08.13.1 focused checks
+
+`python scripts/smoke_release_integration.py` uses a disposable SQLite database and mocked Deputy HTTP. It covers idempotent migration, personal start/finish and notification payloads, hash-only contractor invites, activation/replay/expiry/revocation/PIN login, contractor route and own-day authorization, OAuth state hashing/replay, encrypted tokens/secrets, own-user readiness, one POST plus GET verification, durable Roster linking, and duplicate-create prevention.
+
+`python scripts/smoke_workday_responsive.py` checks August, September, and November 2026 at 375px and 320px, including first-row brand/actions, left-fluid second-row month navigation, overlap, and horizontal overflow.
+
+Automated tests never contact a live Deputy tenant. A real disposable trial smoke must be initiated by an Admin from a published workday, reviewed in the dry preview, and confirmed by typing `CONFIRM`; verify tenant, operation short ID, Roster ID, and read-back result in the popup and Admin audit.

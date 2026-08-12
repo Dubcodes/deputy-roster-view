@@ -116,6 +116,7 @@
       {% if incomplete_warnings %}
         <div class="notice builder-account-warning"><strong>Some information is still TBC</strong><p>{{ incomplete_warnings|join(' · ') }}</p><p class="muted">You may publish now and complete it later.</p></div>
       {% endif %}
+      {% if roster_day.id and roster_day.status in ['published', 'changes_pending'] and deputy_trial_ready %}<a class="button" href="/admin/roster-days/{{ roster_day.id }}/deputy-trial">Deputy trial sync</a>{% endif %}
       {% if vehicle_conflicts %}
         <div class="notice builder-account-warning"><strong>Vehicle conflicts need review</strong>{% for conflict in vehicle_conflicts %}<p><strong>{{ conflict.vehicle_label }} · {{ conflict.message }}</strong><br>{{ conflict.location_label }} · {{ conflict.time_range }}</p>{% endfor %}<p class="muted">These warnings are advisory; publish only when the reuse is intentional.</p></div>
       {% endif %}

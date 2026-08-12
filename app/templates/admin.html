@@ -49,6 +49,42 @@
     </div>
   </section>
 
+  <details class="table-panel">
+    <summary class="management-panel-summary"><span><strong>Deputy API</strong><small>Per-user OAuth · production writes unavailable</small></span><span>{% if deputy_api_config.write_mode == 'trial' %}Deputy writes · TRIAL ONLY{% else %}Writes off{% endif %}</span></summary>
+    <div class="management-panel-body">
+      <form class="settings-form" action="/admin/deputy-api/config" method="post">
+        <label class="form-row"><span>OAuth client ID</span><input name="client_id" value="{{ deputy_api_config.client_id or '' }}"></label>
+        <label class="form-row"><span>OAuth client secret</span><input type="password" name="client_secret" placeholder="{{ 'Configured — leave blank to keep' if deputy_api_config.client_secret_configured else 'Required to connect' }}"></label>
+        <label class="form-row"><span>Deputy writes</span><select name="write_mode"><option value="off">Off</option><option value="trial"{% if deputy_api_config.write_mode == 'trial' %} selected{% endif %}>Trial tenant only</option></select></label>
+        <label class="form-row"><span>Exact allowed trial hostnames</span><textarea name="allowed_hosts" rows="3">{{ deputy_api_config.allowed_trial_hosts|join('\n') }}</textarea></label>
+        <button class="button" type="submit">Save Deputy API configuration</button>
+      </form>
+      <p class="muted">Every action uses the initiating user's own encrypted OAuth connection. Re-Deputy Admin status does not grant Deputy authority.</p>
+      {% if deputy_mappings.host %}
+      <details><summary>Employee and Operational Unit mappings</summary>
+        <p class="muted">Mappings persist immutable Deputy IDs for {{ deputy_mappings.host }}. Refresh references from your Settings connection first.</p>
+        <form class="settings-form" action="/admin/deputy-api/person-mapping" method="post"><label class="form-row"><span>Canonical crew person</span><select name="crew_person_id" required>{% for person in deputy_mappings.people %}<option value="{{ person.id }}">{{ person.canonical_display_name }}</option>{% endfor %}</select></label><label class="form-row"><span>Deputy employee</span><select name="deputy_employee_id" required>{% for employee in deputy_mappings.employees if employee.active %}<option value="{{ employee.deputy_employee_id }}">#{{ employee.deputy_employee_id }} · {{ employee.display_name }}</option>{% endfor %}</select></label><button class="button button-secondary" type="submit">Save employee mapping</button></form>
+        <form class="settings-form" action="/admin/deputy-api/unit-mapping" method="post"><label class="form-row"><span>Re-Deputy role/context key</span><input name="mapping_key" placeholder="director" required></label><label class="form-row"><span>Classification</span><select name="context_type"><option value="production_role">Production role</option><option value="travel">Travel</option><option value="vehicle_context">Vehicle context</option><option value="generic">Generic</option></select></label><label class="form-row"><span>Deputy Operational Unit</span><select name="deputy_unit_id" required>{% for unit in deputy_mappings.units if unit.active %}<option value="{{ unit.deputy_unit_id }}">#{{ unit.deputy_unit_id }} · {{ unit.display_name }}</option>{% endfor %}</select></label><button class="button button-secondary" type="submit">Save Area mapping</button></form>
+      </details>
+      {% endif %}
+      <details><summary>Deputy writes · {{ deputy_write_audit.counts.get('verified', 0) }} verified · {{ deputy_write_audit.counts.get('unknown', 0) }} unknown · {{ deputy_write_audit.counts.get('locked', 0) }} locked</summary>
+        {% for operation in deputy_write_audit.rows %}<p><small>{{ operation.created_at|datetime }} · {{ operation.actor_name }} · {{ operation.tenant_host }} · {{ operation.operation_type }} · {{ operation.status }}{% if operation.deputy_roster_id %} · Roster #{{ operation.deputy_roster_id }}{% endif %} · read-back {{ 'yes' if operation.readback_verified else 'no' }}</small></p>{% else %}<p class="muted">No write operations.</p>{% endfor %}
+      </details>
+    </div>
+  </details>
+
+  <details class="table-panel">
+    <summary class="management-panel-summary"><span><strong>Contractors</strong><small>Restricted access linked to canonical crew</small></span><span>{{ contractors.accounts|length }} accounts</span></summary>
+    <div class="management-panel-body">
+      <form class="settings-form" action="/admin/contractors/invites" method="post">
+        <label class="form-row"><span>Existing crew person</span><select name="person_id" required><option value="">Select…</option>{% for person in unlinked_crew_people %}<option value="{{ person.id }}">{{ person.canonical_display_name }}</option>{% endfor %}{% for account in contractors.accounts %}<option value="{{ account.contractor_person_id }}">{{ account.display_name }} · replacement invite</option>{% endfor %}</select></label>
+        <button class="button" type="submit">Create contractor invite</button>
+      </form>
+      <p class="muted">Invite links expire after 7 days and are displayed once for copying. Only a hash is stored.</p>
+      {% for invite in contractors.invites %}<div class="admin-device-row"><span><strong>{{ invite.canonical_display_name }}</strong><small>{{ invite.created_at|datetime }} · expires {{ invite.expires_at|datetime }}{% if invite.consumed_at %} · consumed{% elif invite.revoked_at %} · revoked{% endif %}</small></span>{% if not invite.consumed_at and not invite.revoked_at %}<form action="/admin/contractors/invites/{{ invite.id }}/revoke" method="post"><button class="button button-secondary button-compact">Revoke</button></form>{% endif %}</div>{% endfor %}
+    </div>
+  </details>
+
   <section class="settings-grid">
     <article class="settings-panel">
       <span class="summary-label">Users</span>
@@ -854,6 +890,10 @@
             <section>
               <h3>Account</h3>
               <div class="admin-account-actions">
+                <form action="/admin/users/{{ user.id }}/role" method="post">
+                  <input type="hidden" name="is_admin" value="{{ 0 if user.is_admin else 1 }}">
+                  <button class="button button-secondary" type="submit" onclick="return confirm('{{ 'Remove Admin from' if user.is_admin else 'Grant Admin to' }} {{ user.display_name|e }}?');"{% if user.account_type == 'contractor' and not user.is_admin %} disabled{% endif %}>{{ 'Remove Admin' if user.is_admin else 'Grant Admin' }}</button>
+                </form>
                 <form action="/admin/users/{{ user.id }}/sync" method="post">
                   <button class="button button-secondary" type="submit">Sync This User</button>
                 </form>

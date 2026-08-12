@@ -232,3 +232,12 @@ The manual workday builder keeps its existing draft/version/publication boundary
 `crew_identity_search_terms` is rebuilt from canonical names, Deputy observations/history, aliases, linked account display names/email, and employee IDs. The Admin-only builder receives normalized safe search metadata, renders one canonical result per `crew_people.id`, and saves that ID. `crew_vehicles` provides stable vehicle IDs, aliases, ordering, optional team affinity, and discovered/admin provenance.
 
 `workday_open_position_applications` stores local applications against stable assignment keys. Eligibility and overlap are checked server-side from the authenticated account's canonical person. Acceptance updates only the manual assignment, republishes the Re-Deputy snapshot/visibility, and writes local audit events. No application path calls Deputy capture or write APIs.
+# Deputy OAuth, trial writes, and contractors (2026.08.13.1)
+
+`app/deputy_integration.py` owns exact HTTPS tenant normalization, encrypted installation OAuth configuration, one-time user-bound OAuth state, per-user encrypted tokens/refresh, `/me` identity and permission revalidation, paged Employee/OperationalUnit reference caches, ID-based mappings, durable assignment-to-Roster links, prepared operation records, per-assignment active locks, read-back verification, unknown-result reconciliation, Timesheet locks, and sanitized audit summaries. Only `off` and `trial` write modes exist; trial uses exact configured tenant hosts.
+
+The trial sync is deliberately separate from normal Re-Deputy publishing. It previews CREATE/UPDATE/UNCHANGED/LOCAL ONLY, requires an explicit monitored confirmation including the tenant, writes via v2 single-shift endpoints, and publishes verified IDs with legacy mode 4. Existing external/observed rosters are not adopted automatically. Deputy Open, confirmation mode 5, claims/offers, and Timesheets have no write path.
+
+`app/contractors.py` manages seven-day hash-only invites, one-time activation, PIN hashing, canonical-person linkage, restricted re-login, revocation, and 180-day inactivity deactivation. Middleware and route checks constrain contractor sessions to My work, logout, and their own assigned-day personal time/self-travel operations.
+
+The authoritative experimental evidence is retained in `DEPUTY_API_LAB_REPORT.md` and `DEPUTY_API_LAB_ROUND2.md`.

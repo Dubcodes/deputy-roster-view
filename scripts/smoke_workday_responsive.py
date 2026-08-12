@@ -59,7 +59,7 @@ def main() -> None:
             page.wait_for_url("**/month")
             for width in (375, 320):
                 page.set_viewport_size({"width": width, "height": 900})
-                for month, label in ((9, "September 2026"), (11, "November 2026")):
+                for month, label in ((8, "August 2026"), (9, "September 2026"), (11, "November 2026")):
                     page.goto(f"http://127.0.0.1:{port}/month?year=2026&month={month}")
                     page.wait_for_selector(".month-nav")
                     if page.locator(".month-nav strong").inner_text().strip() != label:
@@ -68,6 +68,17 @@ def main() -> None:
                         raise AssertionError("User/sync metadata remained duplicated in the site header.")
                     if page.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1"):
                         raise AssertionError(f"{label} header overflowed at {width}px.")
+                    brand_box = page.locator(".brand").bounding_box()
+                    actions_box = page.locator(".site-nav").bounding_box()
+                    month_box = page.locator(".month-nav").bounding_box()
+                    if not brand_box or not actions_box or not month_box:
+                        raise AssertionError(f"{label} header controls were missing at {width}px.")
+                    if abs(brand_box["y"] - actions_box["y"]) > 12 or actions_box["x"] <= brand_box["x"]:
+                        raise AssertionError(f"{label} brand/actions did not share the first row at {width}px.")
+                    if month_box["y"] < max(brand_box["y"] + brand_box["height"], actions_box["y"] + actions_box["height"]) - 2:
+                        raise AssertionError(f"{label} month navigation overlapped the first row at {width}px.")
+                    if month_box["x"] > width * .35:
+                        raise AssertionError(f"{label} month navigation remained rigidly viewport-centred at {width}px.")
             page.set_viewport_size({"width": 1280, "height": 900})
             init_db()
             with get_connection() as conn:

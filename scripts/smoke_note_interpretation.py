@@ -144,6 +144,8 @@ def main() -> None:
         raise AssertionError("Rendered Travel day retained unrelated generic schedule crew/history.")
     if "Rav91" not in crew_html or "684" not in crew_html:
         raise AssertionError("Rendered Travel cohort lost canonical note vehicles.")
+    if "Rav91, Rav" in crew_html:
+        raise AssertionError("Final rendered Travel cohort leaked the Rav alias beside canonical Rav91.")
     if "Todd" in crew_html or "Junior" in crew_html:
         raise AssertionError("Unresolved short names were guessed into the visible Travel cohort.")
     for raw_line in travel_note.splitlines():

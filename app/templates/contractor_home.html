@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}My work - Re-Deputy{% endblock %}
+{% block content %}
+<section class="page-heading compact-heading"><div><p class="eyebrow">Contractor</p><h1>My work</h1></div></section>
+{% for day in workdays %}
+{% for workday in day.assignments %}
+<article class="table-panel contractor-workday"><h2>{{ day.date }}</h2>
+  <div class="contractor-assignment"><strong>{{ workday.position_label or 'Assignment' }}</strong>
+    <span>{{ workday.location_label or workday.track_label or '' }}</span>
+    <span>{{ workday.effective_start_time or 'TBC' }}–{{ workday.display_end_time or 'TBC' }}{% if workday.hours_label %} · {{ workday.hours_label }}{% endif %}</span>
+    {% if workday.vehicle_label %}<small>{{ workday.vehicle_label }}</small>{% endif %}
+  </div>
+  <form class="settings-form" action="/contractor/workdays/{{ workday.id }}/personal-time" method="post">
+    <div class="personal-time-fields"><label><span>My start time</span><input type="time" name="personal_start_time" value="{{ workday.personal_start_time or '' }}"></label><label><span>My finish time</span><input type="time" name="personal_finish_time" value="{{ workday.personal_finish_time or '' }}"></label></div>
+    <button class="button button-secondary button-compact" type="submit">Save personal time</button><small>Personal and local only. Clear either field to use the normal time.</small>
+  </form>
+  <form action="/contractor/workdays/{{ workday.id }}/self-travel" method="post"><input type="hidden" name="self_travel" value="{{ 0 if workday.self_travel else 1 }}"><button class="button button-secondary button-compact" type="submit">{{ 'Use crew transport instead' if workday.self_travel else 'Making my own way' }}</button></form>
+</article>{% endfor %}
+{% else %}<div class="empty-state">No assigned workdays in the next six months.</div>{% endfor %}
+{% endblock %}

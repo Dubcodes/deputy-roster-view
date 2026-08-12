@@ -5219,6 +5219,11 @@ th {
   .site-header.has-month-nav .month-nav {
     grid-column: 1 / -1;
     grid-row: 2;
+    justify-self: start;
+    justify-content: flex-start;
+    width: auto;
+    max-width: 100%;
+    gap: 2px;
   }
 
   .site-header.has-month-nav .month-nav strong {
@@ -5231,6 +5236,20 @@ th {
     min-width: 34px;
     min-height: 34px;
   }
+}
+
+.personal-time-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .6rem;
+}
+.personal-time-fields label { display: grid; gap: .25rem; }
+.contractor-workday { margin-bottom: .75rem; }
+.contractor-assignment { display: grid; gap: .2rem; padding: .7rem 0; border-top: 1px solid var(--border); }
+@media (max-width: 360px) {
+  .personal-time-fields { grid-template-columns: 1fr; }
+  .site-header.has-month-nav { gap: 2px 6px; }
+  .site-header.has-month-nav .month-nav strong { min-width: 9ch; font-size: .9rem; }
 }
 
 .identity-diagnostic-list article {

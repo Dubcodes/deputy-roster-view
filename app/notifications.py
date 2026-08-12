@@ -363,14 +363,16 @@ def generate_due_notifications(now: datetime | None = None) -> dict[str, int]:
         _queue_manual_notifications(pref=pref, now=now, reminder_at=reminder_at, created=created)
         with get_connection() as conn:
             shifts = [dict(row) for row in conn.execute(
-                """SELECT * FROM shifts WHERE owner_user_id=? AND date BETWEEN ? AND ?
-                   AND (deleted_from_source=0 OR changed_since_viewed=1) ORDER BY start_at,id""",
+                """SELECT s.*,m.personal_start_time,m.personal_finish_time FROM shifts s
+                   LEFT JOIN shift_marks m ON m.shift_id=s.id
+                   WHERE s.owner_user_id=? AND s.date BETWEEN ? AND ?
+                   AND (s.deleted_from_source=0 OR s.changed_since_viewed=1) ORDER BY s.start_at,s.id""",
                 (user_id, (now.date() - timedelta(days=1)).isoformat(), (now.date() + timedelta(days=31)).isoformat()),
             ).fetchall()]
         for shift in shifts:
             event_date = date.fromisoformat(str(shift["date"]))
             location, role = _parse_deputy_title(str(shift.get("title") or ""))
-            start = str(shift.get("start_at") or "")[11:16]
+            start = str(shift.get("personal_start_time") or "") or str(shift.get("start_at") or "")[11:16]
             transport = _transport_from_source(str(shift.get("source_payload") or ""))
             title = _portable_title(event_date)
             body = " · ".join(value for value in (location, role, start, transport) if value)
@@ -390,7 +392,7 @@ def generate_due_notifications(now: datetime | None = None) -> dict[str, int]:
                 and not shift.get("deleted_from_source")
             )
             if pref.get("changes_enabled") and (int(shift.get("changed_since_viewed") or 0) or newly_assigned):
-                event_at = _local_datetime(shift.get("start_at"), settings)
+                event_at = datetime.combine(event_date, time.fromisoformat(start), settings.timezone) if start else _local_datetime(shift.get("start_at"), settings)
                 changed_at_value = _local_datetime(
                     shift.get("last_changed_at") or shift.get("first_seen_at") or shift.get("last_synced_at"), settings
                 )

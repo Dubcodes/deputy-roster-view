@@ -414,10 +414,16 @@
               <textarea name="private_note" rows="3">{{ shift.private_note or "" }}</textarea>
             </label>
 
-            <label class="form-row">
-              <span>Changed time</span>
-              <input type="time" name="timing_adjustment_time" value="{{ shift.timing_adjustment_time or '' }}">
-            </label>
+            <div class="form-row">
+              <span>Personal time</span>
+              <div class="personal-time-fields">
+                <label><span>My start time</span><input type="time" name="personal_start_time" value="{{ shift.personal_start_time or '' }}"></label>
+                <label><span>My finish time</span><input type="time" name="personal_finish_time" value="{{ shift.personal_finish_time or '' }}"></label>
+              </div>
+              <small class="muted">Personal only. Clear either field to return to the normal effective time.</small>
+              {% if shift.personal_time_active %}<span class="badge">Personal time</span>{% endif %}
+              <input type="hidden" name="timing_adjustment_time" value="{{ shift.timing_adjustment_time or '' }}">
+            </div>
 
             <div class="check-grid timing-checks">
               <label>

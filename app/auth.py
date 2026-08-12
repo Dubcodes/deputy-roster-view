@@ -27,6 +27,15 @@ PUBLIC_PATHS = {
 }
 PUBLIC_PREFIXES = (
     "/static/",
+    "/contractor/invite/",
+)
+
+CONTRACTOR_ALLOWED_PREFIXES = (
+    "/contractor",
+    "/logout",
+    "/static/",
+    "/manifest.webmanifest",
+    "/service-worker.js",
 )
 
 
@@ -74,6 +83,8 @@ async def trusted_device_middleware(
                 "display_theme": device["display_theme"],
                 "deputy_email": device["deputy_email"],
                 "is_admin": device["is_admin"],
+                "account_type": device["account_type"],
+                "contractor_person_id": device["contractor_person_id"],
                 "last_sync_at": device["last_sync_at"],
                 "last_sync_status": device["last_status"],
                 "last_sync_message": device["last_message"],
@@ -82,6 +93,8 @@ async def trusted_device_middleware(
             _add_sync_notice(request.state.current_user)
             update_trusted_device_seen(int(device["id"]), expires_at)
             update_app_user_seen(int(device["user_id"]))
+            if str(device["account_type"] or "user") == "contractor" and not any(path.startswith(prefix) for prefix in CONTRACTOR_ALLOWED_PREFIXES):
+                return RedirectResponse(url="/contractor", status_code=303)
             response = await call_next(request)
             response.set_cookie(
                 SESSION_COOKIE_NAME,
