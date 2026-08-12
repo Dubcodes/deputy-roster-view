@@ -510,8 +510,9 @@
   </section>
 
   <details class="table-panel management-panel">
-    <summary class="management-panel-summary"><span><strong>Notifications</strong><small>{{ notification_summary.enabled_users }} enabled users · {{ notification_summary.devices }} devices · {{ notification_summary.failed }} failed</small></span><span>Delivery diagnostics</span></summary>
+    <summary class="management-panel-summary"><span><strong>Notifications</strong><small>{{ notification_summary.enabled_users }} enabled users · {{ notification_summary.devices }} devices · {{ notification_summary.failed }} failed</small></span><span>{{ notification_summary.identity_status }}</span></summary>
     <p class="muted">Push endpoints and encryption keys remain hidden. Failed or expired devices are handled by the delivery worker.</p>
+    {% if notification_summary.identity_diagnostic %}<p class="notice-inline">{{ notification_summary.identity_diagnostic }}</p>{% endif %}
   </details>
   <details class="table-panel location-management-panel">
     <summary class="management-panel-summary">

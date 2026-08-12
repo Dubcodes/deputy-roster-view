@@ -26,7 +26,7 @@
         <details class="inline-settings-details notification-settings" data-notification-settings>
           <summary>Notifications <span>{% if notification_status.preferences.enabled and notification_status.active_devices %}On · {% if notification_status.preferences.night_before %}night before{% endif %}{% if notification_status.preferences.changes_enabled %} + changes{% endif %}{% else %}Not enabled{% endif %}</span></summary>
           {% if not push_available %}
-            <p class="notice-inline">Push delivery is not configured on this server yet.</p>
+            <p class="notice-inline">Notifications are temporarily unavailable.</p>
           {% else %}
             <div class="notification-device-status" data-push-status><strong>This device</strong><span>Checking notification support...</span></div>
             <div class="notification-device-actions">
@@ -536,7 +536,7 @@
       const enable = panel.querySelector('[data-enable-push]');
       const disable = panel.querySelector('[data-disable-push]');
       const form = panel.querySelector('[data-notification-preferences]');
-      const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+      const supported = window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
       const setStatus = (text) => { if (status) status.textContent = text; };
       const key = {{ vapid_public_key|tojson }};
       const decodeKey = (value) => {
@@ -555,6 +555,7 @@
         return result.subscription_id;
       };
       const check = async () => {
+        if (!window.isSecureContext) { setStatus('Notifications are not available from this connection. Open Re-Deputy using its secure HTTPS address.'); if (enable) enable.hidden = true; return; }
         if (!supported) { setStatus('Web Push is not available in this browser.'); if (enable) enable.hidden = true; return; }
         if (Notification.permission === 'denied') { setStatus('Permission blocked. Enable notifications in your device or browser settings.'); return; }
         const registration = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });

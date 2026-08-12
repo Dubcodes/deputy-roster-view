@@ -875,6 +875,7 @@ def init_db(settings: Settings | None = None) -> None:
                 endpoint TEXT NOT NULL UNIQUE,
                 p256dh TEXT NOT NULL,
                 auth TEXT NOT NULL,
+                app_origin TEXT NOT NULL DEFAULT '',
                 device_description TEXT,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
@@ -1098,6 +1099,7 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "track_maps", "manual_updated_at", "TEXT")
         _ensure_column(conn, "deputy_schedule_event_changes", "changed_since_viewed", "INTEGER DEFAULT 1")
         _ensure_column(conn, "deputy_schedule_event_changes", "change_category", "TEXT DEFAULT 'assignment_change'")
+        _ensure_column(conn, "push_subscriptions", "app_origin", "TEXT NOT NULL DEFAULT ''")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_location ON deputy_schedule_shifts(date, area_location_id)"
         )

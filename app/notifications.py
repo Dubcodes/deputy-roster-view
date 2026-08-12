@@ -9,6 +9,7 @@ from typing import Callable
 
 from .config import Settings, get_settings
 from .database import get_connection, list_open_workday_positions, resolve_workday_snapshot_assignments
+from .push_identity import ensure_push_identity
 from .workday_timing import effective_personal_start
 
 
@@ -56,11 +57,16 @@ def save_notification_preferences(user_id: int, values: dict[str, object]) -> No
         )
 
 
-def register_push_subscription(user_id: int, subscription: dict[str, object], description: str = "") -> int:
+def register_push_subscription(
+    user_id: int,
+    subscription: dict[str, object],
+    description: str = "",
+    app_origin: str = "",
+) -> int:
     endpoint = str(subscription.get("endpoint") or "").strip()
     keys = subscription.get("keys") if isinstance(subscription.get("keys"), dict) else {}
     p256dh, auth = str(keys.get("p256dh") or ""), str(keys.get("auth") or "")
-    if not endpoint.startswith("https://") or not p256dh or not auth:
+    if not endpoint.startswith("https://") or not p256dh or not auth or not app_origin.startswith("https://"):
         raise ValueError("A valid Web Push subscription is required.")
     now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
     with get_connection() as conn:
@@ -71,12 +77,15 @@ def register_push_subscription(user_id: int, subscription: dict[str, object], de
             raise ValueError("This push subscription belongs to another account.")
         conn.execute(
             """
-            INSERT INTO push_subscriptions(app_user_id,endpoint,p256dh,auth,device_description,active,created_at,updated_at)
-            VALUES (?,?,?,?,?,1,?,?)
+            INSERT INTO push_subscriptions(app_user_id,endpoint,p256dh,auth,app_origin,device_description,active,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,1,?,?)
             ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh,
-                auth=excluded.auth,device_description=excluded.device_description,active=1,revoked_at=NULL,updated_at=excluded.updated_at
+                auth=excluded.auth,app_origin=CASE
+                    WHEN excluded.app_origin LIKE 'https://%' THEN excluded.app_origin
+                    ELSE push_subscriptions.app_origin
+                END,device_description=excluded.device_description,active=1,revoked_at=NULL,updated_at=excluded.updated_at
             """,
-            (user_id, endpoint, p256dh, auth, description[:240], now, now),
+            (user_id, endpoint, p256dh, auth, app_origin, description[:240], now, now),
         )
         row = conn.execute("SELECT id FROM push_subscriptions WHERE endpoint=? AND app_user_id=?", (endpoint, user_id)).fetchone()
     if not row:
@@ -422,11 +431,14 @@ def generate_due_notifications(now: datetime | None = None) -> dict[str, int]:
 
 def _webpush_send(subscription: dict[str, object], payload: str, settings: Settings) -> None:
     from pywebpush import webpush
+    identity = ensure_push_identity()
+    if not identity.ready:
+        raise RuntimeError("Push identity unavailable")
     webpush(
         subscription_info={"endpoint": subscription["endpoint"], "keys": {"p256dh": subscription["p256dh"], "auth": subscription["auth"]}},
         data=payload,
-        vapid_private_key=settings.vapid_private_key,
-        vapid_claims={"sub": settings.vapid_subject},
+        vapid_private_key=identity.private_key_path,
+        vapid_claims={"sub": subscription["app_origin"]},
         ttl=86400,
     )
 
@@ -436,7 +448,7 @@ def deliver_due_notifications(now: datetime | None = None,
     settings = get_settings()
     now = (now or datetime.now(settings.timezone)).astimezone(settings.timezone).replace(microsecond=0)
     result = {"events": 0, "delivered": 0, "failed": 0}
-    if not settings.vapid_private_key or not settings.vapid_public_key:
+    if not ensure_push_identity().ready:
         return result
     sender = sender or _webpush_send
     with get_connection() as conn:
@@ -495,11 +507,18 @@ def notification_status(user_id: int) -> dict[str, object]:
     return {"preferences": prefs, "devices": devices, "active_devices": sum(int(d.get("active") or 0) for d in devices), "last_test": dict(last_test) if last_test else None}
 
 
-def notification_admin_summary() -> dict[str, int]:
+def notification_admin_summary() -> dict[str, object]:
+    identity = ensure_push_identity()
     with get_connection() as conn:
         row = conn.execute("""
             SELECT (SELECT COUNT(*) FROM notification_preferences WHERE enabled=1) enabled_users,
                    (SELECT COUNT(*) FROM push_subscriptions WHERE active=1) devices,
                    (SELECT COUNT(*) FROM notification_events WHERE status='failed') failed
         """).fetchone()
-    return dict(row) if row else {"enabled_users": 0, "devices": 0, "failed": 0}
+    summary = dict(row) if row else {"enabled_users": 0, "devices": 0, "failed": 0}
+    summary.update({
+        "identity_ready": identity.ready,
+        "identity_status": "Push identity ready" if identity.ready else "Push identity unavailable",
+        "identity_diagnostic": identity.diagnostic,
+    })
+    return summary

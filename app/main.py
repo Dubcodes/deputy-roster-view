@@ -209,11 +209,12 @@ from .notifications import (
     run_notification_pass,
     save_notification_preferences,
 )
+from .push_identity import ensure_push_identity
 
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.12.1"
+APP_BUILD = "2026.08.12.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -630,12 +631,45 @@ def require_same_origin(request: Request) -> None:
     if request.headers.get("sec-fetch-site", "same-origin") == "cross-site":
         raise HTTPException(status_code=403, detail="Cross-site request rejected")
     origin = request.headers.get("origin", "").strip()
-    allowed_hosts = {request.url.netloc}
-    public_url = get_settings().public_app_url
-    if public_url:
-        allowed_hosts.add(urlsplit(public_url).netloc)
-    if origin and urlsplit(origin).netloc not in allowed_hosts:
+    parsed = urlsplit(origin)
+    try:
+        origin_port = parsed.port
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Cross-site request rejected") from exc
+    if origin and (
+        not parsed.hostname
+        or parsed.hostname.lower() != str(request.url.hostname or "").lower()
+        or (origin_port is not None and request.url.port is not None and origin_port != request.url.port)
+    ):
         raise HTTPException(status_code=403, detail="Cross-site request rejected")
+
+
+def authenticated_https_origin(request: Request) -> str:
+    origin = request.headers.get("origin", "").strip()
+    parsed = urlsplit(origin)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Notifications require a valid HTTPS origin") from exc
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.hostname.lower() != str(request.url.hostname or "").lower()
+        or (port is not None and request.url.port is not None and port != request.url.port)
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Notifications are not available from this connection. Open Re-Deputy using its secure HTTPS address.",
+        )
+    host = parsed.hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"https://{host}{f':{port}' if port is not None else ''}"
 
 
 def parse_iso_datetime(value: str | None) -> datetime | None:
@@ -5226,6 +5260,7 @@ def credential_save_failed_response(path: str, user_id: int | None, exc: Excepti
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    ensure_push_identity()
     migrate_existing_track_map_aliases()
     purge_old_inactive_records(days=30)
     reset_incomplete_user_syncs()
@@ -7361,6 +7396,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             str(next_shift_display["date"]),
         )
         apply_saved_schedule_role_context([next_shift_display])
+    push_identity = ensure_push_identity() if owner_user_id is not None else None
     return templates.TemplateResponse(
         "settings.html",
         {
@@ -7398,8 +7434,8 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "current_theme": current_theme,
             "current_theme_label": THEME_LABELS.get(current_theme, "Jade dark"),
             "notification_status": notification_status(owner_user_id) if owner_user_id is not None else None,
-            "push_available": bool(settings.vapid_public_key and settings.vapid_private_key),
-            "vapid_public_key": settings.vapid_public_key,
+            "push_available": bool(push_identity and push_identity.ready),
+            "vapid_public_key": push_identity.public_key if push_identity and push_identity.ready else "",
         },
     )
 
@@ -7433,7 +7469,10 @@ async def add_push_subscription(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Push subscription is missing")
     try:
         subscription_id = register_push_subscription(
-            int(user["id"]), subscription, request.headers.get("user-agent", "")
+            int(user["id"]),
+            subscription,
+            request.headers.get("user-agent", ""),
+            authenticated_https_origin(request),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

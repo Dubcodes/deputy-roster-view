@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sys
 import tempfile
+import types
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -14,15 +16,14 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 def main() -> None:
     sys.path.insert(0, str(ROOT_DIR))
     temp_dir = Path(tempfile.mkdtemp(prefix="redeputy-notifications-"))
+    for name in ("PUBLIC_APP_URL", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"):
+        os.environ.pop(name, None)
     os.environ.update(
         DATA_DIR=str(temp_dir),
         DB_PATH=str(temp_dir / "notifications.sqlite3"),
         APP_SECRET_KEY="notification-smoke-secret",
         SIGNUP_ENABLED="true",
         COOKIE_SECURE="false",
-        VAPID_PUBLIC_KEY="fixture-public-key",
-        VAPID_PRIVATE_KEY="fixture-private-key",
-        VAPID_SUBJECT="mailto:notifications@example.com",
     )
 
     from fastapi.testclient import TestClient
@@ -34,18 +35,35 @@ def main() -> None:
         compact_push_payload,
         deliver_due_notifications,
         generate_due_notifications,
+        notification_status,
         notification_preferences,
         push_open_position_eligible,
         queue_notification,
         queue_test_notification,
         register_push_subscription,
         save_notification_preferences,
+        _webpush_send,
     )
+    from app.push_identity import PRIVATE_KEY_FILE, ensure_push_identity
     from app.security import encrypt_text, hash_pin
     from app.workday_timing import effective_personal_hours, effective_personal_start
 
     init_db()
-    client = TestClient(app)
+    first_identity = ensure_push_identity()
+    second_identity = ensure_push_identity()
+    if not first_identity.ready or first_identity.public_key != second_identity.public_key:
+        raise AssertionError("The generated push identity did not persist across initialization.")
+    decoded_public_key = base64.urlsafe_b64decode(first_identity.public_key + "==")
+    if len(decoded_public_key) != 65 or decoded_public_key[0] != 4:
+        raise AssertionError("The generated VAPID public key is not an uncompressed P-256 key.")
+    private_key_text = (temp_dir / PRIVATE_KEY_FILE).read_text(encoding="ascii")
+    if "PRIVATE KEY" not in private_key_text:
+        raise AssertionError("The generated VAPID private key was not persisted in the data directory.")
+    init_db()
+    if ensure_push_identity().public_key != first_identity.public_key:
+        raise AssertionError("A repeat migration regenerated the VAPID identity.")
+
+    client = TestClient(app, base_url="https://deputyreviewer.example")
     signup = client.post(
         "/signup",
         data={
@@ -89,11 +107,12 @@ def main() -> None:
         "endpoint": f"https://push.example/{suffix}",
         "keys": {"p256dh": f"p256-{suffix}", "auth": f"auth-{suffix}"},
     }
-    first_id = register_push_subscription(owner_id, endpoint("owner-one"), "Phone")
-    second_id = register_push_subscription(owner_id, endpoint("owner-two"), "Laptop")
-    other_subscription_id = register_push_subscription(other_id, endpoint("other"), "Other phone")
+    app_origin = "https://deputyreviewer.example"
+    first_id = register_push_subscription(owner_id, endpoint("owner-one"), "Phone", app_origin)
+    second_id = register_push_subscription(owner_id, endpoint("owner-two"), "Laptop", app_origin)
+    other_subscription_id = register_push_subscription(other_id, endpoint("other"), "Other phone", app_origin)
     try:
-        register_push_subscription(owner_id, endpoint("other"), "Stolen phone")
+        register_push_subscription(owner_id, endpoint("other"), "Stolen phone", app_origin)
     except ValueError:
         pass
     else:
@@ -101,6 +120,61 @@ def main() -> None:
     with get_connection() as conn:
         if conn.execute("SELECT COUNT(*) n FROM push_subscriptions WHERE app_user_id=?", (owner_id,)).fetchone()["n"] != 2:
             raise AssertionError("One user could not retain multiple push devices.")
+    route_subscription = client.post(
+        "/settings/notifications/subscriptions",
+        json={"subscription": endpoint("secure-route"), "app_origin": "https://attacker.example"},
+        headers={"Origin": app_origin},
+    )
+    if route_subscription.status_code != 200 or route_subscription.json().get("app_origin"):
+        raise AssertionError("Authenticated HTTPS subscription registration failed or exposed its origin.")
+    secure_route_id = int(route_subscription.json()["subscription_id"])
+    with get_connection() as conn:
+        stored_origin = conn.execute(
+            "SELECT app_origin FROM push_subscriptions WHERE id=?", (secure_route_id,)
+        ).fetchone()["app_origin"]
+    if stored_origin != app_origin:
+        raise AssertionError(f"The authenticated request origin was not stored: {stored_origin!r}")
+    malicious = client.post(
+        "/settings/notifications/subscriptions",
+        json={"subscription": endpoint("malicious")},
+        headers={"Origin": "https://attacker.example"},
+    )
+    if malicious.status_code != 403:
+        raise AssertionError("A cross-origin push subscription was accepted.")
+    http_client = TestClient(app, base_url="http://deputyreviewer.example")
+    http_client.cookies.update(client.cookies)
+    insecure = http_client.post(
+        "/settings/notifications/subscriptions",
+        json={"subscription": endpoint("secure-route")},
+        headers={"Origin": "http://deputyreviewer.example"},
+    )
+    if insecure.status_code != 400:
+        raise AssertionError("A plain HTTP connection registered a push subscription.")
+    with get_connection() as conn:
+        retained_origin = conn.execute(
+            "SELECT app_origin FROM push_subscriptions WHERE id=?", (secure_route_id,)
+        ).fetchone()["app_origin"]
+    if retained_origin != app_origin:
+        raise AssertionError("Plain HTTP replaced a subscription's HTTPS app origin.")
+    captured_send: dict[str, object] = {}
+    original_pywebpush = sys.modules.get("pywebpush")
+    sys.modules["pywebpush"] = types.SimpleNamespace(
+        webpush=lambda **kwargs: captured_send.update(kwargs)
+    )
+    try:
+        _webpush_send(
+            {**endpoint("sender"), "endpoint": endpoint("sender")["endpoint"],
+             "p256dh": "p256-sender", "auth": "auth-sender", "app_origin": app_origin},
+            "{}",
+            settings,
+        )
+    finally:
+        if original_pywebpush is None:
+            sys.modules.pop("pywebpush", None)
+        else:
+            sys.modules["pywebpush"] = original_pywebpush
+    if captured_send.get("vapid_claims") != {"sub": app_origin}:
+        raise AssertionError("Delivery did not use the subscription's HTTPS app origin as its VAPID subject.")
     denied = client.delete(f"/settings/notifications/subscriptions/{other_subscription_id}")
     allowed = client.delete(f"/settings/notifications/subscriptions/{first_id}")
     if denied.json().get("ok") or not allowed.json().get("ok"):
@@ -261,6 +335,32 @@ def main() -> None:
     settings_template = (ROOT_DIR / "app" / "templates" / "settings.html").read_text(encoding="utf-8")
     if "Notification.requestPermission()" not in settings_template.split("data-enable-push", 2)[-1]:
         raise AssertionError("Notification permission is not tied to the explicit Enable action.")
+    settings_html = client.get("/settings").text
+    admin_html = client.get("/admin").text
+    if first_identity.public_key not in settings_html:
+        raise AssertionError("The authenticated Settings flow did not receive the generated public key.")
+    for output in (settings_html, admin_html, route_subscription.text):
+        if private_key_text in output or "BEGIN PRIVATE KEY" in output:
+            raise AssertionError("Private VAPID material was exposed to a browser response.")
+    if private_key_text in json.dumps(notification_status(owner_id), sort_keys=True):
+        raise AssertionError("Private VAPID material was exposed by notification status.")
+    deployment_text = "\n".join(
+        (ROOT_DIR / name).read_text(encoding="utf-8")
+        for name in ("docker-compose.yml", ".env.example")
+    )
+    if any(name in deployment_text for name in ("PUBLIC_APP_URL", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT")):
+        raise AssertionError("Deployment files still require notification-specific environment variables.")
+
+    old_public_key = ensure_push_identity().public_key
+    (temp_dir / PRIVATE_KEY_FILE).unlink()
+    replacement = ensure_push_identity()
+    if not replacement.ready or replacement.public_key == old_public_key:
+        raise AssertionError("A genuinely missing VAPID private key was not safely replaced.")
+    with get_connection() as conn:
+        if conn.execute("SELECT COUNT(*) n FROM push_subscriptions WHERE active=1").fetchone()["n"]:
+            raise AssertionError("Subscriptions remained active after their VAPID identity was lost.")
+    if "enable notifications again" not in replacement.diagnostic.lower():
+        raise AssertionError("Key loss did not provide a concise re-enable diagnostic.")
 
     print("notifications smoke ok")
 

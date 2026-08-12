@@ -196,7 +196,7 @@ Historical `not_required` assignments remain readable, but the normal new-assign
 
 ## Web Push
 
-`app/notifications.py` uses the existing APScheduler process to generate, deduplicate, and deliver standards-based Web Push events. VAPID keys and the public app URL come from environment configuration. Preferences belong to an app user; endpoint subscriptions belong to individual devices and may only be managed by their authenticated owner. Published manual versions, effective Deputy changes, reminders, eligible team-classified open positions, weekly digests, and persisted tests feed one global queue. Draft workdays and Love Racing planning rows do not notify.
+`app/notifications.py` uses the existing APScheduler process to generate, deduplicate, and deliver standards-based Web Push events. The app generates its P-256 VAPID identity once and stores the private key in the persistent data volume; each device supplies its validated same-origin HTTPS app origin when subscribing. Preferences belong to an app user; endpoint subscriptions belong to individual devices and may only be managed by their authenticated owner. Published manual versions, effective Deputy changes, reminders, eligible team-classified open positions, weekly digests, and persisted tests feed one global queue. Draft workdays and Love Racing planning rows do not notify.
 
 `app/static/service-worker.js` handles push display and same-origin relative deep links only. It deliberately does not add an offline application cache.
 
