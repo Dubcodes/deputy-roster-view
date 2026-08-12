@@ -144,10 +144,11 @@ def main() -> None:
     add_second_team = client.post(
         f"/admin/crew/{other_person}/teams",
         data={"action": "add", "team_id": str(northern_team)},
+        headers={"Accept": "application/json"},
         follow_redirects=False,
     )
-    if add_second_team.status_code != 303:
-        raise AssertionError("Team chip add route failed.")
+    if add_second_team.status_code != 200 or not add_second_team.json().get("ok") or add_second_team.json()["action"] != "add":
+        raise AssertionError("In-place team chip add response failed.")
     other_picker = next(item for item in crew_picker_records(northern_team) if int(item["id"]) == other_person)
     if set(other_picker["team_ids"]) != {northern_team, other_team}:
         raise AssertionError("A crew member could not retain multiple team memberships.")
@@ -155,6 +156,7 @@ def main() -> None:
     create_team = client.post(
         f"/admin/crew/{campbell_person}/teams",
         data={"action": "create", "team_name": "  Special   Events  "},
+        headers={"Accept": "application/json"},
         follow_redirects=False,
     )
     duplicate_name = client.post(
@@ -162,7 +164,7 @@ def main() -> None:
         data={"action": "create", "team_name": "special events"},
         follow_redirects=False,
     )
-    if create_team.status_code != 303 or duplicate_name.status_code != 303:
+    if create_team.status_code != 200 or not create_team.json().get("ok") or duplicate_name.status_code != 303:
         raise AssertionError("Inline team creation route failed.")
     special_teams = [team for team in list_crew_teams(include_inactive=True) if team["display_name"].casefold() == "special events"]
     if len(special_teams) != 1 or int(special_teams[0]["member_count"]) != 2:
@@ -171,10 +173,11 @@ def main() -> None:
     remove_team = client.post(
         f"/admin/crew/{other_person}/teams",
         data={"action": "remove", "team_id": str(other_team)},
+        headers={"Accept": "application/json"},
         follow_redirects=False,
     )
-    if remove_team.status_code != 303:
-        raise AssertionError("Team chip remove route failed.")
+    if remove_team.status_code != 200 or not remove_team.json().get("ok") or remove_team.json()["action"] != "remove":
+        raise AssertionError("In-place team chip remove response failed.")
     other_picker = next(item for item in crew_picker_records(northern_team) if int(item["id"]) == other_person)
     if set(other_picker["team_ids"]) != {northern_team} or not any(int(team["id"]) == other_team for team in list_crew_teams()):
         raise AssertionError("Removing membership deleted the team or retained the removed membership.")

@@ -244,3 +244,16 @@ For race days, the app may show a cached or admin-uploaded 2D course map at the 
 - Open-position push alerts require an eligible classified team (or deliberate all-team eligibility), no conflict, and an actual offered role. TBC and unclassified positions are excluded from push.
 - Dedupe keys are stable across scheduler restarts. A genuinely changed effective revision may create a new event.
 - Push endpoints and keys are private device records and are never shown in ordinary UI or payloads.
+
+## Permission And Future Deputy-Write Boundary
+
+- Re-Deputy Admin permission is not evidence of Deputy administrative permission.
+- Do not auto-promote any current account to a future `true_admin` role. Keep the
+  existing `user` and `admin` behavior until write eligibility is designed from
+  real, user-specific Deputy permissions.
+- A future Deputy mutation initiated by a Re-Deputy user must use only that same
+  account's authenticated Deputy identity and that same user's API credential.
+  Cross-user, shared-user, boss, developer, or fallback credentials are forbidden.
+- This invariant must be enforced server-side. Early write-enabled builds should
+  conspicuously confirm the target, action, and Deputy account before execution,
+  then report read-back verification or failure. No write path exists today.

@@ -15,15 +15,6 @@
     <header class="site-header {% if header_context %}has-month-nav{% else %}no-month-nav{% endif %}">
       <div class="brand-stack">
         <a class="brand" href="{{ calendar_home_url or '/month' }}">Re-Deputy</a>
-        {% if current_user %}
-          <span class="brand-meta">
-            <span class="brand-meta-name brand-meta-name-full">{{ current_user.display_name or "Roster" }}</span>
-            <span class="brand-meta-name brand-meta-name-short">{{ (current_user.display_name or "Roster").split()[0] }}</span>
-            {% if current_user.last_sync_at %}
-              · synced {{ current_user.last_sync_at|datetime("%d %b %H:%M") }}
-            {% endif %}
-          </span>
-        {% endif %}
       </div>
       {% if header_context %}
         <nav class="month-nav" aria-label="Month navigation">

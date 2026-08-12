@@ -197,3 +197,16 @@ The builder uses a client-side combobox over server-produced safe search terms, 
 ## Keep Local Open Positions Separate From Deputy
 
 Open positions and their applications live beside manual workdays and use stable assignment keys. They share the existing Available/Open presentation but retain a subtle Re-Deputy source label. Conflict checks, review, acceptance, history, and visibility remain local. This gives the workflow a clean future notification event stream without introducing Deputy writeback.
+
+## Keep Deputy Authority User-Specific
+
+Re-Deputy `admin` controls this application's local configuration; it does not grant
+or imply Deputy administration. Do not create or auto-promote a `true_admin` role
+from the current Re-Deputy admin account. Future write eligibility must be based on
+the logged-in user's verified Deputy permissions.
+
+Every eventual Deputy write must follow one identity chain: logged-in Re-Deputy
+account to that same person's authenticated Deputy identity to that same person's
+API credential. There is no shared or fallback credential path. Early write builds
+must use explicit confirmation and read-back status while the workflow is proven.
+This decision is architecture only; Deputy remains read-only.

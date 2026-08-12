@@ -81,6 +81,25 @@ def main() -> None:
     settings = get_settings()
     with get_connection() as conn:
         owner_id = int(conn.execute("SELECT id FROM app_users ORDER BY id LIMIT 1").fetchone()["id"])
+    no_device_test = client.post("/settings/notifications/test", data={}, follow_redirects=False)
+    if no_device_test.status_code != 303 or "Enable+notifications+on+this+device" not in no_device_test.headers.get("location", ""):
+        raise AssertionError("Immediate Test without a device did not return the friendly Settings result.")
+    with get_connection() as conn:
+        if conn.execute("SELECT COUNT(*) n FROM notification_events WHERE event_type='test'").fetchone()["n"]:
+            raise AssertionError("Immediate Test without a device left an orphan queued event.")
+
+    legacy_due = datetime.now(get_settings().timezone).replace(microsecond=0)
+    queue_notification(
+        user_id=owner_id, event_type="legacy_no_device", title="Legacy", body="Queued",
+        target_url="/settings", scheduled_at=legacy_due, revision="legacy-no-device",
+    )
+    delivery = deliver_due_notifications(legacy_due, lambda *_args: None)
+    if delivery["delivered"] or delivery["failed"]:
+        raise AssertionError("A no-device legacy event attempted delivery.")
+    with get_connection() as conn:
+        legacy = conn.execute("SELECT status,failure_summary FROM notification_events WHERE event_type='legacy_no_device'").fetchone()
+    if not legacy or legacy["status"] != "failed" or "No active push devices" not in legacy["failure_summary"]:
+        raise AssertionError("The worker did not safely close a queued event with zero subscriptions.")
     other = create_app_user(
         deputy_email="other@example.com",
         display_name="Other User",

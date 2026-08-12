@@ -200,6 +200,27 @@ Historical `not_required` assignments remain readable, but the normal new-assign
 
 `app/static/service-worker.js` handles push display and same-origin relative deep links only. It deliberately does not add an offline application cache.
 
+Immediate notification tests first require an active subscription for the signed-in
+account, so an unavailable device does not create an orphan queue row. The delivery
+worker separately marks legacy/raced queued events with no devices as failed without
+raising. Push identity and subscription ownership remain per-account.
+
+## Future Deputy Write Identity (Not Implemented)
+
+Re-Deputy roles remain `user` and `admin`; application administration is separate
+from Deputy authority. Any future write service must accept the authenticated
+Re-Deputy user as an explicit input, resolve only that user's verified Deputy
+identity and credential, reject missing/mismatched authority, and prohibit every
+cross-user or shared fallback. Early live writes should add conspicuous target/account
+confirmation and persist read-back verification. No Deputy mutation endpoint exists.
+
+## Page Timing Diagnostics
+
+Month, day, Settings, and Admin responses include a `Server-Timing` header with the
+total application processing duration. The metric contains no account, roster, URL,
+or credential data and supports deployed response-time comparisons without adding
+sensitive diagnostics to ordinary request logs.
+
 ## Workday Review Flow
 
 The manual workday builder keeps its existing draft/version/publication boundary. Its compact editor supports searchable reusable roles, one-day custom roles, roleless attendees, open positions, and exceptional Deputy locations behind advanced controls. Saving redirects to a read-only review view; only an explicit publish action changes what crew can see. A saved Love Racing planning row may prefill a new private race-day draft, but remains planning evidence and never publishes automatically.

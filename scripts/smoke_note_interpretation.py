@@ -20,7 +20,8 @@ def main() -> None:
     sys.path.insert(0, str(ROOT))
 
     from app.config import get_settings
-    from app.database import init_db, upsert_travel_route
+    from app.database import get_travel_route, init_db, save_crew_vehicle, upsert_travel_route
+    import app.main as main_module
     from app.main import (
         apply_event_changes_to_schedule_people,
         apply_timing_math,
@@ -35,6 +36,19 @@ def main() -> None:
     )
 
     init_db()
+    save_crew_vehicle(vehicle_id=None, display_label="684", aliases=[], active=True, sort_order=10, team_id=None, notes="", is_truck=False, actor_user_id=None)
+
+    travel_note = "Trucks Dylan and Esq\nGrant, Todd, Lans and Junior Rav91\nJosh Jayden Nate qua684"
+    travel_summary = parse_roster_summary(travel_note.splitlines())
+    allocations = list(travel_summary.get("crew_allocations") or [])
+    allocation_684 = next((item for item in allocations if item.get("vehicle") == "684"), None)
+    allocation_rav = next((item for item in allocations if item.get("vehicle") == "Rav91"), None)
+    if not allocation_684 or "Josh Jayden Nate" not in str(allocation_684.get("people") or ""):
+        raise AssertionError(f"Known vehicle suffix qua684 was not retained as conservative 684 evidence: {allocations!r}")
+    if not allocation_rav or not all(name in str(allocation_rav.get("people") or "") for name in ("Grant", "Todd", "Lans", "Junior")):
+        raise AssertionError(f"Trailing Rav91 crew group was not parsed: {allocations!r}")
+    if "qua684" not in travel_note:
+        raise AssertionError("Travel parsing modified the raw roster note.")
 
     expected_times = {
         "8.15am": "08:15",
@@ -269,6 +283,51 @@ def main() -> None:
         "time_range": "09:30–18:30",
     }:
         raise AssertionError(f"Roster-only display window mixed sources: {roster_shift!r}")
+
+    upsert_travel_route(
+        origin_label="Office / Clow Place",
+        destination_label="Ruakaka",
+        travel_minutes=300,
+        also_reverse=True,
+    )
+    original_fetch = main_module.fetch_shifts_between
+    main_module.fetch_shifts_between = lambda *_args, **_kwargs: [{
+        "date": "2026-08-14",
+        "title": "[Travel] Travel then Overnighter",
+        "description": travel_note,
+        "location": "Travel",
+        "start_at": "2026-08-14T12:00:00+12:00",
+        "end_at": "2026-08-14T17:00:00+12:00",
+    }]
+    try:
+        overnight_shift = {
+            **roster_shift,
+            "owner_user_id": 1,
+            "date": "2026-08-15",
+            "track_label": "Ruakaka",
+            "source_code": "T-Ruakaka",
+            "start_at": "2026-08-15T09:00:00+12:00",
+            "end_at": "2026-08-15T18:00:00+12:00",
+            "start_label": "09:00",
+            "end_label": "18:00",
+            "time_range": "09:00-18:00",
+            "raw_hours": 9.0,
+            "raw_label": "9h",
+            "paid_hours": 9.0,
+            "paid_label": "9h",
+            "description_lines": ["On track 09:30", "8 races 12:00 | 16:30"],
+            "roster_summary": parse_roster_summary(["On track 09:30", "8 races 12:00 | 16:30"]),
+        }
+        apply_timing_math(overnight_shift)
+    finally:
+        main_module.fetch_shifts_between = original_fetch
+    if overnight_shift["display_start_label"] == "04:30" or overnight_shift["display_hours"] != 9.0:
+        raise AssertionError(f"Previous-day overnight travel still invented a five-hour office outbound leg: {overnight_shift!r}")
+    race_day = overnight_shift["timing_math"]["race_day"]
+    if race_day.get("available"):
+        raise AssertionError(f"Unknown hotel departure should remain TBC instead of becoming a calculated office start: {race_day!r}")
+    if get_travel_route("Ruakaka", "Office / Clow Place") is None:
+        raise AssertionError("Suppressing the overnight outbound leg removed the valid return route.")
 
     print("note interpretation smoke ok")
 

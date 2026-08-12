@@ -166,6 +166,14 @@ def queue_test_notification(user_id: int, scheduled_at: datetime | None = None) 
     )
 
 
+def has_active_push_subscription(user_id: int) -> bool:
+    with get_connection() as conn:
+        return bool(conn.execute(
+            "SELECT 1 FROM push_subscriptions WHERE app_user_id=? AND active=1 LIMIT 1",
+            (user_id,),
+        ).fetchone())
+
+
 def _parse_deputy_title(raw: str) -> tuple[str, str]:
     match = re.match(r"^\[([^]]+)]\s*(.*)$", raw.strip())
     if not match:
@@ -462,6 +470,13 @@ def deliver_due_notifications(now: datetime | None = None,
             subscriptions = [dict(row) for row in conn.execute(
                 "SELECT * FROM push_subscriptions WHERE app_user_id=? AND active=1", (event["app_user_id"],)
             ).fetchall()]
+        if not subscriptions:
+            with get_connection() as conn:
+                conn.execute(
+                    "UPDATE notification_events SET status='failed',sent_at=?,failure_summary=? WHERE id=?",
+                    (now.isoformat(timespec="seconds"), "No active push devices.", event["id"]),
+                )
+            continue
         delivered = 0
         for subscription in subscriptions:
             payload = json.dumps({"title": event["title"], "body": event["body"], "url": event["target_url"]}, separators=(",", ":"))

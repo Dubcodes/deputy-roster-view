@@ -4,6 +4,7 @@ import calendar
 import json
 import re
 import threading
+import time
 from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -118,6 +119,7 @@ from .database import (
     withdraw_open_workday_application,
     review_open_workday_application,
     workday_assignment_conflicts,
+    workday_vehicle_conflicts,
     merge_crew_people,
     reconcile_authenticated_identities,
     resolve_workday_snapshot_assignments,
@@ -201,6 +203,7 @@ from .track_maps import (
 )
 from .public_holidays import holiday_for_date
 from .notifications import (
+    has_active_push_subscription,
     notification_admin_summary,
     notification_status,
     queue_test_notification,
@@ -214,7 +217,7 @@ from .push_identity import ensure_push_identity
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.12.2"
+APP_BUILD = "2026.08.12.3"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -598,9 +601,21 @@ app = FastAPI(
 )
 app.add_middleware(GZipMiddleware, minimum_size=500)
 app.middleware("http")(trusted_device_middleware)
+
+
+@app.middleware("http")
+async def route_timing_middleware(request: Request, call_next):
+    started = time.perf_counter()
+    response = await call_next(request)
+    route = request.url.path
+    if route == "/month" or route == "/settings" or route == "/admin" or route.startswith("/day/"):
+        duration_ms = (time.perf_counter() - started) * 1000
+        response.headers["Server-Timing"] = f'app;dur={duration_ms:.1f}'
+    return response
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 _sync_worker_lock = threading.Lock()
+_vehicle_suffix_cache: tuple[float, dict[str, str]] = (0.0, {})
 _sync_state_lock = threading.Lock()
 _manual_sync_status_by_scope: dict[str, dict[str, object]] = {}
 
@@ -1134,12 +1149,12 @@ def published_travel_context_for_shift(shift: dict[str, object]) -> dict[str, st
     return result
 
 
-def adjacent_overnight_origin_for_shift(shift: dict[str, object]) -> str:
+def adjacent_overnight_context_for_shift(shift: dict[str, object]) -> dict[str, str]:
     user_id = safe_int(shift.get("owner_user_id"))
     try:
         day_value = date.fromisoformat(str(shift.get("date") or ""))
     except ValueError:
-        return ""
+        return {}
     previous_rows = fetch_shifts_between(
         (day_value - timedelta(days=1)).isoformat(),
         (day_value - timedelta(days=1)).isoformat(),
@@ -1154,8 +1169,15 @@ def adjacent_overnight_origin_for_shift(shift: dict[str, object]) -> str:
             {"description_lines": description_lines(str(values.get("description") or ""))}
         )
         if labels:
-            return labels[0]
-    return ""
+            return {"origin": labels[0], "evidence": "adjacent Travel then Overnighter day"}
+        previous_location = str(values.get("location") or "").strip()
+        current_track = str(shift.get("track_label") or shift.get("location_label") or "").strip()
+        if previous_location and current_track and travel_default_key(previous_location) == travel_default_key(current_track):
+            return {"origin": f"Overnight near {current_track}", "evidence": "adjacent Travel then Overnighter day"}
+        # The same user's explicit overnight travel is strong enough to suppress an
+        # office departure, but not strong enough to invent a hotel or travel time.
+        return {"origin": f"Overnight near {current_track or 'destination'}", "evidence": "adjacent Travel then Overnighter day"}
+    return {}
 
 
 def resolved_travel_context(shift: dict[str, object], timings: dict[str, str]) -> dict[str, str]:
@@ -1171,9 +1193,9 @@ def resolved_travel_context(shift: dict[str, object], timings: dict[str, str]) -
     elif accommodation_labels:
         origin, origin_evidence = accommodation_labels[0], "Deputy accommodation note"
     else:
-        adjacent_origin = adjacent_overnight_origin_for_shift(shift)
-        if adjacent_origin:
-            origin, origin_evidence = adjacent_origin, "adjacent Travel then Overnighter day"
+        adjacent = adjacent_overnight_context_for_shift(shift)
+        if adjacent:
+            origin, origin_evidence = adjacent["origin"], adjacent["evidence"]
         else:
             origin = "Office / Clow Place"
             origin_evidence = "roster base timing" if timings.get("office") or timings.get("clow place") else "saved route default"
@@ -1251,6 +1273,34 @@ def note_vehicle_allocations_from_text(value: str) -> list[dict[str, object]]:
     text = re.split(r"\s+[-–]\s+", value, maxsplit=1)[-1]
     tokens = VEHICLE_ALLOCATION_WORD_RE.findall(text)
     if not any(VEHICLE_ALLOCATION_TOKEN_RE.match(token) for token in tokens):
+        global _vehicle_suffix_cache
+        cached_at, known = _vehicle_suffix_cache
+        if time.monotonic() - cached_at > 30:
+            known = {}
+            for item in list_crew_vehicles(include_inactive=False):
+                labels = [str(item.get("display_label") or "")]
+                try:
+                    aliases = json.loads(str(item.get("aliases") or "[]"))
+                except (TypeError, ValueError):
+                    aliases = []
+                labels.extend(str(alias) for alias in aliases if isinstance(alias, str))
+                for label in labels:
+                    key = re.sub(r"[^a-z0-9]+", "", label.casefold())
+                    if key:
+                        known[key] = str(item.get("display_label") or label)
+            _vehicle_suffix_cache = (time.monotonic(), known)
+        for index, token in enumerate(tokens):
+            compact = re.sub(r"[^a-z0-9]+", "", token.casefold())
+            matches = [
+                (key, label) for key, label in known.items()
+                if any(char.isdigit() for char in compact)
+                and any(char.isdigit() for char in key)
+                and compact != key and compact.endswith(key)
+            ]
+            if len(matches) == 1 and compact[:-len(matches[0][0])].isalpha() and len(compact[:-len(matches[0][0])]) <= 4:
+                tokens[index] = matches[0][1]
+                break
+    if not any(VEHICLE_ALLOCATION_TOKEN_RE.match(token) for token in tokens):
         return []
 
     allocations: dict[str, list[str]] = {}
@@ -1299,13 +1349,16 @@ def parse_roster_summary(lines: list[str]) -> dict[str, object]:
             timings.append({"label": label, "time": time_value})
 
     for index, line in enumerate(lines):
-        for allocation in note_vehicle_allocations_from_text(line):
+        line_allocations = note_vehicle_allocations_from_text(line)
+        for allocation in line_allocations:
             crew_allocations.append(
                 {
                     "vehicle": str(allocation.get("vehicle") or ""),
                     "people": " ".join(str(name) for name in allocation.get("people") or []),
                 }
             )
+        if line_allocations:
+            consumed.add(index)
 
         time_first = TIME_FIRST_TIMING_RE.match(line)
         if time_first:
@@ -1850,7 +1903,8 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     track_label = context["track"]
     outbound_route = get_travel_route(start_origin, track_label)
     outbound_default = dict(outbound_route) if outbound_route else None
-    if outbound_default is None:
+    overnight_origin = str(context.get("start_evidence") or "") == "adjacent Travel then Overnighter day"
+    if outbound_default is None and not overnight_origin:
         if accommodation_base_labels_for_shift(shift):
             outbound_default = accommodation_default_for_shift(shift)
         else:
@@ -3211,6 +3265,52 @@ def apply_roster_note_vehicles(people: list[dict[str, object]], shifts: list[dic
             person["vehicle_label"] = ", ".join(vehicle_parts)
         else:
             person["vehicle_label"] = vehicle
+
+
+def travel_note_people(shifts: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Resolve only unambiguous names explicitly grouped in the signed-in user's note."""
+    identities = crew_identity_records()
+    name_map: dict[str, list[dict[str, object]]] = {}
+    for identity in identities:
+        names = [identity.get("canonical_display_name"), identity.get("current_deputy_name")]
+        names.extend(identity.get("aliases") or [])
+        for name in names:
+            key = role_display_key(str(name or ""))
+            if key:
+                name_map.setdefault(key, []).append(identity)
+    candidates: list[tuple[str, str]] = []
+    for allocation in roster_note_vehicle_allocations(shifts):
+        candidates.append((str(allocation.get("name") or ""), str(allocation.get("vehicle") or "")))
+    for shift in shifts:
+        for line in shift.get("description_lines") or []:
+            match = re.match(r"(?i)^\s*trucks?\s+(.+)$", str(line or ""))
+            if match:
+                for name in re.split(r"(?i)\s*(?:,|\band\b)\s*", match.group(1)):
+                    if name.strip():
+                        candidates.append((name.strip(), "Truck (unspecified)"))
+    people: list[dict[str, object]] = []
+    seen: set[int] = set()
+    for raw_name, vehicle in candidates:
+        matches = name_map.get(role_display_key(raw_name), [])
+        unique = {int(item["id"]): item for item in matches if item.get("id") is not None}
+        if len(unique) != 1:
+            continue
+        identity = next(iter(unique.values()))
+        person_id = int(identity["id"])
+        if person_id in seen:
+            existing = next(item for item in people if item["canonical_person_id"] == person_id)
+            if vehicle and vehicle not in str(existing.get("vehicle_label") or ""):
+                existing["vehicle_label"] = ", ".join(filter(None, [str(existing.get("vehicle_label") or ""), vehicle]))
+            continue
+        seen.add(person_id)
+        people.append({
+            "canonical_person_id": person_id,
+            "employee_name": str(identity.get("canonical_display_name") or raw_name),
+            "area_display": "Travel",
+            "vehicle_label": vehicle,
+            "source": "roster note",
+        })
+    return people
 
 
 def vehicle_for_user_from_schedule(
@@ -5586,6 +5686,26 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
             if item.get("user_id") is None
         ],
     }
+    incomplete_warnings: list[str] = []
+    if not str(roster_day.get("custom_location") or roster_day.get("track_label") or "").strip():
+        incomplete_warnings.append("Location")
+    if not str(roster_day.get("office_start") or "").strip():
+        incomplete_warnings.append("Start time")
+    if not assigned_rows:
+        incomplete_warnings.append("Crew assignments")
+    unassigned_transport = sum(
+        1 for item in assigned_rows if str(item.get("transport_mode") or "unassigned") == "unassigned"
+    )
+    if unassigned_transport:
+        incomplete_warnings.append(f"{unassigned_transport} transport assignment{'s' if unassigned_transport != 1 else ''}")
+    if str(roster_day.get("day_type") or "race_day") == "race_day":
+        if not roster_day.get("race_count"):
+            incomplete_warnings.append("Race count")
+        if not str(roster_day.get("first_race_time") or "").strip():
+            incomplete_warnings.append("First race")
+        if not str(roster_day.get("last_race_time") or "").strip():
+            incomplete_warnings.append("Last race")
+    vehicle_conflicts = workday_vehicle_conflicts(int(roster_day["id"])) if roster_day.get("id") else []
     return templates.TemplateResponse(
         "roster_day_builder.html",
         {
@@ -5627,6 +5747,8 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
             "duplicate_candidates": duplicate_candidates,
             "version_history": version_history,
             "review_summary": review_summary,
+            "incomplete_warnings": incomplete_warnings,
+            "vehicle_conflicts": vehicle_conflicts,
             "review_mode": bool(row is not None and request.query_params.get("mode") == "review"),
             "planning_seed": planning_seed,
         },
@@ -6643,6 +6765,8 @@ def day_view(
     )
     apply_schedule_role_context(shifts, deputy_schedule_rows)
     apply_roster_note_vehicles(deputy_schedule_people, shifts)
+    if travel_schedule_context and not deputy_schedule_people:
+        deputy_schedule_people = travel_note_people(shifts)
     if travel_schedule_context:
         show_vehicle_assignment_as_travel(shifts)
     elif schedule_location_ids:
@@ -6658,29 +6782,6 @@ def day_view(
                 include_placeholders=False,
             )
             apply_vehicle_carryover_from_people(deputy_schedule_people, previous_day_vehicle_people)
-    if not deputy_schedule_people and is_overnight_travel_day(shifts):
-        next_day_text = (day_date + timedelta(days=1)).isoformat()
-        next_day_shifts = combine_adjacent_shifts(
-            [decorate_shift(row) for row in fetch_shifts_for_date(next_day_text, owner_user_id=owner_user_id)]
-        )
-        next_day_location_ids = shift_schedule_location_ids(next_day_shifts) or schedule_location_ids
-        next_day_expected_areas = fetch_deputy_schedule_areas_for_locations(next_day_location_ids)
-        deputy_schedule_people = schedule_people(
-            fetch_deputy_schedule_for_date(
-                next_day_text,
-                location_ids=next_day_location_ids or None,
-            ),
-            expected_areas=next_day_expected_areas,
-        )
-        reconcile_personal_assignment_evidence(
-            deputy_schedule_people,
-            fetch_personal_assignment_evidence_for_date(
-                next_day_text, next_day_location_ids or None
-            ),
-        )
-        apply_roster_note_vehicles(deputy_schedule_people, next_day_shifts)
-        if deputy_schedule_people:
-            deputy_schedule_label = deputy_schedule_label_for_shifts("Deputy Schedule - Next Day Crew", next_day_shifts)
     deputy_event_changes = decorate_event_changes(
         fetch_deputy_event_changes_for_date(
             date_text,
@@ -6914,7 +7015,7 @@ async def admin_save_team_member(request: Request, team_id: int) -> RedirectResp
 
 
 @app.post("/admin/crew/{person_id}/teams")
-async def admin_save_person_team(request: Request, person_id: int) -> RedirectResponse:
+async def admin_save_person_team(request: Request, person_id: int) -> object:
     user = require_admin_user(request)
     form = await request.form()
     action = str(form.get("action") or "add").strip()
@@ -6949,9 +7050,13 @@ async def admin_save_person_team(request: Request, person_id: int) -> RedirectRe
                 actor_user_id=int(user["id"]),
             )
             if not ok or team_id is None:
-                return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+                if "application/json" in request.headers.get("accept", ""):
+                    return JSONResponse({"ok": False, "message": message}, status_code=400)
+                return RedirectResponse(url=f"/admin?{urlencode({'notice': message})}#crew-person-{person_id}", status_code=303)
     if team_id is None:
-        return RedirectResponse(url=notice_url("/admin", "Choose a team."), status_code=303)
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"ok": False, "message": "Choose a team."}, status_code=400)
+        return RedirectResponse(url=f"/admin?{urlencode({'notice': 'Choose a team.'})}#crew-person-{person_id}", status_code=303)
     ok, message = set_crew_person_team(
         person_id=person_id,
         team_id=team_id,
@@ -6961,7 +7066,13 @@ async def admin_save_person_team(request: Request, person_id: int) -> RedirectRe
     )
     if ok and action == "create":
         message = "Team created and assigned."
-    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
+    if "application/json" in request.headers.get("accept", ""):
+        team = next((item for item in list_crew_teams(include_inactive=True) if int(item.get("id") or 0) == int(team_id)), {})
+        return JSONResponse({"ok": ok, "message": message, "action": action, "team": {
+            "id": team_id, "display_name": str(team.get("display_name") or "Team"),
+            "is_primary": str(form.get("is_primary") or "") == "1",
+        }}, status_code=200 if ok else 400)
+    return RedirectResponse(url=f"/admin?{urlencode({'notice': message})}#crew-person-{person_id}", status_code=303)
 
 
 @app.post("/admin/vehicles/save")
@@ -6982,6 +7093,8 @@ async def admin_save_crew_vehicle(request: Request) -> RedirectResponse:
         notes=str(form.get("notes") or ""),
         actor_user_id=int(user["id"]),
     )
+    global _vehicle_suffix_cache
+    _vehicle_suffix_cache = (0.0, {})
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
@@ -7020,11 +7133,11 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
     custom_location = str(form.get("custom_location") or "").strip()[:200]
     track_label = str(form.get("new_track_label") or form.get("track_label") or custom_location or "").strip()
     race_type = str(form.get("race_type") or "").strip()
-    if day_type == "race_day" and (not track_label or race_type not in ROSTER_RACE_TYPE_LABELS):
+    if day_type == "race_day" and race_type and race_type not in ROSTER_RACE_TYPE_LABELS:
         target = f"/admin/roster-days/{roster_day_id}" if roster_day_id else "/admin/roster-days/new"
-        return RedirectResponse(url=notice_url(target, "Track and race type are required."), status_code=303)
+        return RedirectResponse(url=notice_url(target, "Choose a valid race type."), status_code=303)
     if day_type != "race_day":
-        track_label = custom_location or track_label or "Office / Clow Place"
+        track_label = custom_location or track_label
         race_type = ""
         title = title or WORKDAY_TYPE_LABELS[day_type]
     times = {key: clean_time_value(str(form.get(key) or "")) for key in ("office_start", "end_time", "on_track_time", "first_race_time", "last_race_time")}
@@ -7217,18 +7330,15 @@ def admin_publish_roster_day(request: Request, roster_day_id: int) -> RedirectRe
     if row is None:
         raise HTTPException(status_code=404, detail="Roster day not found")
     assignments = [dict(item) for item in get_roster_day_assignments(roster_day_id)]
-    if not assignments and not parse_hotel_assignments(row["hotel_assignments"]):
-        return RedirectResponse(url=notice_url(f"/admin/roster-days/{roster_day_id}", "Add at least one person or deliberate open role before publishing."), status_code=303)
     day_type = str(row["day_type"] or "race_day")
     if day_type not in WORKDAY_TYPE_LABELS:
         return RedirectResponse(url=notice_url(f"/admin/roster-days/{roster_day_id}", "Choose a valid day type before publishing."), status_code=303)
-    if day_type == "race_day" and (not str(row["track_label"] or "").strip() or str(row["race_type"] or "") not in ROSTER_RACE_TYPE_LABELS):
-        return RedirectResponse(url=notice_url(f"/admin/roster-days/{roster_day_id}", "Race days need a track and race type before publishing."), status_code=303)
-    if day_type != "race_day":
-        start = clean_time_value(str(row["office_start"] or ""))
-        finish = clean_time_value(str(row["end_time"] or ""))
-        if not start or not finish or manual_workday_hours(dict(row)) <= 0:
-            return RedirectResponse(url=notice_url(f"/admin/roster-days/{roster_day_id}", "This work day needs a valid start and finish time before publishing."), status_code=303)
+    vehicle_conflicts = workday_vehicle_conflicts(roster_day_id)
+    if vehicle_conflicts and request.query_params.get("confirm_vehicle_conflicts") != "1":
+        return RedirectResponse(
+            url=notice_url(f"/admin/roster-days/{roster_day_id}?mode=review", "Review the vehicle conflict and choose Publish anyway."),
+            status_code=303,
+        )
     snapshot = roster_day_snapshot(dict(row), assignments)
     version = publish_roster_day(roster_day_id, json.dumps(snapshot, separators=(",", ":")), int(user["id"]))
     return RedirectResponse(url=notice_url(f"/admin/roster-days/{roster_day_id}", f"Roster version {version} published to assigned crew."), status_code=303)
@@ -7495,6 +7605,12 @@ async def test_push_notification(request: Request) -> RedirectResponse:
     if not user or user.get("id") is None:
         raise HTTPException(status_code=403, detail="Login required")
     form = await request.form()
+    user_id = int(user["id"])
+    if not has_active_push_subscription(user_id):
+        return RedirectResponse(
+            url=notice_url("/settings", "Enable notifications on this device before sending a test."),
+            status_code=303,
+        )
     scheduled_text = str(form.get("scheduled_at") or "").strip()
     scheduled_at = None
     if scheduled_text:
@@ -7504,7 +7620,7 @@ async def test_push_notification(request: Request) -> RedirectResponse:
             return RedirectResponse(url=notice_url("/settings", "Choose a valid test time."), status_code=303)
         if scheduled_at <= datetime.now(get_settings().timezone):
             return RedirectResponse(url=notice_url("/settings", "Scheduled test time must be in the future."), status_code=303)
-    queue_test_notification(int(user["id"]), scheduled_at)
+    queue_test_notification(user_id, scheduled_at)
     if scheduled_at is None:
         result = run_notification_pass()
         delivered = int(dict(result.get("delivery") or {}).get("delivered") or 0)

@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 
 {% macro crew_person_row(person, app_users, active_teams) %}
-  <article class="crew-management-row{% if not person.is_active %} is-inactive{% endif %}" data-crew-row data-search="{{ person.search_text }}" data-team-ids="{{ person.team_ids|join(',') }}">
+  <article id="crew-person-{{ person.id }}" class="crew-management-row{% if not person.is_active %} is-inactive{% endif %}" data-crew-row data-search="{{ person.search_text }}" data-team-ids="{{ person.team_ids|join(',') }}">
     <div class="crew-management-main">
-      <span><strong>{{ person.canonical_display_name }}</strong><small>{% if person.deputy_employee_id %}Deputy #{{ person.deputy_employee_id }}{% else %}No Deputy ID{% endif %}{% if person.aliases_text %} · {{ person.aliases_text }}{% endif %} · {{ 'App linked' if person.app_user_id else 'No app login' }}</small></span>
+      <span><strong>{{ person.canonical_display_name }}</strong><small>{% if person.deputy_employee_id %}Deputy #{{ person.deputy_employee_id }}{% else %}No Deputy ID{% endif %}{% if person.aliases_text %} · {{ person.aliases_text }}{% endif %} · {% if person.app_user_id %}App linked{% else %}<span class="badge">No app login</span>{% endif %}</small></span>
       <div class="crew-team-editor" aria-label="Teams for {{ person.canonical_display_name }}">
         <div class="crew-team-chips">
           {% for team in person.teams if team.active %}
-            <form action="/admin/crew/{{ person.id }}/teams" method="post"><input type="hidden" name="team_id" value="{{ team.id }}"><button class="team-chip" name="action" value="remove" type="submit" data-remove-team data-person-name="{{ person.canonical_display_name }}" data-team-name="{{ team.display_name }}">{{ team.display_name }}{% if team.is_primary %}<small>Primary</small>{% endif %}<span aria-hidden="true">×</span></button></form>
+            <form action="/admin/crew/{{ person.id }}/teams" method="post" data-team-membership-form><input type="hidden" name="team_id" value="{{ team.id }}"><input type="hidden" name="action" value="remove"><button class="team-chip" type="submit" data-remove-team data-person-name="{{ person.canonical_display_name }}" data-team-name="{{ team.display_name }}">{{ team.display_name }}{% if team.is_primary %}<small>Primary</small>{% endif %}<span aria-hidden="true">×</span></button></form>
           {% else %}<small class="muted">No team assigned</small>{% endfor %}
         </div>
         <form class="crew-team-add" action="/admin/crew/{{ person.id }}/teams" method="post" data-person-team-form data-person-name="{{ person.canonical_display_name }}">
@@ -16,6 +16,7 @@
           <label class="compact-check"><input type="checkbox" name="is_primary" value="1"> Primary</label>
           <button class="button button-secondary button-compact" type="submit" data-team-submit>Add team</button>
         </form>
+        <small class="muted" role="status" data-team-status></small>
       </div>
     </div>
     <details class="crew-identity-details">
@@ -1074,10 +1075,56 @@
       };
       crewSearch?.addEventListener('input', filterCrew);
       crewTeamFilter?.addEventListener('change', filterCrew);
+      const updateRowTeams = (row) => {
+        row.dataset.teamIds = [...row.querySelectorAll('.crew-team-chips input[name="team_id"]')].map((input) => input.value).join(',');
+        filterCrew();
+      };
+      const saveTeamForm = async (form) => {
+        const row = form.closest('[data-crew-row]');
+        const status = row?.querySelector('[data-team-status]');
+        const response = await fetch(form.getAttribute('action'), { method: 'POST', body: new FormData(form), headers: { Accept: 'application/json' } });
+        const responseText = await response.text();
+        let result;
+        try { result = JSON.parse(responseText); }
+        catch { result = { ok: false, message: `Team could not be saved (${response.status}).` }; }
+        if (!response.ok || !result.ok) throw new Error(result.message || 'Team could not be saved.');
+        const chips = row.querySelector('.crew-team-chips');
+        if (result.action === 'remove') {
+          form.remove();
+        } else if (!chips.querySelector(`input[name="team_id"][value="${result.team.id}"]`)) {
+          const chipForm = document.createElement('form');
+          chipForm.action = form.getAttribute('action'); chipForm.method = 'post'; chipForm.dataset.teamMembershipForm = '';
+          const teamIdInput = document.createElement('input'); teamIdInput.type = 'hidden'; teamIdInput.name = 'team_id'; teamIdInput.value = result.team.id;
+          const actionInput = document.createElement('input'); actionInput.type = 'hidden'; actionInput.name = 'action'; actionInput.value = 'remove';
+          const chip = document.createElement('button'); chip.className = 'team-chip'; chip.type = 'submit'; chip.textContent = result.team.display_name;
+          if (result.team.is_primary) { const primary = document.createElement('small'); primary.textContent = 'Primary'; chip.append(primary); }
+          const close = document.createElement('span'); close.setAttribute('aria-hidden', 'true'); close.textContent = '×'; chip.append(close);
+          chipForm.append(teamIdInput, actionInput, chip);
+          chips.querySelector('.muted')?.remove(); chips.append(chipForm);
+          if (result.action === 'create') {
+            activeTeams.set(teamKey(result.team.display_name), { id: String(result.team.id), label: result.team.display_name });
+            const option = document.createElement('option'); option.value = result.team.display_name; option.dataset.teamId = result.team.id;
+            document.querySelector('#active-team-options')?.append(option);
+          }
+        }
+        if (form.matches('[data-person-team-form]')) { form.reset(); form.dataset.createConfirmed = ''; }
+        if (status) status.textContent = result.message;
+        updateRowTeams(row);
+      };
       document.querySelectorAll('[data-remove-team]').forEach((button) => {
         button.addEventListener('click', (event) => {
-          if (!confirm(`Remove team?\n\nRemove ${button.dataset.personName} from ${button.dataset.teamName}?`)) event.preventDefault();
+          event.preventDefault();
+          if (!confirm(`Remove team?\n\nRemove ${button.dataset.personName} from ${button.dataset.teamName}?`)) return;
+          saveTeamForm(button.form).catch((error) => { button.form.closest('[data-crew-row]').querySelector('[data-team-status]').textContent = error.message; });
         });
+      });
+      document.querySelector('[data-crew-list]')?.addEventListener('submit', (event) => {
+        const form = event.target.closest('[data-team-membership-form]');
+        if (!form) return;
+        event.preventDefault();
+        const label = form.querySelector('.team-chip')?.childNodes[0]?.textContent?.trim() || 'this team';
+        if (!confirm(`Remove team?\n\nRemove ${label}?`)) return;
+        saveTeamForm(form).catch((error) => { form.closest('[data-crew-row]').querySelector('[data-team-status]').textContent = error.message; });
       });
 
       const teamKey = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
@@ -1089,7 +1136,7 @@
       const submitNewTeam = (form) => {
         form.dataset.createConfirmed = '1';
         form.querySelector('[data-team-action]').value = 'create';
-        form.requestSubmit();
+        saveTeamForm(form).catch((error) => { form.closest('[data-crew-row]').querySelector('[data-team-status]').textContent = error.message; });
       };
       createDialog?.addEventListener('close', () => {
         if (createDialog.returnValue === 'create' && pendingTeamForm) submitNewTeam(pendingTeamForm);
@@ -1113,8 +1160,11 @@
         input.addEventListener('change', resolveTeam);
         form.addEventListener('submit', (event) => {
           const existing = resolveTeam();
-          if (existing || form.dataset.createConfirmed === '1') return;
           event.preventDefault();
+          if (existing || form.dataset.createConfirmed === '1') {
+            saveTeamForm(form).catch((error) => { form.closest('[data-crew-row]').querySelector('[data-team-status]').textContent = error.message; });
+            return;
+          }
           if (!teamName.value) { input.reportValidity(); return; }
           if (!createDialog?.showModal) {
             if (confirm(`Create new team?\n\n"${teamName.value}" does not currently exist.\nThis will create the team and assign ${form.dataset.personName} to it.`)) submitNewTeam(form);

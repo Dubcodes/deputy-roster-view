@@ -60,6 +60,11 @@ After Portainer redeploy:
 - Confirm Race Day strip includes start/on-track/first race/last race where present.
 - Confirm Deputy Schedule excludes Out of Region noise.
 - Confirm timing-only crew changes do not badge every row.
+- Confirm immediate notification tests with no active device return a friendly message and do not leave a queued event.
+- Confirm an incomplete draft can be reviewed and explicitly published with warnings.
+- Confirm canonical vehicles conflict across separate same-date workdays, but not between assignments on one workday.
+- Confirm Admin team chips add/create/remove in place without resetting search, filters, or scroll position.
+- Inspect `Server-Timing` on month, day, Settings, and Admin responses when comparing page performance.
 - Capture an authoritative crew roster, then replace it with the Ruakaka-style Side 2/CCU2/VT/Sound change chain. Confirm Change History records both moves, the Sound/VT merge, and any evidenced same-position replacement exactly once.
 - Confirm `SVT` displays as `Sound/VT` when it is the only audio/replay assignment, and as `Sound` when another employee has an overlapping `VT` assignment at the same location.
 - Confirm a removed Deputy schedule assignment disappears after the next successful complete schedule-window sync, while a failed/partial capture retains the previous crew list.

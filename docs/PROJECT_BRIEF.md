@@ -53,6 +53,9 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 ## Out Of Scope For Now
 
 - Writing back to Deputy.
+- Treating Re-Deputy Admin permission as Deputy administrative permission. The current
+  Re-Deputy roles remain `user` and `admin`; Deputy-write eligibility will later be
+  derived from the authenticated user's actual Deputy permissions.
 - Official Deputy API integration unless the user later gets API access.
 - Full user-specific home-origin management for Auckland-based or other future bases. The route model can accept those origins later.
 - Timesheet submission and leave/time-off workflows.

@@ -44,7 +44,7 @@
               <label class="form-row"><span>Reminder time</span><input type="time" name="reminder_time" value="{{ notification_status.preferences.reminder_time or '19:00' }}"></label>
               <button class="button button-compact" type="submit">Save notifications</button>
             </form>
-            <form class="notification-test-form" action="/settings/notifications/test" method="post">
+            <form class="notification-test-form" action="/settings/notifications/test" method="post" data-notification-test>
               <strong>Test notifications</strong>
               <div><button class="button button-secondary button-compact" type="submit">Test</button><label><span>Now</span><input type="datetime-local" name="scheduled_at"></label></div>
               <small>Last test: {% if notification_status.last_test %}{{ notification_status.last_test.sent_at or notification_status.last_test.scheduled_at|datetime('%d %b %H:%M') }} · {{ notification_status.last_test.status }}{% else %}Never{% endif %}</small>
@@ -536,6 +536,8 @@
       const enable = panel.querySelector('[data-enable-push]');
       const disable = panel.querySelector('[data-disable-push]');
       const form = panel.querySelector('[data-notification-preferences]');
+      const testForm = panel.querySelector('[data-notification-test]');
+      const testButton = testForm?.querySelector('button[type="submit"]');
       const supported = window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
       const setStatus = (text) => { if (status) status.textContent = text; };
       const key = {{ vapid_public_key|tojson }};
@@ -555,13 +557,14 @@
         return result.subscription_id;
       };
       const check = async () => {
-        if (!window.isSecureContext) { setStatus('Notifications are not available from this connection. Open Re-Deputy using its secure HTTPS address.'); if (enable) enable.hidden = true; return; }
-        if (!supported) { setStatus('Web Push is not available in this browser.'); if (enable) enable.hidden = true; return; }
+        if (!window.isSecureContext) { setStatus('Notifications are not available from this connection. Open Re-Deputy using its secure HTTPS address.'); if (enable) enable.hidden = true; if (testButton) testButton.disabled = true; return; }
+        if (!supported) { setStatus('Web Push is not available in this browser.'); if (enable) enable.hidden = true; if (testButton) testButton.disabled = true; return; }
         if (Notification.permission === 'denied') { setStatus('Permission blocked. Enable notifications in your device or browser settings.'); return; }
         const registration = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
         const subscription = await registration.pushManager.getSubscription();
         setStatus(subscription ? 'Notifications enabled' : Notification.permission === 'granted' ? 'Ready to enable' : 'Not enabled');
         if (disable) disable.hidden = !subscription;
+        if (testButton) { testButton.disabled = !subscription; testButton.title = subscription ? '' : 'Enable notifications on this device first.'; }
       };
       enable?.addEventListener('click', async () => {
         if (!supported || !key) return;
@@ -577,6 +580,7 @@
           if (enabled) enabled.checked = true;
           setStatus('Notifications enabled');
           if (disable) disable.hidden = false;
+          if (testButton) testButton.disabled = false;
           form?.requestSubmit();
         } catch (error) {
           setStatus(error.message || 'Notifications could not be enabled.');
@@ -596,6 +600,7 @@
           localStorage.removeItem('reDeputyPushSubscriptionId');
           setStatus('Not enabled');
           disable.hidden = true;
+          if (testButton) testButton.disabled = true;
         } catch (error) {
           setStatus(error.message || 'Notifications could not be disabled.');
         } finally { disable.disabled = false; }

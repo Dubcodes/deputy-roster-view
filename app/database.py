@@ -3411,6 +3411,50 @@ def _workday_window(row: sqlite3.Row | dict[str, object]) -> tuple[datetime | No
     return start, finish
 
 
+def workday_vehicle_conflicts(roster_day_id: int) -> list[dict[str, object]]:
+    """Find canonical catalogue vehicles used by another workday on this date."""
+    with get_connection() as conn:
+        target = conn.execute("SELECT * FROM roster_days WHERE id=?", (roster_day_id,)).fetchone()
+        if target is None:
+            return []
+        rows = conn.execute(
+            """
+            SELECT DISTINCT other.id roster_day_id,other.roster_date,other.track_label,
+                   other.custom_location,other.title,other.office_start,other.end_time,
+                   vehicle.id vehicle_id,vehicle.display_label vehicle_label
+            FROM workday_assignments mine
+            JOIN crew_vehicles vehicle ON vehicle.id=mine.vehicle_id
+            JOIN roster_days other ON other.roster_date=? AND other.id!=mine.roster_day_id
+            JOIN workday_assignments theirs ON theirs.roster_day_id=other.id
+                AND theirs.vehicle_id=mine.vehicle_id AND theirs.assignment_state='assigned'
+            WHERE mine.roster_day_id=? AND mine.assignment_state='assigned'
+              AND mine.transport_mode='vehicle' AND mine.vehicle_id IS NOT NULL
+            ORDER BY LOWER(vehicle.display_label),other.office_start,other.id
+            """,
+            (str(target["roster_date"] or ""), roster_day_id),
+        ).fetchall()
+    target_start, target_end = _workday_window(target)
+    conflicts: list[dict[str, object]] = []
+    for row in rows:
+        other_start, other_end = _workday_window(row)
+        if target_start and target_end and other_start and other_end:
+            level = "overlap" if target_start < other_end and other_start < target_end else "same_day"
+        else:
+            level = "possible"
+        conflicts.append({
+            **dict(row),
+            "level": level,
+            "message": (
+                "Vehicle times overlap" if level == "overlap"
+                else "Vehicle is already used on another workday today" if level == "same_day"
+                else "Possible vehicle conflict · timing is still TBC"
+            ),
+            "location_label": str(row["custom_location"] or row["track_label"] or row["title"] or "Workday"),
+            "time_range": f"{row['office_start'] or 'TBC'}–{row['end_time'] or 'TBC'}",
+        })
+    return conflicts
+
+
 def workday_assignment_conflicts(
     *, crew_person_id: int, roster_day_id: int,
 ) -> list[dict[str, object]]:

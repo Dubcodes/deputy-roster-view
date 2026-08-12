@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -39,6 +40,7 @@ def main() -> None:
         init_db,
         list_crew_people,
         list_workday_roles,
+        workday_vehicle_conflicts,
     )
     from app.main import app, build_timesheet_summary, published_rosters_by_date
     from app.security import encrypt_text, hash_pin
@@ -280,6 +282,52 @@ def main() -> None:
     migrated = [dict(row) for row in get_roster_day_assignments(legacy_day_id)]
     if len(migrated) != 1 or migrated[0]["role_label"] != "Director" or migrated[0]["transport_mode"] != "vehicle":
         raise AssertionError(f"Legacy assignment migration was not idempotent: {migrated!r}")
+
+    incomplete = client.post(
+        "/admin/roster-days/save",
+        data={"roster_date": "2026-09-01", "day_type": "race_day", "race_type": ""},
+        follow_redirects=False,
+    )
+    match = re.search(r"/admin/roster-days/(\d+)", incomplete.headers.get("location", ""))
+    if incomplete.status_code != 303 or not match:
+        raise AssertionError(f"A date-only race-day draft did not save: {incomplete.status_code} {incomplete.headers.get('location')}")
+    incomplete_id = int(match.group(1))
+    saved_incomplete = dict(get_roster_day(incomplete_id))
+    if any(saved_incomplete.get(field) for field in ("track_label", "office_start", "first_race_time", "last_race_time", "race_count")):
+        raise AssertionError(f"Incomplete draft invented missing values: {saved_incomplete!r}")
+    review = client.get(f"/admin/roster-days/{incomplete_id}?mode=review")
+    if "Some information is still TBC" not in review.text:
+        raise AssertionError("Incomplete-day review did not present publish warnings.")
+    assert_redirect(client.post(f"/admin/roster-days/{incomplete_id}/publish", follow_redirects=False), "Roster+version+1+published")
+
+    with get_connection() as conn:
+        vehicle = conn.execute("SELECT id FROM crew_vehicles WHERE stable_key='684'").fetchone()
+        if vehicle is None:
+            conn.execute("INSERT INTO crew_vehicles(stable_key,display_label,aliases,active,sort_order,source,created_at,updated_at) VALUES ('684','684','[]',1,1,'admin','','')")
+            vehicle = conn.execute("SELECT id FROM crew_vehicles WHERE stable_key='684'").fetchone()
+        vehicle_id = int(vehicle["id"])
+        def add_day(key, start, finish, day='2026-09-02'):
+            cursor = conn.execute("INSERT INTO roster_days(roster_date,track_key,track_label,day_type,office_start,end_time,status) VALUES (?,?,?,'race_day',?,?,'draft')", (day,key,key,start,finish))
+            return int(cursor.lastrowid)
+        target_id = add_day('vehicle-target', '10:30', '18:00')
+        overlap_id = add_day('vehicle-overlap', '08:00', '12:30')
+        advisory_id = add_day('vehicle-advisory', '18:30', '20:00')
+        possible_id = add_day('vehicle-possible', '', '')
+        different_id = add_day('vehicle-different-date', '10:30', '18:00', '2026-09-03')
+        for day_id, count in ((target_id, 4), (overlap_id, 1), (advisory_id, 1), (possible_id, 1), (different_id, 1)):
+            for index in range(count):
+                conn.execute("INSERT INTO workday_assignments(roster_day_id,assignment_state,transport_mode,vehicle_id,vehicle_label,sort_order) VALUES (?,'assigned','vehicle',?,'684',?)", (day_id, vehicle_id, index))
+    conflicts = workday_vehicle_conflicts(target_id)
+    levels = {item["level"] for item in conflicts}
+    if levels != {"overlap", "same_day", "possible"} or len(conflicts) != 3:
+        raise AssertionError(f"Vehicle conflicts did not distinguish overlap/advisory/TBC or leaked same-workday/different-date reuse: {conflicts!r}")
+    conflict_review = client.post(f"/admin/roster-days/{target_id}/publish", follow_redirects=False)
+    if conflict_review.status_code != 303 or "mode=review" not in conflict_review.headers.get("location", ""):
+        raise AssertionError(f"Publish did not recheck vehicle conflicts server-side: {conflict_review.headers.get('location')}")
+    assert_redirect(
+        client.post(f"/admin/roster-days/{target_id}/publish?confirm_vehicle_conflicts=1", follow_redirects=False),
+        "published",
+    )
 
     print("workday builder smoke ok")
 

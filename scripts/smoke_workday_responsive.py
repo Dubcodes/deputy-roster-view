@@ -57,6 +57,18 @@ def main() -> None:
             page.locator('[name="pin_confirm"]').fill("1234")
             page.locator('button[type="submit"]').click()
             page.wait_for_url("**/month")
+            for width in (375, 320):
+                page.set_viewport_size({"width": width, "height": 900})
+                for month, label in ((9, "September 2026"), (11, "November 2026")):
+                    page.goto(f"http://127.0.0.1:{port}/month?year=2026&month={month}")
+                    page.wait_for_selector(".month-nav")
+                    if page.locator(".month-nav strong").inner_text().strip() != label:
+                        raise AssertionError(f"Long month name was abbreviated at {width}px.")
+                    if page.locator(".brand-meta").count():
+                        raise AssertionError("User/sync metadata remained duplicated in the site header.")
+                    if page.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1"):
+                        raise AssertionError(f"{label} header overflowed at {width}px.")
+            page.set_viewport_size({"width": 1280, "height": 900})
             init_db()
             with get_connection() as conn:
                 admin = conn.execute("SELECT id FROM app_users WHERE deputy_email='responsive@example.com'").fetchone()
@@ -196,7 +208,27 @@ def main() -> None:
             team_form.locator("[data-team-submit]").click()
             if not page.locator("[data-create-team-dialog]").is_visible():
                 raise AssertionError("Inline new-team choice did not require confirmation.")
-            page.locator("[data-create-team-dialog] button[value='cancel']").click()
+            original_url = page.url
+            page.evaluate("window.scrollTo(0, 500)")
+            original_scroll = page.evaluate("window.scrollY")
+            page.locator("[data-confirm-create-team]").click()
+            row_status = visible_crew.first.locator("[data-team-status]")
+            try:
+                row_status.get_by_text("Team created and assigned.", exact=True).wait_for(timeout=5_000)
+            except Exception as exc:
+                raise AssertionError(f"In-place team creation failed: {row_status.inner_text()!r}") from exc
+            if page.url != original_url or page.locator("[data-crew-search]").input_value() or page.locator("[data-crew-team-filter]").input_value() != str(northern_team):
+                raise AssertionError("In-place team creation navigated or reset Crew controls.")
+            if abs(page.evaluate("window.scrollY") - original_scroll) > 2:
+                raise AssertionError("In-place team creation changed Admin scroll position.")
+            special_chip = visible_crew.first.locator(".team-chip", has_text="Special Events")
+            if special_chip.count() != 1:
+                raise AssertionError("In-place team creation did not add its chip.")
+            page.once("dialog", lambda dialog: dialog.accept())
+            special_chip.click()
+            page.wait_for_function("![...document.querySelectorAll('.team-chip')].some((item) => item.textContent.includes('Special Events'))")
+            if page.url != original_url:
+                raise AssertionError("In-place team removal navigated away from Admin.")
             for width in (375, 320):
                 page.set_viewport_size({"width": width, "height": 900})
                 if page.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1"):

@@ -91,8 +91,8 @@
       <a class="button button-secondary" href="/admin">Back to admin</a>
       {% if review_mode %}<a class="button button-secondary" href="/admin/roster-days/{{ roster_day.id }}">Edit</a>{% endif %}
       {% if roster_day.id and roster_day.status != "published" %}
-        <form action="/admin/roster-days/{{ roster_day.id }}/publish" method="post" onsubmit="return confirm('Publish this work day to the assigned crew?');">
-          <button class="button" type="submit">Publish work day</button>
+        <form action="/admin/roster-days/{{ roster_day.id }}/publish{% if vehicle_conflicts %}?confirm_vehicle_conflicts=1{% endif %}" method="post" onsubmit="return confirm('Publish this work day to the assigned crew{% if incomplete_warnings or vehicle_conflicts %} with the shown warnings{% endif %}?');">
+          <button class="button" type="submit">{% if incomplete_warnings or vehicle_conflicts %}Publish anyway{% else %}Publish work day{% endif %}</button>
         </form>
       {% endif %}
     </div>
@@ -113,6 +113,12 @@
         <div><dt>Open roles</dt><dd>{{ review_summary.open_count }}</dd></div>
         <div><dt>Transport</dt><dd>{% if review_summary.vehicles %}{{ review_summary.vehicles|join(', ') }}{% endif %}{% if review_summary.self_travel_count %}{% if review_summary.vehicles %} · {% endif %}Making own way ({{ review_summary.self_travel_count }}){% endif %}{% if not review_summary.vehicles and not review_summary.self_travel_count %}No assigned vehicles{% endif %}</dd></div>
       </dl>
+      {% if incomplete_warnings %}
+        <div class="notice builder-account-warning"><strong>Some information is still TBC</strong><p>{{ incomplete_warnings|join(' · ') }}</p><p class="muted">You may publish now and complete it later.</p></div>
+      {% endif %}
+      {% if vehicle_conflicts %}
+        <div class="notice builder-account-warning"><strong>Vehicle conflicts need review</strong>{% for conflict in vehicle_conflicts %}<p><strong>{{ conflict.vehicle_label }} · {{ conflict.message }}</strong><br>{{ conflict.location_label }} · {{ conflict.time_range }}</p>{% endfor %}<p class="muted">These warnings are advisory; publish only when the reuse is intentional.</p></div>
+      {% endif %}
       {% if review_summary.unlinked_names %}
         <div class="notice builder-account-warning">
           <strong>{{ review_summary.unlinked_names|length }} attendee{% if review_summary.unlinked_names|length != 1 %}s{% endif %} do not have an app login and will not receive personal calendar access.</strong>
