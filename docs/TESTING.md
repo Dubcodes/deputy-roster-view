@@ -76,7 +76,9 @@ After Portainer redeploy:
 - Open `/admin`.
 - Open `/admin/roster-days/new`, create an office day with a roleless attendee, save it privately, publish it, and confirm calendar, Next Up, day, weekly total, global view, and timesheet all agree.
 - Apply the Thoroughbred preset, remove RTS, add Gimbal and an explicit open Gimbal Assist row, then reopen the draft and confirm removed roles stay removed.
-- Confirm Making own way, No transport required, an assigned vehicle, and transport TBC remain visually distinct on phone and desktop.
+- Confirm the new transport picker omits No transport required while a historical saved selection still renders; Making own way, an assigned vehicle, and transport TBC remain visually distinct.
+- On an 08:30 race day with truck early start enabled, confirm Tender and OB assignments show 08:15 and include the extra 15 minutes in personal hours, while 684 and other crew remain at 08:30. Disable the setting and confirm everyone returns to 08:30.
+- In Settings at 375px and 320px, enable Web Push only through the explicit button, register more than one device, send immediate and scheduled tests, then disable the current device. Confirm reminders and changes deep-link locally and do not repeat after scheduler restart.
 - Search `cambo` in Person and confirm only Campbell Stephens is shown. Select Open position and confirm it appears in Available/Open Shifts while a TBC row does not.
 - Apply from an eligible linked account, withdraw it, and have an admin accept a fresh application. Confirm conflicts block Apply and Deputy data is unchanged.
 - In Admin, add/remove a team member, change team order, add a vehicle alias, and confirm the builder still displays canonical person and vehicle labels.
@@ -108,3 +110,5 @@ The route smoke also verifies that Office/Clow Place travel defaults collapse to
 - Live Love Racing browser access can change independently of the app. Meeting discovery, programme parsing, cadence, monotonic cache merging, queue deduplication, and source precedence are covered by local HTML/SQLite smoke fixtures.
 
 The self-travel smoke confirms owner-only today/future authorization, stable identity linkage, reversible local overlay, preservation of a later roster vehicle update, append-only preference audit, and isolation from Deputy evidence and Changed state. The responsive builder smoke covers 1280px, 430px, 375px, and 320px widths.
+
+`python scripts\smoke_notifications.py` covers truck-time payloads, multiple devices, owner isolation, reminders, published-manual changes and cancellation, scheduled tests, deduplication, draft exclusion, open-position push filtering, and safe service-worker links.

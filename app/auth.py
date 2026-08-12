@@ -22,6 +22,8 @@ PUBLIC_PATHS = {
     "/login",
     "/signup",
     "/favicon.ico",
+    "/manifest.webmanifest",
+    "/service-worker.js",
 }
 PUBLIC_PREFIXES = (
     "/static/",

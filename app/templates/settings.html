@@ -23,9 +23,34 @@
         {% endif %}
       </div>
       {% if current_user %}
-        <details class="inline-settings-details">
-          <summary>Notifications <span>Coming next</span></summary>
-          <p class="muted">Notification controls will live here when Re-Deputy push notifications are ready.</p>
+        <details class="inline-settings-details notification-settings" data-notification-settings>
+          <summary>Notifications <span>{% if notification_status.preferences.enabled and notification_status.active_devices %}On · {% if notification_status.preferences.night_before %}night before{% endif %}{% if notification_status.preferences.changes_enabled %} + changes{% endif %}{% else %}Not enabled{% endif %}</span></summary>
+          {% if not push_available %}
+            <p class="notice-inline">Push delivery is not configured on this server yet.</p>
+          {% else %}
+            <div class="notification-device-status" data-push-status><strong>This device</strong><span>Checking notification support...</span></div>
+            <div class="notification-device-actions">
+              <button class="button button-secondary" type="button" data-enable-push>Enable notifications</button>
+              <button class="button button-quiet" type="button" data-disable-push hidden>Disable on this device</button>
+            </div>
+            <form class="settings-form compact-settings-form notification-preferences" action="/settings/notifications/preferences" method="post" data-notification-preferences>
+              <label class="compact-check"><input type="checkbox" name="enabled" value="1"{% if notification_status.preferences.enabled %} checked{% endif %}> Notifications on</label>
+              <label class="compact-check"><input type="checkbox" name="changes_enabled" value="1"{% if notification_status.preferences.changes_enabled %} checked{% endif %}> Notify me of changes to my work</label>
+              <label class="compact-check"><input type="checkbox" name="changes_within_24h" value="1"{% if notification_status.preferences.changes_within_24h %} checked{% endif %}> Changes within 24 hours</label>
+              <label class="compact-check"><input type="checkbox" name="night_before" value="1"{% if notification_status.preferences.night_before %} checked{% endif %}> Night-before reminder</label>
+              <label class="compact-check"><input type="checkbox" name="two_days_before" value="1"{% if notification_status.preferences.two_days_before %} checked{% endif %}> Two-days-before reminder</label>
+              <label class="compact-check"><input type="checkbox" name="weekly_digest" value="1"{% if notification_status.preferences.weekly_digest %} checked{% endif %}> Changes this coming week</label>
+              <label class="compact-check"><input type="checkbox" name="open_positions_month" value="1"{% if notification_status.preferences.open_positions_month %} checked{% endif %}> Open positions this month</label>
+              <label class="form-row"><span>Reminder time</span><input type="time" name="reminder_time" value="{{ notification_status.preferences.reminder_time or '19:00' }}"></label>
+              <button class="button button-compact" type="submit">Save notifications</button>
+            </form>
+            <form class="notification-test-form" action="/settings/notifications/test" method="post">
+              <strong>Test notifications</strong>
+              <div><button class="button button-secondary button-compact" type="submit">Test</button><label><span>Now</span><input type="datetime-local" name="scheduled_at"></label></div>
+              <small>Last test: {% if notification_status.last_test %}{{ notification_status.last_test.sent_at or notification_status.last_test.scheduled_at|datetime('%d %b %H:%M') }} · {{ notification_status.last_test.status }}{% else %}Never{% endif %}</small>
+              {% if not notification_status.last_test or notification_status.last_test.status != 'sent' %}<p class="muted">We recommend sending a test notification on this device.</p>{% endif %}
+            </form>
+          {% endif %}
         </details>
         <details class="inline-settings-details">
           <summary>Change PIN</summary>
@@ -503,6 +528,80 @@
 {% endblock %}
 
 {% block scripts %}
+  <script>
+    (() => {
+      const panel = document.querySelector('[data-notification-settings]');
+      if (!panel) return;
+      const status = panel.querySelector('[data-push-status] span');
+      const enable = panel.querySelector('[data-enable-push]');
+      const disable = panel.querySelector('[data-disable-push]');
+      const form = panel.querySelector('[data-notification-preferences]');
+      const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+      const setStatus = (text) => { if (status) status.textContent = text; };
+      const key = {{ vapid_public_key|tojson }};
+      const decodeKey = (value) => {
+        const padding = '='.repeat((4 - value.length % 4) % 4);
+        const raw = atob((value + padding).replace(/-/g, '+').replace(/_/g, '/'));
+        return Uint8Array.from([...raw].map((char) => char.charCodeAt(0)));
+      };
+      const saveSubscription = async (subscription) => {
+        const response = await fetch('/settings/notifications/subscriptions', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subscription: subscription.toJSON() }),
+        });
+        if (!response.ok) throw new Error('Subscription could not be saved');
+        const result = await response.json();
+        localStorage.setItem('reDeputyPushSubscriptionId', String(result.subscription_id));
+        return result.subscription_id;
+      };
+      const check = async () => {
+        if (!supported) { setStatus('Web Push is not available in this browser.'); if (enable) enable.hidden = true; return; }
+        if (Notification.permission === 'denied') { setStatus('Permission blocked. Enable notifications in your device or browser settings.'); return; }
+        const registration = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
+        const subscription = await registration.pushManager.getSubscription();
+        setStatus(subscription ? 'Notifications enabled' : Notification.permission === 'granted' ? 'Ready to enable' : 'Not enabled');
+        if (disable) disable.hidden = !subscription;
+      };
+      enable?.addEventListener('click', async () => {
+        if (!supported || !key) return;
+        enable.disabled = true;
+        try {
+          const permission = await Notification.requestPermission();
+          if (permission !== 'granted') { setStatus('Permission was not granted.'); return; }
+          const registration = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' });
+          let subscription = await registration.pushManager.getSubscription();
+          if (!subscription) subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: decodeKey(key) });
+          await saveSubscription(subscription);
+          const enabled = form?.querySelector('[name="enabled"]');
+          if (enabled) enabled.checked = true;
+          setStatus('Notifications enabled');
+          if (disable) disable.hidden = false;
+          form?.requestSubmit();
+        } catch (error) {
+          setStatus(error.message || 'Notifications could not be enabled.');
+        } finally { enable.disabled = false; }
+      });
+      disable?.addEventListener('click', async () => {
+        disable.disabled = true;
+        try {
+          const registration = await navigator.serviceWorker.getRegistration('/');
+          const subscription = await registration?.pushManager.getSubscription();
+          if (subscription) {
+            let subscriptionId = localStorage.getItem('reDeputyPushSubscriptionId');
+            if (!subscriptionId) subscriptionId = String(await saveSubscription(subscription));
+            await fetch(`/settings/notifications/subscriptions/${encodeURIComponent(subscriptionId)}`, { method: 'DELETE' });
+            await subscription.unsubscribe();
+          }
+          localStorage.removeItem('reDeputyPushSubscriptionId');
+          setStatus('Not enabled');
+          disable.hidden = true;
+        } catch (error) {
+          setStatus(error.message || 'Notifications could not be disabled.');
+        } finally { disable.disabled = false; }
+      });
+      check().catch(() => setStatus('Notification status could not be checked.'));
+    })();
+  </script>
   <script>
     (() => {
       document.querySelectorAll("[data-current-page-url]").forEach((input) => {

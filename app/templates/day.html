@@ -72,7 +72,7 @@
           <div>
             <p class="eyebrow">Manually rostered · version {{ roster.version_number }}</p>
             <h2>{{ roster.display_title }}</h2>
-            <p class="detail-subtitle">{{ roster.location_label }}{% if roster.office_start %} · {{ roster.office_start }}{% if roster.display_end_time %}–{{ roster.display_end_time }} · {{ roster.hours_label }}{% endif %}{% endif %}</p>
+            <p class="detail-subtitle">{{ roster.location_label }}{% if roster.office_start %} · {{ roster.effective_start_time or roster.office_start }}{% if roster.display_end_time %}–{{ roster.display_end_time }} · {{ roster.hours_label }}{% endif %}{% endif %}</p>
           </div>
           {% if current_user.is_admin %}<a class="button button-secondary button-compact" href="/admin/roster-days/{{ roster.id }}">Edit work day</a>{% endif %}
         </div>
@@ -80,7 +80,7 @@
           <section class="race-day-panel race-day-panel-plain">
             <div class="section-heading"><h3>Race Day</h3><span class="badge">{{ roster.race_type_label }}</span></div>
             <dl class="race-day-rows">
-              {% if roster.office_start %}<div><dt>Office</dt><dd>{{ roster.office_start }}</dd></div>{% endif %}
+              {% if roster.office_start %}<div><dt>Start</dt><dd>{{ roster.effective_start_time or roster.office_start }}{% if roster.effective_start_time and roster.effective_start_time != roster.office_start %} · truck crew{% endif %}</dd></div>{% endif %}
               {% if roster.on_track_time %}<div><dt>On track</dt><dd>{{ roster.on_track_time }}</dd></div>{% endif %}
               {% if roster.hotel_label %}<div><dt>Hotel</dt><dd>{{ roster.hotel_label }}</dd></div>{% endif %}
               {% if roster.first_race_time %}<div><dt>First race</dt><dd>{{ roster.first_race_time }}</dd></div>{% endif %}
@@ -101,7 +101,7 @@
                 <div class="crew-roster-row{% if not person.role_label and not person.position_label %} is-placeholder{% endif %}" role="row">
                   <span role="cell">{{ person.role_label or person.position_label or 'Attending' }}</span>
                   <strong role="cell">{% if person.assignment_state == 'open' %}Open position{% elif person.assignment_state == 'tbc' %}TBC{% else %}{{ person.assignee_label }}{% endif %}</strong>
-                  <span role="cell">{{ person.transport_label or person.vehicle_label or 'TBC' }}</span>
+                  <span role="cell">{{ person.transport_label or person.vehicle_label or 'TBC' }}{% if roster.truck_start_offset_minutes and person.vehicle_is_truck %}<small>starts {{ person.effective_start_time or roster.office_start }}</small>{% endif %}</span>
                 </div>
                 {% if person.assignment_note %}<p class="manual-assignment-note">{{ person.assignee_label or person.role_label }} · {{ person.assignment_note }}</p>{% endif %}
               {% endfor %}

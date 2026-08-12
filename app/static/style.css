@@ -3924,6 +3924,22 @@ textarea {
   border-left: 4px solid var(--muted);
 }
 
+.builder-truck-start { align-items: flex-start; padding-top: 1.55rem; }
+.builder-truck-start span { display: grid; gap: .2rem; }
+.builder-truck-start small { color: var(--muted); font-weight: 400; }
+.notification-device-status { display: flex; justify-content: space-between; gap: 1rem; margin: .75rem 0; }
+.notification-device-status span { color: var(--muted); text-align: right; }
+.notification-preferences { display: grid; gap: .65rem; margin-top: 1rem; }
+.notification-device-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+.notification-test-form { border-top: 1px solid var(--border); display: grid; gap: .55rem; margin-top: 1rem; padding-top: 1rem; }
+.notification-test-form > div { display: flex; align-items: end; gap: .75rem; flex-wrap: wrap; }
+.notification-test-form label { display: grid; gap: .25rem; }
+.crew-roster-row [role="cell"] small { display: block; color: var(--muted); }
+@media (max-width: 420px) {
+  .notification-device-status { display: grid; }
+  .notification-device-status span { text-align: left; }
+}
+
 .builder-duplicate-dialog {
   width: min(480px, calc(100vw - 32px));
   border: 1px solid var(--line);

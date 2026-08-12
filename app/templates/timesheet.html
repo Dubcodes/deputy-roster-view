@@ -57,7 +57,7 @@
                 <section class="timesheet-calculation">
                   <strong>{{ roster.display_title }}{% if roster.location_label and roster.location_label != roster.display_title %} · {{ roster.location_label }}{% endif %}</strong>
                   <dl class="timeline-list maths-segments">
-                    <div><dt>{{ roster.office_start or "TBC" }}</dt><dd>Start</dd></div>
+                    <div><dt>{{ roster.effective_start_time or roster.office_start or "TBC" }}</dt><dd>Start</dd></div>
                     {% if roster.break_minutes %}<div><dt>{{ roster.break_minutes }}m</dt><dd>Unpaid break</dd></div>{% endif %}
                     <div><dt>{{ roster.display_end_time or "TBC" }}</dt><dd>Finish</dd></div>
                     <div><dt>{{ roster.hours_label }}</dt><dd>Calculated total</dd></div>

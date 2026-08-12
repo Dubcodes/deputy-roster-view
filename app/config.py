@@ -33,6 +33,10 @@ class Settings:
     own_roster_lookback_days: int
     own_roster_lookahead_days: int
     holiday_region: str
+    public_app_url: str
+    vapid_public_key: str
+    vapid_private_key: str
+    vapid_subject: str
     data_dir: str
     db_path: str
 
@@ -109,6 +113,10 @@ def get_settings() -> Settings:
         own_roster_lookback_days=_int_env("OWN_ROSTER_LOOKBACK_DAYS", 35),
         own_roster_lookahead_days=_int_env("OWN_ROSTER_LOOKAHEAD_DAYS", 56),
         holiday_region=os.getenv("NZ_HOLIDAY_REGION", "").strip(),
+        public_app_url=os.getenv("PUBLIC_APP_URL", "").strip().rstrip("/"),
+        vapid_public_key=os.getenv("VAPID_PUBLIC_KEY", "").strip(),
+        vapid_private_key=os.getenv("VAPID_PRIVATE_KEY", ""),
+        vapid_subject=os.getenv("VAPID_SUBJECT", "mailto:admin@example.invalid").strip(),
         data_dir=data_dir,
         db_path=db_path,
     )

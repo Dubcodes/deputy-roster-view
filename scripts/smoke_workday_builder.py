@@ -34,6 +34,7 @@ def main() -> None:
     from app.database import (
         create_app_user,
         get_connection,
+        get_roster_day,
         get_roster_day_assignments,
         init_db,
         list_crew_people,
@@ -122,6 +123,10 @@ def main() -> None:
             raise AssertionError(f"Love Racing planning seed omitted {expected!r}.")
     if "Private until published" not in planning_builder.text:
         raise AssertionError("Love Racing planning seed did not remain a private builder draft.")
+    if 'name="truck_crew_early" value="1" checked' not in planning_builder.text:
+        raise AssertionError("A new race day did not default truck crew early start on.")
+    if 'data-value="not_required"' in planning_builder.text:
+        raise AssertionError("No transport required remained in the normal new-assignment picker.")
 
     office = client.post(
         "/admin/roster-days/save",
@@ -157,6 +162,8 @@ def main() -> None:
     office_editor = client.get(f"/admin/roster-days/{office_id}")
     if 'data-workday-form' not in office_editor.text or "Save &amp; review" not in office_editor.text:
         raise AssertionError("The explicit edit view did not retain the full builder.")
+    if 'data-value="not_required"' not in office_editor.text or "Historical selection" not in office_editor.text:
+        raise AssertionError("A historical No transport required selection no longer renders safely.")
     assert_redirect(client.post(f"/admin/roster-days/{office_id}/publish", follow_redirects=False), "Roster+version+1+published")
 
     for user_id in (int(jayden_person["app_user_id"]), int(gary["id"]), int(olivia["id"])):
@@ -192,6 +199,7 @@ def main() -> None:
             "new_track_label": "Te Rapa",
             "race_type": "thoroughbred",
             "office_start": "08:15",
+            "truck_crew_early": "1",
             "on_track_time": "08:45",
             "first_race_time": "11:30",
             "last_race_time": "16:15",
@@ -209,6 +217,8 @@ def main() -> None:
         follow_redirects=False,
     )
     race_id = int(race.headers["location"].split("/admin/roster-days/", 1)[1].split("?", 1)[0])
+    if int(get_roster_day(race_id)["truck_start_offset_minutes"] or 0) != 15:
+        raise AssertionError("Race-day truck start setting was not persisted as 15 minutes.")
     race_editor = client.get(f"/admin/roster-days/{race_id}")
     if "Use another Deputy location" not in race_editor.text:
         raise AssertionError("Exceptional Deputy locations are not available behind the advanced control.")

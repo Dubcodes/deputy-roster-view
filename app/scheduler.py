@@ -30,6 +30,7 @@ from .planning_calendar import (
 )
 from .sync_ics import sync_deputy_calendar
 from .track_maps import refresh_track_maps_if_due
+from .notifications import run_notification_pass
 from .user_credentials import settings_for_user
 
 
@@ -70,6 +71,14 @@ def start_scheduler(settings: Settings | None = None) -> BackgroundScheduler:
         run_due_user_syncs,
         trigger=IntervalTrigger(minutes=5, timezone=settings.timezone),
         id="staggered_user_sync_runner",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        run_notification_pass,
+        trigger=IntervalTrigger(minutes=5, timezone=settings.timezone),
+        id="notification_runner",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

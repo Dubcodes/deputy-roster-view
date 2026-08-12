@@ -41,7 +41,7 @@
           <div class="search-picker-menu" role="listbox" hidden data-picker-menu>
             <button type="button" role="option" class="search-picker-option" data-picker-option data-value="unassigned" data-label="No transport assigned yet" data-search="unassigned tbc no transport assigned"><strong>No transport assigned yet</strong></button>
             <button type="button" role="option" class="search-picker-option" data-picker-option data-value="self_travel" data-label="Making own way" data-search="making own way self travel"><strong>Making own way</strong></button>
-            <button type="button" role="option" class="search-picker-option" data-picker-option data-value="not_required" data-label="No transport required" data-search="none no transport required"><strong>No transport required</strong></button>
+            {% if assignment.transport_mode == 'not_required' %}<button type="button" role="option" class="search-picker-option" data-picker-option data-value="not_required" data-label="No transport required" data-search="none no transport required"><strong>No transport required</strong><small>Historical selection</small></button>{% endif %}
             <div class="search-picker-group"><span>Crew vehicles</span>
               {% for vehicle in vehicles %}<button type="button" role="option" class="search-picker-option" data-picker-option data-value="vehicle:{{ vehicle.id }}" data-vehicle-id="{{ vehicle.id }}" data-label="{{ vehicle.display_label }}" data-search="{{ vehicle.display_label }} {{ vehicle.aliases|replace('[',' ')|replace(']',' ')|replace('"',' ') }}"><strong>{{ vehicle.display_label }}</strong>{% if vehicle.team_name %}<small>{{ vehicle.team_name }}</small>{% endif %}</button>{% endfor %}
             </div>
@@ -212,6 +212,7 @@
       <summary>Timing <span>{{ roster_day.office_start or 'Start TBC' }}{% if roster_day.end_time %}–{{ roster_day.end_time }}{% endif %}</span></summary>
       <div class="builder-time-grid">
         <label class="form-row"><span>Start time</span><input type="time" name="office_start" value="{{ roster_day.office_start }}" data-office-time></label>
+        <label class="compact-check builder-truck-start" data-race-field><input type="checkbox" name="truck_crew_early" value="1"{% if roster_day.truck_start_offset_minutes|int > 0 or not roster_day.id %} checked{% endif %}> <span>Truck crew 15 min early<small>{{ truck_vehicle_labels|join(' / ') if truck_vehicle_labels else 'Truck' }} crew start 15 minutes earlier.</small></span></label>
         <label class="form-row" data-general-field><span>Finish time</span><input type="time" name="end_time" value="{{ roster_day.end_time or '' }}"></label>
         <label class="form-row" data-general-field><span>Break minutes <small>optional</small></span><input type="number" name="break_minutes" min="0" max="720" value="{{ roster_day.break_minutes or 0 }}"></label>
         <label class="form-row" data-race-field><span>Arrive on track</span><input type="time" name="on_track_time" value="{{ roster_day.on_track_time }}" data-on-track-time></label>

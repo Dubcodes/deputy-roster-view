@@ -198,7 +198,8 @@ For race days, the app may show a cached or admin-uploaded 2D course map at the 
 - A person is the only generally required value for an assigned row. Role and transport are optional.
 - A blank role means no role has been assigned; display it neutrally as `Attending` without inventing a production position.
 - An unused preset row is omitted. `Open position` is offered to eligible Re-Deputy users; `TBC` is deliberately unfilled and is not offered. Assigned, open, TBC, and unused are separate states.
-- Transport keeps operational distinctions: not assigned yet, making own way, not required, a known vehicle, or a custom note.
+- New transport choices distinguish not assigned yet, making own way, a known vehicle, or a custom note. Historical `not required` records remain visible but are not offered for new assignments.
+- A race day may enable a data-driven truck early-start offset. Only assignments using a vehicle classified as a truck receive that earlier personal start; the event-wide start and other crew times stay unchanged.
 - Custom role labels retain their capitalization and punctuation. Their normalized key is used only for matching. A role enters the reusable catalogue only when an admin deliberately saves it.
 - Presets are editable starting points. Removing RTS and adding Gimbal must not recreate RTS when the draft is reopened.
 - Non-race manual days do not use race count, Love Racing timing, race-clear/pack-up math, or track maps.
@@ -234,3 +235,12 @@ For race days, the app may show a cached or admin-uploaded 2D course map at the 
 - One person normally holds one simultaneous production role per manual event. Moving or keeping both roles must be deliberate and audited.
 - Vehicle selection stores `vehicle_id` plus the canonical vehicle label. Aliases are search-only and never silently rename the vehicle.
 - Team, vehicle, application, and Making own way actions are Re-Deputy-only and never write to Deputy.
+
+## Notifications
+
+- Web Push is off until a user explicitly enables it and accepts browser permission on that device.
+- Reminder and change payloads use the same effective personal start shown in the roster, including the truck offset and Making own way overlay.
+- Meaningful effective revisions may notify; cache evidence, parser-only changes, draft workdays, and Love Racing planning hints may not.
+- Open-position push alerts require an eligible classified team (or deliberate all-team eligibility), no conflict, and an actual offered role. TBC and unclassified positions are excluded from push.
+- Dedupe keys are stable across scheduler restarts. A genuinely changed effective revision may create a new event.
+- Push endpoints and keys are private device records and are never shown in ordinary UI or payloads.

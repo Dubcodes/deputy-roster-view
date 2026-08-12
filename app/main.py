@@ -175,6 +175,7 @@ from .workday_builder import (
     normalise_role_key,
     transport_display,
 )
+from .workday_timing import effective_personal_hours, effective_personal_start
 from .scheduler import get_pre_shift_status, shutdown_scheduler, start_scheduler, sync_roster_sources
 from .security import (
     SESSION_COOKIE_NAME,
@@ -199,11 +200,20 @@ from .track_maps import (
     track_map_location_rule_index,
 )
 from .public_holidays import holiday_for_date
+from .notifications import (
+    notification_admin_summary,
+    notification_status,
+    queue_test_notification,
+    register_push_subscription,
+    revoke_push_subscription,
+    run_notification_pass,
+    save_notification_preferences,
+)
 
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.10.2"
+APP_BUILD = "2026.08.12.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -600,6 +610,32 @@ async def static_cache_middleware(request: Request, call_next):
     if request.url.path.startswith("/static/"):
         response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
     return response
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def web_manifest() -> FileResponse:
+    return FileResponse(APP_DIR / "static" / "manifest.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/service-worker.js", include_in_schema=False)
+def service_worker() -> FileResponse:
+    return FileResponse(
+        APP_DIR / "static" / "service-worker.js",
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"},
+    )
+
+
+def require_same_origin(request: Request) -> None:
+    if request.headers.get("sec-fetch-site", "same-origin") == "cross-site":
+        raise HTTPException(status_code=403, detail="Cross-site request rejected")
+    origin = request.headers.get("origin", "").strip()
+    allowed_hosts = {request.url.netloc}
+    public_url = get_settings().public_app_url
+    if public_url:
+        allowed_hosts.add(urlsplit(public_url).netloc)
+    if origin and urlsplit(origin).netloc not in allowed_hosts:
+        raise HTTPException(status_code=403, detail="Cross-site request rejected")
 
 
 def parse_iso_datetime(value: str | None) -> datetime | None:
@@ -2649,6 +2685,7 @@ def roster_day_snapshot(roster_day: dict[str, object], assignments: list[dict[st
         "linked_deputy_event_id": str(roster_day.get("linked_deputy_event_id") or ""),
         "duplicate_resolution": str(roster_day.get("duplicate_resolution") or "keep_separate"),
         "team_id": int(roster_day["team_id"]) if roster_day.get("team_id") not in (None, "") else None,
+        "truck_start_offset_minutes": int(roster_day.get("truck_start_offset_minutes") or 0),
         "hotel_assignments": parse_hotel_assignments(roster_day.get("hotel_assignments")),
         "assignments": [
             {
@@ -2663,6 +2700,7 @@ def roster_day_snapshot(roster_day: dict[str, object], assignments: list[dict[st
                 "transport_mode": str(item.get("transport_mode") or "unassigned"),
                 "vehicle_id": int(item["vehicle_id"]) if item.get("vehicle_id") not in (None, "") else None,
                 "vehicle_label": str(item.get("vehicle_label") or ""),
+                "vehicle_is_truck": bool(item.get("vehicle_is_truck")),
                 "eligible_team_id": int(item["eligible_team_id"]) if item.get("eligible_team_id") not in (None, "") else None,
                 "eligible_all_teams": bool(item.get("eligible_all_teams")),
                 "custom_transport_text": str(item.get("custom_transport_text") or ""),
@@ -2692,7 +2730,7 @@ def roster_day_change_review(current: dict[str, object], published: dict[str, ob
         "roster_date": "Date", "track_label": "Location", "title": "Title", "race_type": "Race type", "day_type": "Day type",
         "start_origin": "Start origin", "finish_destination": "Finish destination",
         "office_start": "Start", "end_time": "Finish", "break_minutes": "Break", "on_track_time": "On track",
-        "first_race_time": "First race", "last_race_time": "Last race",
+        "first_race_time": "First race", "last_race_time": "Last race", "truck_start_offset_minutes": "Truck crew early start",
         "race_count": "Race count", "notes": "Important notes", "source_reference": "Source/reference", "hotel_assignments": "Hotels",
     }
     changes: list[dict[str, str]] = []
@@ -2885,6 +2923,8 @@ def published_rosters_by_date(start_date: str, end_date: str, user_id: int | Non
             all_assignments=all_assignments,
             hotel_assignments=hotels,
         )
+        for assignment in all_assignments:
+            assignment["effective_start_time"] = effective_personal_start(item, assignment)
         apply_manual_self_travel(item, self_travel_preferences)
         user_assignments = [
             value for value in assignments
@@ -2913,8 +2953,14 @@ def published_rosters_by_date(start_date: str, end_date: str, user_id: int | Non
         item["display_title"] = str(item.get("title") or "").strip() or (str(item.get("track_label") or "Race day") if item.get("day_type") == "race_day" else item["day_type_label"])
         item["location_label"] = str(item.get("custom_location") or item.get("track_label") or "").strip()
         item["hours"], item["display_end_time"] = manual_workday_window(item)
+        personal_assignment = next(
+            (value for value in assignments if user_id is not None and int(value.get("user_id") or 0) == user_id),
+            None,
+        )
+        item["effective_start_time"] = effective_personal_start(item, personal_assignment)
+        item["hours"] = effective_personal_hours(item, personal_assignment, float(item["hours"] or 0))
         item["hours_label"] = format_hours(item["hours"])
-        item["time_range"] = f"{item.get('office_start') or 'Time TBC'}-{item.get('display_end_time') or 'TBC'}"
+        item["time_range"] = f"{item.get('effective_start_time') or item.get('office_start') or 'Time TBC'}-{item.get('display_end_time') or 'TBC'}"
         result.setdefault(str(item.get("roster_date") or row["roster_date"]), []).append(item)
     return result
 
@@ -5371,6 +5417,7 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
         "linked_deputy_event_id": "",
         "duplicate_resolution": "keep_separate",
         "team_id": mapped_seed_team_id if planning_seed else default_team_id,
+        "truck_start_offset_minutes": 15,
         "hotel_assignments": "[]",
         "status": "draft",
         "published_snapshot": "",
@@ -5516,6 +5563,11 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
             "hotel_rows": hotel_rows,
             "vehicles": [item for item in vehicle_catalogue if int(item.get("active") or 0)],
             "vehicle_catalogue": vehicle_catalogue,
+            "truck_vehicle_labels": [
+                str(item.get("display_label") or "")
+                for item in vehicle_catalogue
+                if int(item.get("active") or 0) and int(item.get("is_truck") or 0)
+            ],
             "users": [dict(item) for item in list_app_users() if int(item["is_active"] or 0)],
             "crew_options": crew_options,
             "teams": teams,
@@ -5675,6 +5727,7 @@ def admin_page_context(
             1 for location in planning_locations if int(location.get("is_enabled") or 0)
         ),
         "integrity": get_roster_integrity_diagnostics(),
+        "notification_summary": notification_admin_summary(),
     }
 
 
@@ -6888,6 +6941,7 @@ async def admin_save_crew_vehicle(request: Request) -> RedirectResponse:
         display_label=str(form.get("display_label") or ""),
         aliases=[value.strip() for value in str(form.get("aliases") or "").split(",") if value.strip()],
         active=str(form.get("active") or "") == "1",
+        is_truck=str(form.get("is_truck") or "") == "1",
         sort_order=int(order_text) if order_text.lstrip("-").isdigit() else 1000,
         team_id=int(team_id_text) if team_id_text.isdigit() else None,
         notes=str(form.get("notes") or ""),
@@ -7112,6 +7166,9 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
         linked_deputy_event_id=str(form.get("linked_deputy_event_id") or "").strip()[:200],
         duplicate_resolution=str(form.get("duplicate_resolution") or "keep_separate")[:30],
         team_id=team_id,
+        truck_start_offset_minutes=(
+            15 if day_type == "race_day" and str(form.get("truck_crew_early") or "") == "1" else 0
+        ),
         updated_by_user_id=int(user["id"]),
         assignments=assignments,
     )
@@ -7340,8 +7397,82 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "theme_groups": THEME_GROUPS,
             "current_theme": current_theme,
             "current_theme_label": THEME_LABELS.get(current_theme, "Jade dark"),
+            "notification_status": notification_status(owner_user_id) if owner_user_id is not None else None,
+            "push_available": bool(settings.vapid_public_key and settings.vapid_private_key),
+            "vapid_public_key": settings.vapid_public_key,
         },
     )
+
+
+@app.post("/settings/notifications/preferences")
+async def update_notification_settings(request: Request) -> RedirectResponse:
+    require_same_origin(request)
+    user = current_user(request)
+    if not user or user.get("id") is None:
+        raise HTTPException(status_code=403, detail="Login required")
+    form = await request.form()
+    save_notification_preferences(int(user["id"]), {
+        key: str(form.get(key) or "") == "1"
+        for key in (
+            "enabled", "changes_enabled", "changes_within_24h", "night_before",
+            "two_days_before", "weekly_digest", "open_positions_month",
+        )
+    } | {"reminder_time": str(form.get("reminder_time") or "19:00")})
+    return RedirectResponse(url=notice_url("/settings", "Notification preferences saved."), status_code=303)
+
+
+@app.post("/settings/notifications/subscriptions")
+async def add_push_subscription(request: Request) -> JSONResponse:
+    require_same_origin(request)
+    user = current_user(request)
+    if not user or user.get("id") is None:
+        raise HTTPException(status_code=403, detail="Login required")
+    payload = await request.json()
+    subscription = payload.get("subscription") if isinstance(payload, dict) else None
+    if not isinstance(subscription, dict):
+        raise HTTPException(status_code=400, detail="Push subscription is missing")
+    try:
+        subscription_id = register_push_subscription(
+            int(user["id"]), subscription, request.headers.get("user-agent", "")
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse({"ok": True, "subscription_id": subscription_id})
+
+
+@app.delete("/settings/notifications/subscriptions/{subscription_id}")
+def remove_push_subscription(request: Request, subscription_id: int) -> JSONResponse:
+    require_same_origin(request)
+    user = current_user(request)
+    if not user or user.get("id") is None:
+        raise HTTPException(status_code=403, detail="Login required")
+    return JSONResponse({"ok": revoke_push_subscription(int(user["id"]), subscription_id)})
+
+
+@app.post("/settings/notifications/test")
+async def test_push_notification(request: Request) -> RedirectResponse:
+    require_same_origin(request)
+    user = current_user(request)
+    if not user or user.get("id") is None:
+        raise HTTPException(status_code=403, detail="Login required")
+    form = await request.form()
+    scheduled_text = str(form.get("scheduled_at") or "").strip()
+    scheduled_at = None
+    if scheduled_text:
+        try:
+            scheduled_at = datetime.fromisoformat(scheduled_text).replace(tzinfo=get_settings().timezone)
+        except ValueError:
+            return RedirectResponse(url=notice_url("/settings", "Choose a valid test time."), status_code=303)
+        if scheduled_at <= datetime.now(get_settings().timezone):
+            return RedirectResponse(url=notice_url("/settings", "Scheduled test time must be in the future."), status_code=303)
+    queue_test_notification(int(user["id"]), scheduled_at)
+    if scheduled_at is None:
+        result = run_notification_pass()
+        delivered = int(dict(result.get("delivery") or {}).get("delivered") or 0)
+        message = "Test notification sent to this account's enabled devices." if delivered else "Test notification could not be delivered yet. Check this device's notification status."
+    else:
+        message = f"Test notification scheduled for {scheduled_at.strftime('%d %b %H:%M')}."
+    return RedirectResponse(url=notice_url("/settings", message), status_code=303)
 
 
 @app.post("/settings/theme")

@@ -206,7 +206,7 @@
               <a class="upcoming-card published-roster-marker" href="/day/{{ item.date }}">
                 <span>{{ item.date_label }}</span>
                 <strong>{{ item.location_label or item.display_title }}</strong>
-                <span>{{ item.position_label if item.day_type == 'race_day' else item.display_title }} · {{ item.office_start or "Time TBC" }} · {{ item.hours_label }}</span>
+                <span>{{ item.position_label if item.day_type == 'race_day' else item.display_title }} · {{ item.effective_start_time or item.office_start or "Time TBC" }} · {{ item.hours_label }}</span>
               </a>
             {% else %}
               <a class="upcoming-card" href="/day/{{ item.date }}" style="{{ item.colour_style }}">

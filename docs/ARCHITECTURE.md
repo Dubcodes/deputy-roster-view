@@ -188,6 +188,18 @@ An unambiguous employee-ID match may link the account directly or merge an accou
 
 `user_event_transport_preferences` stores a signed-in user's reversible "Making my own way" choice against a stable Deputy shift or manual-workday ID and canonical crew identity. `user_event_transport_preference_audit` records each actual toggle. The read layer overlays that choice on the latest roster transport; it never edits Deputy shifts, manual roster snapshots, vehicle evidence, or Changed state. Turning it off therefore reveals the newest underlying transport assignment.
 
+Historical `not_required` assignments remain readable, but the normal new-assignment picker no longer offers that state.
+
+## Effective Personal Start
+
+`app/workday_timing.py` is the shared source for a published manual assignment's effective personal start and hours. An explicit personal start wins; otherwise a race day's configured truck offset applies only to vehicles classified `is_truck`; all other assignments retain the event start. Tender and OB are seeded as the initial truck vehicles, and Admin may change the classification. The event time and Deputy data are never rewritten.
+
+## Web Push
+
+`app/notifications.py` uses the existing APScheduler process to generate, deduplicate, and deliver standards-based Web Push events. VAPID keys and the public app URL come from environment configuration. Preferences belong to an app user; endpoint subscriptions belong to individual devices and may only be managed by their authenticated owner. Published manual versions, effective Deputy changes, reminders, eligible team-classified open positions, weekly digests, and persisted tests feed one global queue. Draft workdays and Love Racing planning rows do not notify.
+
+`app/static/service-worker.js` handles push display and same-origin relative deep links only. It deliberately does not add an offline application cache.
+
 ## Workday Review Flow
 
 The manual workday builder keeps its existing draft/version/publication boundary. Its compact editor supports searchable reusable roles, one-day custom roles, roleless attendees, open positions, and exceptional Deputy locations behind advanced controls. Saving redirects to a read-only review view; only an explicit publish action changes what crew can see. A saved Love Racing planning row may prefill a new private race-day draft, but remains planning evidence and never publishes automatically.

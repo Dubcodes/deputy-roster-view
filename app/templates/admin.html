@@ -508,6 +508,11 @@
       </details>
     </details>
   </section>
+
+  <details class="table-panel management-panel">
+    <summary class="management-panel-summary"><span><strong>Notifications</strong><small>{{ notification_summary.enabled_users }} enabled users · {{ notification_summary.devices }} devices · {{ notification_summary.failed }} failed</small></span><span>Delivery diagnostics</span></summary>
+    <p class="muted">Push endpoints and encryption keys remain hidden. Failed or expired devices are handled by the delivery worker.</p>
+  </details>
   <details class="table-panel location-management-panel">
     <summary class="management-panel-summary">
       <span><strong>Locations</strong><small>{{ planning_location_enabled_count }} of {{ planning_locations|length }} planning locations active</small></span>
@@ -663,7 +668,7 @@
     <summary class="management-panel-summary"><span><strong>Crew vehicles</strong><small>{{ crew_vehicles|length }} known vehicles</small></span><span>Search aliases and display order</span></summary>
     <div class="management-panel-body">
       <form class="role-catalogue-add" action="/admin/vehicles/save" method="post"><input name="display_label" placeholder="Vehicle label" required><input name="aliases" placeholder="Aliases, comma separated"><input type="number" name="sort_order" value="1000" aria-label="Order"><input type="hidden" name="active" value="1"><button class="button button-secondary" type="submit">Add vehicle</button></form>
-      <div class="role-catalogue-list">{% for vehicle in crew_vehicles %}<form class="role-catalogue-row" action="/admin/vehicles/save" method="post"><input type="hidden" name="vehicle_id" value="{{ vehicle.id }}"><input name="display_label" value="{{ vehicle.display_label }}" aria-label="Vehicle label"><input name="aliases" value="{{ vehicle.aliases|replace('[','')|replace(']','')|replace('"','') }}" aria-label="Aliases"><input type="number" name="sort_order" value="{{ vehicle.sort_order }}" aria-label="Order"><select name="team_id" aria-label="Team"><option value="">Any team</option>{% for team in crew_teams if team.active %}<option value="{{ team.id }}"{% if vehicle.team_id == team.id %} selected{% endif %}>{{ team.display_name }}</option>{% endfor %}</select><label class="compact-check"><input type="checkbox" name="active" value="1"{% if vehicle.active %} checked{% endif %}> Active</label><button class="button button-secondary button-compact" type="submit">Save</button></form>{% endfor %}</div>
+      <div class="role-catalogue-list">{% for vehicle in crew_vehicles %}<form class="role-catalogue-row" action="/admin/vehicles/save" method="post"><input type="hidden" name="vehicle_id" value="{{ vehicle.id }}"><input name="display_label" value="{{ vehicle.display_label }}" aria-label="Vehicle label"><input name="aliases" value="{{ vehicle.aliases|replace('[','')|replace(']','')|replace('"','') }}" aria-label="Aliases"><input type="number" name="sort_order" value="{{ vehicle.sort_order }}" aria-label="Order"><select name="team_id" aria-label="Team"><option value="">Any team</option>{% for team in crew_teams if team.active %}<option value="{{ team.id }}"{% if vehicle.team_id == team.id %} selected{% endif %}>{{ team.display_name }}</option>{% endfor %}</select><label class="compact-check"><input type="checkbox" name="is_truck" value="1"{% if vehicle.is_truck %} checked{% endif %}> Truck / early start</label><label class="compact-check"><input type="checkbox" name="active" value="1"{% if vehicle.active %} checked{% endif %}> Active</label><button class="button button-secondary button-compact" type="submit">Save</button></form>{% endfor %}</div>
     </div>
   </details>
 

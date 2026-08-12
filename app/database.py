@@ -767,6 +767,7 @@ def init_db(settings: Settings | None = None) -> None:
                 source TEXT NOT NULL DEFAULT 'discovered',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                is_truck INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (team_id) REFERENCES crew_teams(id) ON DELETE SET NULL
             );
 
@@ -868,6 +869,67 @@ def init_db(settings: Settings | None = None) -> None:
                 FOREIGN KEY (canonical_person_id) REFERENCES crew_people(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                app_user_id INTEGER NOT NULL,
+                endpoint TEXT NOT NULL UNIQUE,
+                p256dh TEXT NOT NULL,
+                auth TEXT NOT NULL,
+                device_description TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_success_at TEXT,
+                last_failure_at TEXT,
+                failure_count INTEGER NOT NULL DEFAULT 0,
+                revoked_at TEXT,
+                FOREIGN KEY (app_user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS notification_preferences (
+                app_user_id INTEGER PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                changes_enabled INTEGER NOT NULL DEFAULT 1,
+                changes_within_24h INTEGER NOT NULL DEFAULT 1,
+                night_before INTEGER NOT NULL DEFAULT 1,
+                two_days_before INTEGER NOT NULL DEFAULT 0,
+                weekly_digest INTEGER NOT NULL DEFAULT 0,
+                open_positions_month INTEGER NOT NULL DEFAULT 0,
+                reminder_time TEXT NOT NULL DEFAULT '19:00',
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (app_user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS notification_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                app_user_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                workday_kind TEXT,
+                workday_id TEXT,
+                event_date TEXT,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                target_url TEXT NOT NULL DEFAULT '/month',
+                scheduled_at TEXT NOT NULL,
+                sent_at TEXT,
+                status TEXT NOT NULL DEFAULT 'queued',
+                dedupe_key TEXT NOT NULL UNIQUE,
+                failure_summary TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (app_user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS notification_deliveries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                notification_event_id INTEGER NOT NULL,
+                subscription_id INTEGER,
+                attempted_at TEXT NOT NULL,
+                result TEXT NOT NULL,
+                failure_summary TEXT,
+                FOREIGN KEY (notification_event_id) REFERENCES notification_events(id) ON DELETE CASCADE,
+                FOREIGN KEY (subscription_id) REFERENCES push_subscriptions(id) ON DELETE SET NULL
+            );
+
             CREATE TABLE IF NOT EXISTS user_event_transport_preference_audit (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 preference_id INTEGER NOT NULL,
@@ -926,6 +988,9 @@ def init_db(settings: Settings | None = None) -> None:
                 WHERE status IN ('pending', 'accepted');
             CREATE INDEX IF NOT EXISTS idx_user_transport_pref_day ON user_event_transport_preferences(event_date, location_key, canonical_person_id);
             CREATE INDEX IF NOT EXISTS idx_workday_visibility_user ON workday_user_visibility(user_id, roster_day_id);
+            CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user_active ON push_subscriptions(app_user_id, active);
+            CREATE INDEX IF NOT EXISTS idx_notification_events_due ON notification_events(status, scheduled_at);
+            CREATE INDEX IF NOT EXISTS idx_notification_events_user_type ON notification_events(app_user_id, event_type, event_date);
             CREATE INDEX IF NOT EXISTS idx_identity_deputy_employee ON app_user_deputy_identity(deputy_employee_id);
             """
         )
@@ -990,6 +1055,8 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "roster_days", "duplicate_resolution", "TEXT DEFAULT 'keep_separate'")
         _ensure_column(conn, "roster_days", "canonical_location_key", "TEXT")
         _ensure_column(conn, "roster_days", "team_id", "INTEGER")
+        _ensure_column(conn, "roster_days", "truck_start_offset_minutes", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "crew_vehicles", "is_truck", "INTEGER DEFAULT 0")
         _ensure_column(conn, "crew_people", "merged_into_person_id", "INTEGER")
         _ensure_column(conn, "crew_people", "merged_at", "TEXT")
         _ensure_column(conn, "crew_people", "merged_by_user_id", "INTEGER")
@@ -998,6 +1065,12 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "workday_assignments", "vehicle_id", "INTEGER")
         _ensure_column(conn, "workday_assignments", "eligible_team_id", "INTEGER")
         _ensure_column(conn, "workday_assignments", "eligible_all_teams", "INTEGER DEFAULT 0")
+        if not conn.execute("SELECT 1 FROM app_settings WHERE key='truck_vehicle_seed_v1'").fetchone():
+            conn.execute("UPDATE crew_vehicles SET is_truck=1 WHERE LOWER(display_label) IN ('tender','ob')")
+            conn.execute(
+                "INSERT INTO app_settings(key,value,updated_at) VALUES ('truck_vehicle_seed_v1','1',?)",
+                (datetime.now(get_settings().timezone).isoformat(timespec="seconds"),),
+            )
         _backfill_workday_assignment_keys(conn)
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_workday_assignment_key "
@@ -1235,13 +1308,14 @@ def _sync_vehicle_catalogue(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             INSERT INTO crew_vehicles(
-                stable_key,display_label,aliases,active,sort_order,source,created_at,updated_at
-            ) VALUES (?,?,'[]',1,?,'discovered',?,?)
+                stable_key,display_label,aliases,active,is_truck,sort_order,source,created_at,updated_at
+            ) VALUES (?,?,'[]',1,?,?,'discovered',?,?)
             ON CONFLICT(stable_key) DO UPDATE SET
                 display_label=CASE WHEN crew_vehicles.source='discovered' THEN excluded.display_label ELSE crew_vehicles.display_label END,
                 updated_at=excluded.updated_at
             """,
-            (key, label[:100], common_order.get(label.casefold(), 999), now, now),
+            (key, label[:100], 1 if label.casefold() in {"tender", "ob"} else 0,
+             common_order.get(label.casefold(), 999), now, now),
         )
 
 
@@ -2724,10 +2798,12 @@ def get_roster_day_assignments(roster_day_id: int) -> list[dict[str, object]]:
         rows = [dict(row) for row in conn.execute(
             """
             SELECT a.*, u.display_name, u.deputy_email,
-                   p.canonical_display_name AS person_display_name
+                   p.canonical_display_name AS person_display_name,
+                   COALESCE(v.is_truck,0) AS vehicle_is_truck
             FROM workday_assignments a
             LEFT JOIN app_users u ON u.id = a.user_id
             LEFT JOIN crew_people p ON p.id = a.person_id
+            LEFT JOIN crew_vehicles v ON v.id = a.vehicle_id
             WHERE a.roster_day_id = ?
             ORDER BY a.sort_order, LOWER(a.role_label), a.id
             """,
@@ -2964,7 +3040,7 @@ def list_crew_vehicles(*, include_inactive: bool = False) -> list[dict[str, obje
 def save_crew_vehicle(
     *, vehicle_id: int | None, display_label: str, aliases: list[str],
     active: bool, sort_order: int, team_id: int | None, notes: str,
-    actor_user_id: int,
+    actor_user_id: int, is_truck: bool = False,
 ) -> tuple[bool, str, int | None]:
     label = re.sub(r"\s+", " ", str(display_label or "").strip())[:100]
     key = _vehicle_catalogue_key(label)
@@ -2976,13 +3052,13 @@ def save_crew_vehicle(
         if vehicle_id is None:
             cursor = conn.execute(
                 """
-                INSERT INTO crew_vehicles(stable_key,display_label,aliases,active,sort_order,team_id,notes,source,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,'admin',?,?)
+                INSERT INTO crew_vehicles(stable_key,display_label,aliases,active,is_truck,sort_order,team_id,notes,source,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,'admin',?,?)
                 ON CONFLICT(stable_key) DO UPDATE SET display_label=excluded.display_label,
-                    aliases=excluded.aliases,active=excluded.active,sort_order=excluded.sort_order,
+                    aliases=excluded.aliases,active=excluded.active,is_truck=excluded.is_truck,sort_order=excluded.sort_order,
                     team_id=excluded.team_id,notes=excluded.notes,source='admin',updated_at=excluded.updated_at
                 """,
-                (key, label, json.dumps(clean_aliases), 1 if active else 0, int(sort_order), team_id, notes.strip()[:500], now, now),
+                (key, label, json.dumps(clean_aliases), 1 if active else 0, 1 if is_truck else 0, int(sort_order), team_id, notes.strip()[:500], now, now),
             )
             row = conn.execute("SELECT id FROM crew_vehicles WHERE stable_key=?", (key,)).fetchone()
             saved_id = int(row["id"] if row else cursor.lastrowid)
@@ -2991,14 +3067,14 @@ def save_crew_vehicle(
             if not conn.execute("SELECT 1 FROM crew_vehicles WHERE id=?", (vehicle_id,)).fetchone():
                 return False, "Vehicle was not found.", None
             conn.execute(
-                "UPDATE crew_vehicles SET display_label=?,aliases=?,active=?,sort_order=?,team_id=?,notes=?,source='admin',updated_at=? WHERE id=?",
-                (label, json.dumps(clean_aliases), 1 if active else 0, int(sort_order), team_id, notes.strip()[:500], now, vehicle_id),
+                "UPDATE crew_vehicles SET display_label=?,aliases=?,active=?,is_truck=?,sort_order=?,team_id=?,notes=?,source='admin',updated_at=? WHERE id=?",
+                (label, json.dumps(clean_aliases), 1 if active else 0, 1 if is_truck else 0, int(sort_order), team_id, notes.strip()[:500], now, vehicle_id),
             )
             saved_id = vehicle_id
             action = "vehicle_updated"
         conn.execute(
             "INSERT INTO crew_vehicle_audit(action,vehicle_id,actor_user_id,details,created_at) VALUES (?,?,?,?,?)",
-            (action, saved_id, actor_user_id, json.dumps({"label": label, "aliases": clean_aliases, "active": active}), now),
+            (action, saved_id, actor_user_id, json.dumps({"label": label, "aliases": clean_aliases, "active": active, "is_truck": is_truck}), now),
         )
     return True, "Vehicle saved.", saved_id
 
@@ -3071,6 +3147,7 @@ def save_roster_day(
     linked_deputy_event_id: str = "",
     duplicate_resolution: str = "keep_separate",
     team_id: int | None = None,
+    truck_start_offset_minutes: int = 0,
     updated_by_user_id: int,
     assignments: list[dict[str, object]],
 ) -> int:
@@ -3100,10 +3177,10 @@ def save_roster_day(
                     on_track_time, first_race_time, last_race_time, race_count,
                     notes, hotel_assignments, title, custom_location, end_time,
                     break_minutes, source_reference, provenance, linked_deputy_event_id,
-                    duplicate_resolution, team_id, status, published_snapshot, created_by_user_id,
+                    duplicate_resolution, team_id, truck_start_offset_minutes, status, published_snapshot, created_by_user_id,
                     updated_by_user_id, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', '', ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', '', ?, ?, ?, ?)
                 """,
                 (
                     roster_date, identity_key, canonical_location_key, track_label, race_type, day_type,
@@ -3111,7 +3188,7 @@ def save_roster_day(
                     on_track_time, first_race_time, last_race_time, race_count,
                     notes, hotel_assignments, title, custom_location, end_time,
                     max(0, int(break_minutes or 0)), source_reference, provenance,
-                    linked_deputy_event_id, duplicate_resolution, team_id,
+                    linked_deputy_event_id, duplicate_resolution, team_id, max(0, int(truck_start_offset_minutes or 0)),
                     updated_by_user_id, updated_by_user_id, now, now,
                 ),
             )
@@ -3128,6 +3205,7 @@ def save_roster_day(
                     last_race_time = ?, race_count = ?, notes = ?, hotel_assignments = ?, status = ?,
                     title = ?, custom_location = ?, end_time = ?, break_minutes = ?,
                     source_reference = ?, provenance = ?, linked_deputy_event_id = ?, duplicate_resolution = ?, team_id = ?,
+                    truck_start_offset_minutes = ?,
                     updated_by_user_id = ?, updated_at = ?
                 WHERE id = ?
                 """,
@@ -3138,6 +3216,7 @@ def save_roster_day(
                     notes, hotel_assignments, status,
                     title, custom_location, end_time, max(0, int(break_minutes or 0)),
                     source_reference, provenance, linked_deputy_event_id, duplicate_resolution, team_id,
+                    max(0, int(truck_start_offset_minutes or 0)),
                     updated_by_user_id, now, saved_id,
                 ),
             )
@@ -3656,6 +3735,10 @@ def resolve_workday_snapshot_assignments(assignments: list[object]) -> list[dict
             if not isinstance(raw, dict):
                 continue
             item = dict(raw)
+            vehicle_id = _optional_int(item.get("vehicle_id"))
+            if vehicle_id is not None:
+                vehicle = conn.execute("SELECT is_truck FROM crew_vehicles WHERE id=?", (vehicle_id,)).fetchone()
+                item["vehicle_is_truck"] = bool(vehicle and vehicle["is_truck"])
             person_id = _canonical_person_id_conn(conn, _optional_int(item.get("person_id")))
             if person_id is not None:
                 person = conn.execute(
