@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -22,8 +23,10 @@ def main() -> None:
     from app.config import get_settings
     from app.database import get_travel_route, init_db, save_crew_vehicle, upsert_travel_route
     import app.main as main_module
+    from fastapi.testclient import TestClient
     from app.main import (
         apply_event_changes_to_schedule_people,
+        apply_roster_note_vehicles,
         apply_timing_math,
         build_race_day_summary,
         build_shift_change_summary,
@@ -37,6 +40,7 @@ def main() -> None:
 
     init_db()
     save_crew_vehicle(vehicle_id=None, display_label="684", aliases=[], active=True, sort_order=10, team_id=None, notes="", is_truck=False, actor_user_id=None)
+    save_crew_vehicle(vehicle_id=None, display_label="Rav91", aliases=["Rav"], active=True, sort_order=20, team_id=None, notes="", is_truck=False, actor_user_id=None)
 
     travel_note = "Trucks Dylan and Esq\nGrant, Todd, Lans and Junior Rav91\nJosh Jayden Nate qua684"
     travel_summary = parse_roster_summary(travel_note.splitlines())
@@ -49,6 +53,102 @@ def main() -> None:
         raise AssertionError(f"Trailing Rav91 crew group was not parsed: {allocations!r}")
     if "qua684" not in travel_note:
         raise AssertionError("Travel parsing modified the raw roster note.")
+
+    taupo_people = [
+        {"employee_name": "James", "vehicle_label": ""},
+        {"employee_name": "Grant Woolston", "vehicle_label": ""},
+        {"employee_name": "Lans McGall", "vehicle_label": ""},
+        {"employee_name": "Alf", "vehicle_label": "Rav91"},
+        {"employee_name": "Jayden-lee", "vehicle_label": "Rav91"},
+        {"employee_name": "Joshua Druett", "vehicle_label": "Rav91"},
+    ]
+    taupo_note = "684 james grant lans\nRav Alf jayden and josh"
+    apply_roster_note_vehicles(
+        taupo_people,
+        [{"roster_summary": parse_roster_summary(taupo_note.splitlines())}],
+    )
+    taupo_vehicles = {item["employee_name"]: item["vehicle_label"] for item in taupo_people}
+    expected_taupo = {
+        "James": "684", "Grant Woolston": "684", "Lans McGall": "684",
+        "Alf": "Rav91", "Jayden-lee": "Rav91", "Joshua Druett": "Rav91",
+    }
+    if taupo_vehicles != expected_taupo or "Rav91, Rav" in repr(taupo_people):
+        raise AssertionError(f"Vehicle aliases were not canonicalized before aggregation: {taupo_people!r}")
+
+    main_module.queue_manual_sync = lambda *_args, **_kwargs: True
+    client = TestClient(main_module.app)
+    signup = client.post(
+        "/signup",
+        data={
+            "deputy_web_url": "https://example.deputy.com/#/",
+            "deputy_email": "travel@example.com",
+            "deputy_password": "password",
+            "pin": "1234",
+            "pin_confirm": "1234",
+            "next_url": "/settings",
+        },
+        follow_redirects=False,
+    )
+    if signup.status_code != 303:
+        raise AssertionError(f"Travel render fixture signup failed: {signup.status_code}")
+    with sqlite3.connect(get_settings().db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        user_id = int(conn.execute("SELECT id FROM app_users WHERE deputy_email='travel@example.com'").fetchone()["id"])
+        now = "2026-08-12T12:00:00+12:00"
+        identities = {
+            "Dylan Holden": ["Dylan"],
+            "Esq": [],
+            "Grant Woolston": ["Grant"],
+            "Lans McGall": ["Lans"],
+            "Joshua Druett": ["Josh"],
+            "Jayden-lee": ["Jayden"],
+            "Nate": [],
+        }
+        for employee_id, (canonical, aliases) in enumerate(identities.items(), start=100):
+            cursor = conn.execute(
+                "INSERT INTO crew_people(canonical_display_name,deputy_employee_id,current_deputy_name,is_active,created_at,updated_at) VALUES (?,?,?,1,?,?)",
+                (canonical, employee_id, canonical, now, now),
+            )
+            for alias in aliases:
+                conn.execute(
+                    "INSERT INTO crew_aliases(person_id,alias,normalized_alias,created_at,updated_at) VALUES (?,?,?,?,?)",
+                    (cursor.lastrowid, alias, alias.casefold(), now, now),
+                )
+        conn.execute(
+            "INSERT INTO shifts(source_uid,title,description,location,start_at,end_at,date,raw_hours,paid_hours,owner_user_id,last_synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            ("travel-2026-08-14", "[Travel] Travel then Overnighter", travel_note, "Travel", "2026-08-14T12:00:00+12:00", "2026-08-14T17:00:00+12:00", "2026-08-14", 5.0, 5.0, user_id, now),
+        )
+        conn.execute(
+            "INSERT INTO deputy_schedule_shifts(source_shift_id,captured_at,area_name,employee_id,employee_name,start_at,end_at,date,duration,is_published,changed_since_viewed,change_summary) VALUES (?,?,?,?,?,?,?,?,?,1,1,?)",
+            (9001, now, "Travel then Overnighter", 999, "Rob Watson", "2026-08-14T12:00:00+12:00", "2026-08-14T17:00:00+12:00", "2026-08-14", 18000, "Mark Strachan -> Rob Watson"),
+        )
+        conn.execute(
+            "INSERT INTO deputy_schedule_event_changes(group_id,change_key,change_type,date,old_positions,new_positions,old_employee_name,new_employee_name,changed_at,display_summary,inline_summary) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            ("generic-travel", "replacement", "replacement", "2026-08-14", '["Travel then Overnighter"]', '["Travel then Overnighter"]', "Mark Strachan", "Rob Watson", now, "Travel then Overnighter: Mark Strachan -> Rob Watson", "Mark Strachan -> Rob Watson"),
+        )
+        conn.execute(
+            "INSERT INTO deputy_schedule_assignment_history(source_shift_id,date,position_label,old_employee_name,new_employee_name,changed_at) VALUES (?,?,?,?,?,?)",
+            (9001, "2026-08-14", "Travel then Overnighter", "Mark Strachan", "Rob Watson", now),
+        )
+        conn.commit()
+    rendered = client.get("/day/2026-08-14")
+    if rendered.status_code != 200:
+        raise AssertionError(f"Travel day did not render: {rendered.status_code}")
+    html = rendered.text
+    crew_match = re.search(r'aria-label="Deputy schedule crew".*?</section>', html, re.S)
+    crew_html = crew_match.group(0) if crew_match else ""
+    expected_people = ("Dylan Holden", "Esq", "Grant Woolston", "Lans McGall", "Joshua Druett", "Jayden-lee", "Nate")
+    if not crew_html or any(name not in crew_html for name in expected_people):
+        raise AssertionError(f"Rendered Travel cohort omitted confidently resolved note people: {crew_html}")
+    if "Rob Watson" in html or "Mark Strachan" in html:
+        raise AssertionError("Rendered Travel day retained unrelated generic schedule crew/history.")
+    if "Rav91" not in crew_html or "684" not in crew_html:
+        raise AssertionError("Rendered Travel cohort lost canonical note vehicles.")
+    if "Todd" in crew_html or "Junior" in crew_html:
+        raise AssertionError("Unresolved short names were guessed into the visible Travel cohort.")
+    for raw_line in travel_note.splitlines():
+        if raw_line not in html:
+            raise AssertionError(f"Raw Travel roster note line was not preserved: {raw_line!r}")
 
     expected_times = {
         "8.15am": "08:15",

@@ -217,7 +217,7 @@ from .push_identity import ensure_push_identity
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.12.3"
+APP_BUILD = "2026.08.12.4"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -1291,6 +1291,9 @@ def note_vehicle_allocations_from_text(value: str) -> list[dict[str, object]]:
             _vehicle_suffix_cache = (time.monotonic(), known)
         for index, token in enumerate(tokens):
             compact = re.sub(r"[^a-z0-9]+", "", token.casefold())
+            if compact in known:
+                tokens[index] = known[compact]
+                break
             matches = [
                 (key, label) for key, label in known.items()
                 if any(char.isdigit() for char in compact)
@@ -3238,6 +3241,40 @@ def roster_note_vehicle_allocations(shifts: list[dict[str, object]]) -> list[dic
     return allocations
 
 
+def canonical_vehicle_labels(value: object) -> str:
+    """Canonicalize known catalogue labels/aliases while preserving unknown labels."""
+    global _vehicle_suffix_cache
+    cached_at, known = _vehicle_suffix_cache
+    if time.monotonic() - cached_at > 30:
+        known = {}
+        for item in list_crew_vehicles(include_inactive=False):
+            canonical = str(item.get("display_label") or "").strip()
+            labels = [canonical]
+            try:
+                aliases = json.loads(str(item.get("aliases") or "[]"))
+            except (TypeError, ValueError):
+                aliases = []
+            labels.extend(str(alias) for alias in aliases if isinstance(alias, str))
+            for label in labels:
+                key = re.sub(r"[^a-z0-9]+", "", label.casefold())
+                if key:
+                    known[key] = canonical or label.strip()
+        _vehicle_suffix_cache = (time.monotonic(), known)
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw_label in str(value or "").split(","):
+        label = raw_label.strip()
+        if not label:
+            continue
+        key = re.sub(r"[^a-z0-9]+", "", label.casefold())
+        display = known.get(key, label)
+        identity = re.sub(r"[^a-z0-9]+", "", display.casefold())
+        if identity and identity not in seen:
+            seen.add(identity)
+            result.append(display)
+    return ", ".join(result)
+
+
 def apply_roster_note_vehicles(people: list[dict[str, object]], shifts: list[dict[str, object]]) -> None:
     if not people:
         return
@@ -3251,18 +3288,18 @@ def apply_roster_note_vehicles(people: list[dict[str, object]], shifts: list[dic
         if len(matched_indexes) != 1:
             continue
         person = people[matched_indexes.pop()]
-        current_vehicle = str(person.get("vehicle_label") or "").strip()
+        current_vehicle = canonical_vehicle_labels(person.get("vehicle_label"))
         current_vehicle = ", ".join(
             part.strip()
             for part in current_vehicle.split(",")
             if schedule_label_key(part) not in {"vehicle", "vehicles", "travel"}
         )
-        vehicle = str(allocation.get("vehicle") or "").strip()
+        vehicle = canonical_vehicle_labels(allocation.get("vehicle"))
         if current_vehicle and current_vehicle != "-":
             vehicle_parts = [part.strip() for part in current_vehicle.split(",") if part.strip()]
             if vehicle not in vehicle_parts:
                 vehicle_parts.append(vehicle)
-            person["vehicle_label"] = ", ".join(vehicle_parts)
+            person["vehicle_label"] = canonical_vehicle_labels(", ".join(vehicle_parts))
         else:
             person["vehicle_label"] = vehicle
 
@@ -3306,6 +3343,7 @@ def travel_note_people(shifts: list[dict[str, object]]) -> list[dict[str, object
         people.append({
             "canonical_person_id": person_id,
             "employee_name": str(identity.get("canonical_display_name") or raw_name),
+            "position_label": "Travel",
             "area_display": "Travel",
             "vehicle_label": vehicle,
             "source": "roster note",
@@ -6765,8 +6803,24 @@ def day_view(
     )
     apply_schedule_role_context(shifts, deputy_schedule_rows)
     apply_roster_note_vehicles(deputy_schedule_people, shifts)
-    if travel_schedule_context and not deputy_schedule_people:
-        deputy_schedule_people = travel_note_people(shifts)
+    note_travel_cohort = False
+    if travel_schedule_context:
+        note_people = travel_note_people(shifts)
+        if note_people:
+            for note_person in note_people:
+                person_id = int(note_person.get("canonical_person_id") or 0)
+                name_key = schedule_label_key(str(note_person.get("employee_name") or ""))
+                matches = [
+                    person for person in deputy_schedule_people
+                    if (person_id and int(person.get("canonical_person_id") or 0) == person_id)
+                    or (name_key and schedule_label_key(str(person.get("employee_name") or "")) == name_key)
+                ]
+                if len(matches) == 1:
+                    if not str(note_person.get("vehicle_label") or "").strip():
+                        note_person["vehicle_label"] = canonical_vehicle_labels(matches[0].get("vehicle_label"))
+                    note_person["provenance_label"] = "Roster note + Deputy schedule"
+            deputy_schedule_people = note_people
+            note_travel_cohort = True
     if travel_schedule_context:
         show_vehicle_assignment_as_travel(shifts)
     elif schedule_location_ids:
@@ -6788,6 +6842,16 @@ def day_view(
             location_ids=schedule_location_ids or None,
         )
     )
+    note_cohort_name_keys = {
+        schedule_label_key(str(person.get("employee_name") or ""))
+        for person in deputy_schedule_people
+    } if note_travel_cohort else set()
+    if note_travel_cohort:
+        deputy_event_changes = [
+            change for change in deputy_event_changes
+            if schedule_label_key(str(change.get("old_employee_name") or "")) in note_cohort_name_keys
+            or schedule_label_key(str(change.get("new_employee_name") or "")) in note_cohort_name_keys
+        ]
     deputy_event_change_groups = group_event_changes(deputy_event_changes)
     if deputy_schedule_rows:
         apply_event_changes_to_schedule_people(deputy_schedule_people, deputy_event_change_groups)
@@ -6821,6 +6885,12 @@ def day_view(
             location_ids=schedule_location_ids or None,
         )
     ]
+    if note_travel_cohort:
+        deputy_assignment_history = [
+            item for item in deputy_assignment_history
+            if schedule_label_key(item["old_employee_name"]) in note_cohort_name_keys
+            or schedule_label_key(item["new_employee_name"]) in note_cohort_name_keys
+        ]
     event_assignments = {
         (schedule_label_key(position), schedule_label_key(str(item.get("new_employee_name") or "TBC")))
         for item in deputy_event_changes
