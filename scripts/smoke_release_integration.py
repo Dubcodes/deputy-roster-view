@@ -34,6 +34,7 @@ class FakeDeputy:
     def __init__(self, user_id: int = 51, employee_id: int = 17, *, token: str = "ACCESS-SECRET", permissions: list[str] | None = None, name: str = "Trial Manager", deny_resources: set[str] | None = None, timeout_resources: set[str] | None = None, endpoint: str = "trial-safe.au.deputy.com", me_status: int = 200, me_timeout: bool = False):
         self.user_id, self.employee_id, self.token, self.permissions, self.name = user_id, employee_id, token, list(permissions if permissions is not None else ["Can_Roster_Manage"]), name
         self.calls, self.authorization_headers, self.rosters, self.deny_resources, self.timeout_resources, self.token_posts, self.endpoint, self.me_status, self.me_timeout = [], [], {}, set(deny_resources or set()), set(timeout_resources or set()), [], endpoint, me_status, me_timeout
+        self.next_roster_id = 76
     def post(self, url: str, **kwargs: object):
         self.calls.append(("TOKEN", url)); self.token_posts.append((url, dict(kwargs.get("data") or {})))
         return Response(200, {"access_token": self.token, "refresh_token": f"ROTATED-{self.token}", "expires_in": 3600, "scope": "longlife_refresh_token", "endpoint": self.endpoint})
@@ -58,7 +59,8 @@ class FakeDeputy:
             return Response(200, rows)
         if method == "POST" and url.endswith("/api/management/v2/shifts"):
             envelope = dict(kwargs.get("json") or {}); assert set(envelope) == {"data"} and set(envelope["data"]) == {"shift", "override"}
-            desired = dict(envelope["data"]["shift"]); desired.update({"id": 77, "canEdit": True, "mealbreakDuration": sum(int(s["end"])-int(s["start"]) for s in desired.get("mealbreakSlots", []))/3600, "isPublished": False, "timesheet": 0}); self.rosters[77] = desired
+            self.next_roster_id += 1
+            desired = dict(envelope["data"]["shift"]); desired.update({"id": self.next_roster_id, "canEdit": True, "mealbreakDuration": sum(int(s["end"])-int(s["start"]) for s in desired.get("mealbreakSlots", []))/3600, "isPublished": False, "timesheet": 0}); self.rosters[self.next_roster_id] = desired
             return Response(200, {"success": True, "data": desired})
         if method == "PUT" and "/api/management/v2/shifts/" in url:
             roster_id = int(url.rsplit("/", 1)[-1]); desired = dict((kwargs.get("json") or {})["data"]["shift"])
@@ -67,10 +69,11 @@ class FakeDeputy:
         if method == "POST" and url.endswith("/api/v1/supervise/roster/publish"):
             for roster_id in (kwargs.get("json") or {}).get("intRosterArray", []): self.rosters[int(roster_id)]["isPublished"] = True
             return Response(200, {"success": True})
-        if method == "GET" and "/api/management/v2/shifts/77" in url:
-            return Response(200, {"success": True, "data": self.rosters[77]}) if 77 in self.rosters else Response(404, {"success": False, "error": {"code": "NOT_FOUND"}})
-        if method == "DELETE" and url.endswith("/api/management/v2/shifts/77"):
-            self.rosters.pop(77, None); return Response(200, {"success": True})
+        if method == "GET" and "/api/management/v2/shifts/" in url:
+            roster_id = int(url.rsplit("/", 1)[-1])
+            return Response(200, {"success": True, "data": self.rosters[roster_id]}) if roster_id in self.rosters else Response(404, {"success": False, "error": {"code": "NOT_FOUND"}})
+        if method == "DELETE" and "/api/management/v2/shifts/" in url:
+            roster_id = int(url.rsplit("/", 1)[-1]); self.rosters.pop(roster_id, None); return Response(200, {"success": True})
         raise AssertionError((method, url, kwargs))
 
 
@@ -86,6 +89,13 @@ class UnknownCreate(FakeDeputy):
             return Response(200, [{"Id": 88, "Employee": 22, "OperationalUnit": 10, "StartTime": "2026-08-21T09:00:00+12:00", "EndTime": "2026-08-21T17:00:00+12:00", "Mealbreak": 0, "Comment": "Re-Deputy reconcile", "Open": False}])
         if method == "GET" and url.endswith("/api/management/v2/shifts/88"):
             return Response(200, {"success": True, "data": {"id": 88, "employee": 22, "area": 10, "start": "2026-08-21T09:00:00+12:00", "end": "2026-08-21T17:00:00+12:00", "mealbreakDuration": 0, "mealbreakSlots": [], "note": "Re-Deputy reconcile", "isOpen": False, "isPublished": False, "approvalRequired": False, "canEdit": True, "timesheet": 0}})
+        return super().request(method, url, **kwargs)
+
+
+class PreflightTimeout(FakeDeputy):
+    def request(self, method: str, url: str, **kwargs: object):
+        if method == "POST" and "/api/v1/resource/Roster/QUERY" in url:
+            raise requests.Timeout("fixture timeout before CREATE transmission")
         return super().request(method, url, **kwargs)
 
 
@@ -340,11 +350,50 @@ assert delete_result["status"] == "verified" and delete_result["deleted"]
 with get_connection() as conn:
     deleted_op = conn.execute("SELECT before_state FROM deputy_write_operations WHERE operation_uuid=?", (delete_prepared["operation_uuid"],)).fetchone()
     assert deleted_op["before_state"] and conn.execute("SELECT deputy_roster_id FROM deputy_roster_links WHERE stable_assignment_key='director'").fetchone()["deputy_roster_id"] is None
+
+# Deleted Re-Deputy binding followed by a real replacement POST acquires fresh Re-Deputy provenance.
+replacement = prepare_operation(app_user_id=admin_id, workday_id=workday_id, assignment_key="director", operation_type="create", desired=desired, session=fake)
+replacement_result = execute_operation(str(replacement["operation_uuid"]), admin_id, session=fake)
+assert replacement_result["status"] == "verified" and replacement_result["roster_id"] == 78
+with get_connection() as conn:
+    assert conn.execute("SELECT ownership FROM deputy_roster_links WHERE stable_assignment_key='director'").fetchone()["ownership"] == "re_deputy_created_trial"
+created_update_desired = {**desired, "note": "Re-Deputy replacement update"}
+created_update = prepare_operation(app_user_id=admin_id, workday_id=workday_id, assignment_key="director", operation_type="update", desired=created_update_desired, roster_id=78, session=fake)
+assert execute_operation(str(created_update["operation_uuid"]), admin_id, session=fake)["status"] == "verified"
+with get_connection() as conn:
+    assert conn.execute("SELECT ownership FROM deputy_roster_links WHERE stable_assignment_key='director'").fetchone()["ownership"] == "re_deputy_created_trial"
+replacement_delete = prepare_operation(app_user_id=admin_id, workday_id=workday_id, assignment_key="director", operation_type="delete", desired={}, roster_id=78, session=fake)
+assert execute_operation(str(replacement_delete["operation_uuid"]), admin_id, session=fake)["status"] == "verified"
+
+# The same stable key may then adopt an exact external roster, replacing stale delete authority.
+external = dict(build_v2_shift_payload(desired)["data"]["shift"])
+external.update({"id": 88, "canEdit": True, "mealbreakDuration": 0, "isPublished": False, "timesheet": 0})
+fake.rosters[88] = external
+adoption = prepare_operation(app_user_id=admin_id, workday_id=workday_id, assignment_key="director", operation_type="create", desired=desired, session=fake)
+adoption_result = execute_operation(str(adoption["operation_uuid"]), admin_id, session=fake)
+assert adoption_result["status"] == "verified" and adoption_result["roster_id"] == 88
+with get_connection() as conn:
+    assert conn.execute("SELECT ownership FROM deputy_roster_links WHERE stable_assignment_key='director'").fetchone()["ownership"] == "adopted_existing"
+delete_calls = sum(method == "DELETE" for method, _url in fake.calls)
+adopted_delete = prepare_operation(app_user_id=admin_id, workday_id=workday_id, assignment_key="director", operation_type="delete", desired={}, roster_id=88, session=fake)
+assert execute_operation(str(adopted_delete["operation_uuid"]), admin_id, session=fake)["status"] == "failed"
+assert sum(method == "DELETE" for method, _url in fake.calls) == delete_calls
 unknown_desired = {"employee": 22, "area": 10, "start": "2026-08-21T09:00:00+12:00", "end": "2026-08-21T17:00:00+12:00", "note": "Re-Deputy reconcile"}
 unknown_fake = UnknownCreate()
 unknown_prepared = prepare_operation(app_user_id=admin_id, workday_id=workday_id, assignment_key="reconcile", operation_type="create", desired=unknown_desired, session=unknown_fake)
 unknown_result = execute_operation(str(unknown_prepared["operation_uuid"]), admin_id, session=unknown_fake)
 assert unknown_result["status"] == "verified" and unknown_result["roster_id"] == 88 and unknown_result["reconciled"]
+with get_connection() as conn:
+    assert conn.execute("SELECT ownership FROM deputy_roster_links WHERE stable_assignment_key='reconcile'").fetchone()["ownership"] == "re_deputy_created_trial"
+
+# A timeout before POST transmission never claims an arbitrary exact roster.
+preflight_fake = PreflightTimeout()
+preflight_prepared = prepare_operation(app_user_id=admin_id, workday_id=workday_id, assignment_key="preflight-timeout", operation_type="create", desired=desired, session=preflight_fake)
+preflight_result = execute_operation(str(preflight_prepared["operation_uuid"]), admin_id, session=preflight_fake)
+assert preflight_result["status"] == "unknown" and "not known to have reached" in preflight_result["message"]
+assert not any(method == "POST" and url.endswith("/api/management/v2/shifts") for method, url in preflight_fake.calls)
+with get_connection() as conn:
+    assert conn.execute("SELECT 1 FROM deputy_roster_links WHERE stable_assignment_key='preflight-timeout'").fetchone() is None
 
 with get_connection() as conn:
     secret_dump = " ".join(str(value) for row in conn.execute("SELECT * FROM deputy_oauth_connections") for value in row)

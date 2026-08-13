@@ -16,13 +16,13 @@ Normal roster sync, iCal, web capture, planning, travel, vehicles, Open/TBC posi
 
    The iCal URL is a backup feed. Keep it private. It can grant access to a roster feed. Do not commit `.env`, paste it into logs, or share screenshots that reveal it.
 
-3. Optional: set a stable `APP_SECRET_KEY`.
+3. Set and preserve a stable `APP_SECRET_KEY` for deployment.
 
    ```env
    APP_SECRET_KEY=make-this-long-random-and-private
    ```
 
-   If this is left blank, the app creates `data/app_secret.key` on first run. Keep either the env key or that generated file safe because it is used to encrypt stored Deputy login secrets.
+   If this is left blank, the app creates `data/app_secret.key` on first run. Keep either the existing env key or that generated file unchanged across every redeploy: replacing it makes stored Deputy and OAuth credentials unreadable. Never generate a replacement key for an existing data volume.
 
 4. The first browser to open the app will be sent to `/signup`. The first signed-up user becomes admin. Each user enters their Deputy email, Deputy password, and a local PIN. PINs are hashed, Deputy passwords are encrypted, and the device receives a long-lived trusted-device cookie. Signup queues that user's first roster sync automatically.
 
@@ -30,11 +30,11 @@ Normal roster sync, iCal, web capture, planning, travel, vehicles, Open/TBC posi
 
    ```env
    TRUSTED_DEVICE_DAYS=730
-   SIGNUP_ENABLED=true
+   SIGNUP_ENABLED=false
    COOKIE_SECURE=false
    ```
 
-5. Optional: set Deputy web env values if you want a server-level fallback account. Normal multi-user sync uses the encrypted credentials entered at `/signup`. Do not put secrets in Git.
+5. Optional: set Deputy web env values if you want a server-level fallback account. It is unconfigured by default. Normal multi-user sync uses the encrypted per-user credentials entered at `/signup`, which continue to work without a global URL. Do not put secrets in Git.
 
    ```env
    DEPUTY_WEB_URL=https://your-business.au.deputy.com/#/
@@ -82,9 +82,9 @@ If you changed `APP_PORT`, use that port instead.
 
 ## Portainer
 
-In Portainer, create a stack from this repository. Set `APP_PORT` to whichever host port you want exposed. You can provide `DEPUTY_ICAL_URL` as an environment variable, or leave it blank and paste the URL into Settings once the app is running. The app stores its SQLite database, generated app secret, and local data in the bind-mounted `./data` directory.
+In Portainer, create a stack from this repository. Set `APP_PORT` to whichever host port you want exposed. You can provide `DEPUTY_ICAL_URL` as an environment variable, or leave it blank and paste the URL into Settings once the app is running. The app stores its SQLite database, generated app secret, VAPID private identity, uploaded maps, and other local data in the bind-mounted `./data` directory. Preserve the real stack's existing port, network, volume mapping, environment, tunnel routing, and `APP_SECRET_KEY` during redeploy.
 
-For the new multi-user flow, open the app and complete `/signup`. For temporary testing through trycloudflared, keep `COOKIE_SECURE=false`. If you move to a permanent HTTPS-only domain later, set `COOKIE_SECURE=true`.
+For the new multi-user flow, open the app and complete `/signup`. The shipped `SIGNUP_ENABLED=false` still permits this first-user bootstrap, then closes public signup once an account exists. For direct HTTP LAN access, keep `COOKIE_SECURE=false`; for a permanent HTTPS-only deployment, set `COOKIE_SECURE=true`.
 
 If using the older Deputy web diagnostics fallback, set `DEPUTY_LOGIN_EMAIL`, `DEPUTY_LOGIN_PASSWORD`, and `DEPUTY_DISPLAY_NAME` as Portainer environment variables. The app shows whether the login is configured, but never displays the password. Use Settings -> Capture Web Data to check whether the logged-in web app exposes richer roster data. Once configured, normal syncs also refresh this Deputy web crew data.
 

@@ -1,5 +1,23 @@
 # Testing
 
+## Canonical release gate
+
+Run the deterministic offline suite locally and in CI with:
+
+```powershell
+python scripts\release_gate.py
+```
+
+The runner compiles Python, renders templates, runs the Deputy/security/integration gates and all committed offline application fixtures, rehearses migration twice, checks SQLite integrity and foreign keys, and audits assignment/link collisions. It never uses live Deputy credentials or a live tenant.
+
+The 320px/375px Playwright gate is intentionally local because CI does not install browser binaries solely for this check:
+
+```powershell
+python scripts\release_gate.py --responsive
+```
+
+GitHub Actions additionally runs `pip check`, `pip-audit`, builds the actual Dockerfile, and boots/restarts a disposable container for unauthenticated HTTP, persistent-data, write-mode-off, and zero-mutation assertions.
+
 ## Required Local Checks
 
 Run before committing:

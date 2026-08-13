@@ -623,9 +623,14 @@ def _matches_stored_baseline(current: NormalizedShift, stored: object) -> bool:
         return False
 
 
-def _reconcile_after_network_error(client: DeputyClient, operation: dict[str, object], desired: dict[str, object], roster_id: int | None) -> dict[str, object]:
+def _reconcile_after_network_error(client: DeputyClient, operation: dict[str, object], desired: dict[str, object], roster_id: int | None,
+                                   *, create_transmitted: bool = False) -> dict[str, object]:
     op_type = str(operation["operation_type"])
     if op_type == "create":
+        if not create_transmitted:
+            return _finish_operation(str(operation["operation_uuid"]), "unknown", None,
+                                     {"message": "Create was not known to have reached Deputy; no roster ownership was claimed."},
+                                     False, "UNKNOWN_NETWORK_RESULT")
         candidates = roster_candidates(client, desired)
         exact = [row for row in candidates if _business_equal(row, desired) and not row.is_open]
         if len(exact) == 1:
@@ -633,7 +638,8 @@ def _reconcile_after_network_error(client: DeputyClient, operation: dict[str, ob
             if adopted:
                 status, body = client.request("GET", f"/api/management/v2/shifts/{adopted}")
                 if status == 200 and _business_equal(normalize_v2_response(body), desired):
-                    _save_roster_link(operation, desired, adopted, extract_v2_shift(body), ownership="re_deputy_created_trial")
+                    _save_roster_link(operation, desired, adopted, extract_v2_shift(body),
+                                      ownership="re_deputy_created_trial", replace_ownership=True)
                     return _finish_operation(str(operation["operation_uuid"]), "verified", adopted, {"reconciled": True}, True)
         if len(exact) > 1:
             return _finish_operation(str(operation["operation_uuid"]), "ambiguous", None, {"message": "Multiple exact Deputy candidates require manual reconciliation."}, False, "AMBIGUOUS")
@@ -652,12 +658,14 @@ def _reconcile_after_network_error(client: DeputyClient, operation: dict[str, ob
     return _finish_operation(str(operation["operation_uuid"]), "unknown", roster_id, {"message": "Deputy result is unknown; reconciliation is required."}, False, "UNKNOWN_NETWORK_RESULT")
 
 
-def _save_roster_link(operation: dict[str, object], desired: dict[str, object], roster_id: int, readback: dict[str, object], *, ownership: str = "re_deputy_created_trial") -> None:
+def _save_roster_link(operation: dict[str, object], desired: dict[str, object], roster_id: int, readback: dict[str, object], *,
+                      ownership: str = "re_deputy_created_trial", replace_ownership: bool = False) -> None:
+    ownership_update = "ownership=excluded.ownership," if replace_ownership else ""
     with get_connection() as conn:
-        conn.execute("""INSERT INTO deputy_roster_links(tenant_host,workday_id,stable_assignment_key,crew_person_id,deputy_employee_id,deputy_unit_id,deputy_roster_id,context_type,ownership,last_desired_hash,last_verified_hash,last_verified_state,created_at,updated_at)
+        conn.execute(f"""INSERT INTO deputy_roster_links(tenant_host,workday_id,stable_assignment_key,crew_person_id,deputy_employee_id,deputy_unit_id,deputy_roster_id,context_type,ownership,last_desired_hash,last_verified_hash,last_verified_state,created_at,updated_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(tenant_host,stable_assignment_key) DO UPDATE SET workday_id=excluded.workday_id,
             crew_person_id=excluded.crew_person_id,deputy_employee_id=excluded.deputy_employee_id,deputy_unit_id=excluded.deputy_unit_id,
-            deputy_roster_id=excluded.deputy_roster_id,context_type=excluded.context_type,last_desired_hash=excluded.last_desired_hash,
+            deputy_roster_id=excluded.deputy_roster_id,context_type=excluded.context_type,{ownership_update}last_desired_hash=excluded.last_desired_hash,
             last_verified_hash=excluded.last_verified_hash,last_verified_state=excluded.last_verified_state,updated_at=excluded.updated_at""",
             (operation["tenant_host"], operation["workday_id"], operation["stable_assignment_key"], desired.get("crew_person_id"), int(desired.get("employee") or 0), int(desired.get("area") or 0), roster_id,
              str(desired.get("context_type") or "production"), ownership, normalized_hash(desired), normalized_hash(readback), json.dumps(readback)[:10000], now_iso(), now_iso()))
@@ -819,6 +827,7 @@ def execute_operation(operation_uuid: str, app_user_id: int, *, session: object 
     desired = json.loads(str(operation["desired_state"])); roster_id = operation.get("deputy_roster_id")
     link_ownership = "re_deputy_created_trial"
     op_type = str(operation["operation_type"])
+    create_transmitted = False
     try:
         if op_type == "create":
             exact = [row for row in roster_candidates(client, desired) if _business_equal(row, desired)]
@@ -832,6 +841,7 @@ def execute_operation(operation_uuid: str, app_user_id: int, *, session: object 
                 roster_id = int(exact[0].roster_id or 0)
                 link_ownership = "adopted_existing"
             else:
+                create_transmitted = True
                 status, body = client.request("POST", "/api/management/v2/shifts", json=build_v2_shift_payload(desired))
                 if status != 200:
                     raise deputy_error(status, body, "create")
@@ -904,11 +914,12 @@ def execute_operation(operation_uuid: str, app_user_id: int, *, session: object 
         normalized_readback = normalize_v2_response(readback)
         if not _business_equal(normalized_readback, desired):
             raise ConnectionError("Deputy read-back did not match the intended shift.")
-        _save_roster_link(operation, desired, int(roster_id), extract_v2_shift(readback), ownership=link_ownership)
+        _save_roster_link(operation, desired, int(roster_id), extract_v2_shift(readback), ownership=link_ownership,
+                          replace_ownership=(op_type == "create"))
         return _finish_operation(operation_uuid, "verified", roster_id, {"readback": "verified"}, True)
     except requests.RequestException:
         try:
-            return _reconcile_after_network_error(client, operation, desired, roster_id)
+            return _reconcile_after_network_error(client, operation, desired, roster_id, create_transmitted=create_transmitted)
         except requests.RequestException:
             return _finish_operation(operation_uuid, "unknown", roster_id, {"message": "Deputy result is unknown; reconciliation is required."}, False, "UNKNOWN_NETWORK_RESULT")
     except PermissionError as exc:

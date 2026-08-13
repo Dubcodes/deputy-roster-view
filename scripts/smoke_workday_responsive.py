@@ -69,6 +69,7 @@ def main() -> None:
             page.goto(f"http://127.0.0.1:{port}/signup")
             page.locator('[name="deputy_email"]').fill("responsive@example.com")
             page.locator('[name="deputy_password"]').fill("password")
+            page.locator('[name="deputy_web_url"]').fill("https://example.au.deputy.com/")
             page.locator('[name="pin"]').fill("1234")
             page.locator('[name="pin_confirm"]').fill("1234")
             page.locator('button[type="submit"]').click()

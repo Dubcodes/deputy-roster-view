@@ -14,8 +14,41 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python -m py_compile app/*.py
-      - run: python scripts/smoke_render_templates.py
-      - run: python scripts/smoke_deputy_release_gate.py
-      - run: python scripts/smoke_security_closure.py
-      - run: python scripts/smoke_release_integration.py
+      - run: python scripts/release_gate.py
+      - run: pip check
+      - run: python -m pip install pip-audit==2.9.0
+      - run: python -m pip_audit -r requirements.txt
+      - name: Build actual application image
+        run: docker build --tag re-deputy-release-gate .
+      - name: Disposable container boot, HTTP and restart gate
+        run: |
+          set -euo pipefail
+          data_dir="${RUNNER_TEMP}/redeputy-container-data"
+          mkdir -p "${data_dir}"
+          docker run --detach --name re-deputy-release-gate --publish 18096:8000 \
+            --env APP_SECRET_KEY=obvious-ci-only-key \
+            --env SIGNUP_ENABLED=false \
+            --env DEPUTY_WEB_URL= \
+            --volume "${data_dir}:/app/data" \
+            re-deputy-release-gate
+          cleanup() { docker rm --force re-deputy-release-gate >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18096/login >/dev/null; then break; fi
+            sleep 1
+          done
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18096/login)" = "200"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18096/signup)" = "200"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18096/manifest.webmanifest)" = "200"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18096/service-worker.js)" = "200"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18096/static/style.css)" = "200"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18096/month)" = "303"
+          docker exec re-deputy-release-gate python -c "import sqlite3; c=sqlite3.connect('/app/data/deputy_roster.sqlite3'); assert c.execute('select write_mode from deputy_oauth_config where id=1').fetchone()[0]=='off'; assert c.execute('select count(*) from deputy_write_operations').fetchone()[0]==0"
+          docker restart re-deputy-release-gate >/dev/null
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18096/login >/dev/null; then break; fi
+            sleep 1
+          done
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18096/login)" = "200"
+          docker exec re-deputy-release-gate python -c "import sqlite3; c=sqlite3.connect('/app/data/deputy_roster.sqlite3'); assert c.execute('select write_mode from deputy_oauth_config where id=1').fetchone()[0]=='off'; assert c.execute('select count(*) from deputy_write_operations').fetchone()[0]==0"
+          docker logs re-deputy-release-gate

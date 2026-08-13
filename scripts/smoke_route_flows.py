@@ -350,7 +350,7 @@ def main() -> None:
     signup = client.post(
         "/signup",
         data={
-            "deputy_web_url": "https://bb12c621103108.au.deputy.com/#/",
+            "deputy_web_url": "https://example.au.deputy.com/#/",
             "deputy_email": "admin@example.com",
             "deputy_password": "initial-password",
             "pin": "1234",
@@ -397,7 +397,7 @@ def main() -> None:
     settings_save = client.post(
         "/settings/deputy-login",
         data={
-            "deputy_web_url": "https://bb12c621103108.au.deputy.com/#/",
+            "deputy_web_url": "https://example.au.deputy.com/#/",
             "deputy_email": "admin@example.com",
             "deputy_password": "changed-password",
         },
@@ -416,14 +416,14 @@ def main() -> None:
         deputy_email="crew@example.com",
         display_name="Crew User",
         pin_hash=hash_pin("1111"),
-        deputy_web_url="https://bb12c621103108.au.deputy.com/#/",
+        deputy_web_url="https://example.au.deputy.com/#/",
         encrypted_email=encrypt_text("crew@example.com"),
         encrypted_password=encrypt_text("old-password"),
     )
     admin_save = client.post(
         f"/admin/users/{int(other['id'])}/deputy-login",
         data={
-            "deputy_web_url": "https://bb12c621103108.au.deputy.com/#/",
+            "deputy_web_url": "https://example.au.deputy.com/#/",
             "deputy_email": "crew@example.com",
             "deputy_password": "new-password",
         },

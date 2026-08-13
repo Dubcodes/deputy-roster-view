@@ -248,7 +248,7 @@ from .deputy_integration import (
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.13.4"
+APP_BUILD = "2026.08.13.5"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),

@@ -89,14 +89,14 @@ def get_settings() -> Settings:
 
     return Settings(
         deputy_ical_url=os.getenv("DEPUTY_ICAL_URL", "").strip(),
-        deputy_web_url=os.getenv("DEPUTY_WEB_URL", "https://bb12c621103108.au.deputy.com/#/").strip(),
+        deputy_web_url=os.getenv("DEPUTY_WEB_URL", "").strip(),
         deputy_login_email=os.getenv("DEPUTY_LOGIN_EMAIL", "").strip(),
         deputy_login_password=os.getenv("DEPUTY_LOGIN_PASSWORD", ""),
         deputy_display_name=os.getenv("DEPUTY_DISPLAY_NAME", "").strip(),
         deputy_api_token=os.getenv("DEPUTY_API_TOKEN", "").strip(),
         app_secret_key=os.getenv("APP_SECRET_KEY", ""),
         trusted_device_days=_int_env("TRUSTED_DEVICE_DAYS", 730),
-        signup_enabled=_bool_env("SIGNUP_ENABLED", True),
+        signup_enabled=_bool_env("SIGNUP_ENABLED", False),
         cookie_secure=_bool_env("COOKIE_SECURE", False),
         tz_name=tz_name,
         sync_at_hour=_int_env("SYNC_AT_HOUR", 5),

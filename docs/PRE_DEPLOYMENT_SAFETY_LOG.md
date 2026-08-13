@@ -263,3 +263,73 @@ No production Deputy writes should be enabled while RD-SAFE-001 remains open.
 
 Next intended build:
 `2026.08.13.5` — targeted final closure pass.
+
+---
+
+## 2026.08.13.5 closure results
+
+Resolution build: `2026.08.13.5`
+
+Resolution commit: the release commit titled `Close final deployment safety gaps`.
+
+All validation used deterministic fixtures, disposable databases, or a disposable CI container. No live Deputy tenant was contacted and no deployment was performed.
+
+### RD-SAFE-001 — FIXED
+
+Root cause confirmed: the stable-assignment upsert preserved historical ownership even when CREATE established a different current roster binding.
+
+Fix:
+
+* CREATE now explicitly replaces ownership for the new binding; ordinary UPDATE continues to preserve ownership.
+* Adoption replaces stale provenance with `adopted_existing`.
+* A successful Re-Deputy POST establishes `re_deputy_created_trial`.
+* Network-error CREATE reconciliation can claim Re-Deputy provenance only after the POST was actually transmitted and deterministic exact reconciliation succeeds.
+
+Regression evidence:
+
+* Re-Deputy create → verified → delete → replacement POST → `re_deputy_created_trial` passed.
+* Re-Deputy create/delete → exact external adoption → `adopted_existing` → later DELETE denied passed.
+* Adopted UPDATE retained `adopted_existing`.
+* Re-Deputy-created UPDATE retained `re_deputy_created_trial`.
+* Pre-transmission timeout claimed no roster link.
+* Post-transmission lost response reconciled exactly and retained valid Re-Deputy provenance.
+* Existing identity, tenant, reference, permission snapshot, drift, Timesheet, overlap, read-back, and cross-user gates remained green.
+
+Final status: FIXED in `2026.08.13.5`.
+
+### RD-SEC-002 — FIXED
+
+Root cause confirmed: URL validation and the hostname-based HTTP connection performed separate DNS decisions.
+
+Fix:
+
+* Each URL/redirect is resolved and validated once, then the HTTPS pool connects directly to one of those validated public IP addresses.
+* TLS SNI and certificate hostname verification use the original hostname, and HTTP `Host` uses the original authority.
+* Direct pools do not inherit environment proxies.
+* IPv4/IPv6, HTTPS/443-only, credential rejection, redirect, timeout, and response-size safeguards remain enforced.
+
+Regression evidence includes direct local/private/link-local/reserved and IPv6 rejection, private redirect rejection, redirect/size limits, and a rebinding transport test proving the socket pool receives the validated public IP while TLS/Host retain the original name. No live calendar was used.
+
+Final status: FIXED in `2026.08.13.5`.
+
+### RD-DEPLOY-003 — MANUAL CONFIG REQUIRED
+
+The shipped `SIGNUP_ENABLED` default is now false. Route regressions prove an empty database can still bootstrap its first user and that GET/POST signup close after that account exists. `COOKIE_SECURE` remains configurable so direct HTTP LAN operation is not broken. The deployment checklist requires `COOKIE_SECURE=true` for permanent HTTPS-only operation and explicitly records the LAN tradeoff.
+
+Final status: MANUAL CONFIG REQUIRED for the operator's HTTPS-versus-LAN choice.
+
+### RD-PRIV-004 — CURRENT DEFAULT FIXED; HISTORY AND RUNTIME-DATA ACTION REQUIRED
+
+The genuine Deputy tenant hostname was removed from all current tracked defaults and fixtures. The global browser URL is now safely unconfigured by default; stored per-user and explicitly configured valid URLs remain supported, while an empty URL exits before Playwright starts.
+
+The exact historical shift-context fallback remains because it is the only compatibility path for an older capture lacking complete structured area context. Removing it without a production-data migration could silently damage historical interpretation. Move this installation-specific fallback to private runtime data in a future migration, then remove the tracked compatibility data. Repository visibility/history remediation remains a separate explicit operator decision; no history rewrite or force push was performed.
+
+Final status: PARTIAL — current tenant default fixed; operational fallback migration and historical exposure action remain.
+
+### RD-CI-005 — FIXED
+
+`scripts/release_gate.py` is now the canonical deterministic offline gate used locally and by GitHub Actions. It includes compilation, template rendering, Deputy/security/integration suites, migration, collision audits, and the broad committed feature fixtures. CI additionally runs dependency consistency/vulnerability checks, builds the actual Dockerfile, and boots/restarts a disposable container while proving write mode stays off and no Deputy write operation appears.
+
+The Playwright 320px/375px check is explicitly classified and documented as a local browser gate.
+
+Final status: FIXED in `2026.08.13.5`.
