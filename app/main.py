@@ -232,8 +232,10 @@ from .deputy_integration import (
     connection_status,
     disconnect as disconnect_deputy_api,
     execute_operation,
+    execute_trial_batch,
     load_config as load_deputy_api_config,
     mapping_snapshot,
+    preflight_trial_batch,
     prepare_operation,
     refresh_references,
     save_config as save_deputy_api_config,
@@ -245,7 +247,7 @@ from .deputy_integration import (
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.13.2"
+APP_BUILD = "2026.08.13.3"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -6088,7 +6090,7 @@ def admin_view(request: Request, notice: str | None = None) -> object:
 
 @app.post("/admin/users/{user_id}/devices/{device_id}/revoke")
 def admin_revoke_device(request: Request, user_id: int, device_id: int) -> RedirectResponse:
-    require_admin_user(request)
+    require_admin_user(request); require_same_origin(request)
     revoked = revoke_trusted_device_for_user(user_id, device_id)
     message = "Trusted device revoked." if revoked else "That device was already revoked or could not be found."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
@@ -6141,7 +6143,8 @@ async def admin_save_deputy_api(request: Request) -> RedirectResponse:
     form = await request.form()
     try:
         save_deputy_api_config(client_id=str(form.get("client_id") or ""), client_secret=str(form.get("client_secret") or ""),
-                               write_mode=str(form.get("write_mode") or "off"), allowed_hosts=str(form.get("allowed_hosts") or ""), actor_user_id=int(actor["id"]))
+                               callback_origin=str(form.get("callback_origin") or ""), write_mode=str(form.get("write_mode") or "off"),
+                               allowed_hosts=str(form.get("allowed_hosts") or ""), actor_user_id=int(actor["id"]))
     except ValueError as exc:
         return RedirectResponse(url=notice_url("/admin", str(exc)), status_code=303)
     return RedirectResponse(url=notice_url("/admin", "Deputy API configuration saved."), status_code=303)
@@ -6183,22 +6186,16 @@ async def deputy_trial_execute(request: Request, roster_day_id: int) -> object:
     preview = build_trial_preview(int(actor["id"]), roster_day_id)
     if str(form.get("confirm") or "") != "CONFIRM" or str(form.get("tenant_host") or "") != str(preview["tenant_host"]):
         raise HTTPException(status_code=400, detail="Monitored trial confirmation did not match.")
-    results = []
-    for action in preview["actions"]:
-        if action["operation"] not in {"create", "update", "delete"}: continue
-        prepared = prepare_operation(app_user_id=int(actor["id"]), workday_id=roster_day_id, assignment_key=str(action["assignment_key"]), operation_type=str(action["operation"]), desired=dict(action["desired"]), roster_id=action.get("roster_id"))
-        results.append(execute_operation(str(prepared["operation_uuid"]), int(actor["id"])))
-    verified_ids = [int(row["roster_id"]) for row in results if row.get("status") == "verified" and row.get("roster_id")]
-    verified_ids.extend(int(action["roster_id"]) for action in preview["actions"] if action["operation"] == "unchanged" and action.get("roster_id"))
-    if verified_ids:
-        prepared = prepare_operation(app_user_id=int(actor["id"]), workday_id=roster_day_id, assignment_key=f"publish:{roster_day_id}", operation_type="publish", desired={"roster_ids": verified_ids})
-        results.append(execute_operation(str(prepared["operation_uuid"]), int(actor["id"])))
+    results, blockers = execute_trial_batch(preview, app_user_id=int(actor["id"]))
+    if blockers:
+        preview["blockers"] = blockers
+        return templates.TemplateResponse("deputy_trial_preview.html", {"request": request, "notice": "Preflight blocked all Deputy mutations.", "current_user": actor, "header_mode": "settings", "preview": preview, "results": results})
     return templates.TemplateResponse("deputy_trial_preview.html", {"request": request, "notice": None, "current_user": actor, "header_mode": "settings", "preview": preview, "results": results})
 
 
 @app.post("/admin/users/{user_id}/pin")
 async def admin_reset_pin(request: Request, user_id: int) -> RedirectResponse:
-    require_admin_user(request)
+    require_admin_user(request); require_same_origin(request)
     form = await request.form()
     pin = str(form.get("pin") or "")
     pin_confirm = str(form.get("pin_confirm") or "")
@@ -7884,8 +7881,8 @@ async def settings_deputy_api_connect(request: Request) -> RedirectResponse:
         raise HTTPException(status_code=403, detail="Deputy connection is unavailable")
     form = await request.form()
     try:
-        url = begin_oauth(app_user_id=int(user["id"]), tenant=str(form.get("tenant") or ""), origin=str(request.base_url))
-    except ValueError as exc:
+        url = begin_oauth(app_user_id=int(user["id"]))
+    except (ValueError, PermissionError) as exc:
         return RedirectResponse(url=notice_url("/settings", str(exc)), status_code=303)
     return RedirectResponse(url=url, status_code=303)
 
@@ -7897,7 +7894,7 @@ def settings_deputy_api_callback(request: Request, state: str = "", code: str = 
         raise HTTPException(status_code=403, detail="Login required")
     try:
         complete_oauth(state=state, code=code, current_user_id=int(user["id"]))
-    except ValueError as exc:
+    except (ValueError, PermissionError) as exc:
         return RedirectResponse(url=notice_url("/settings", str(exc)), status_code=303)
     return RedirectResponse(url=notice_url("/settings", "Deputy API connected and identity verified."), status_code=303)
 
@@ -8463,7 +8460,8 @@ def clear_user_changed(request: Request) -> RedirectResponse:
 
 
 @app.post("/settings/deputy-api-test")
-def test_deputy_api() -> RedirectResponse:
+def test_deputy_api(request: Request) -> RedirectResponse:
+    require_admin_user(request); require_same_origin(request)
     result = test_deputy_roster_api(get_settings())
     message = result.message
     if result.sample:

@@ -108,7 +108,7 @@
           {% else %}
             <p class="muted">This is separate from the browser roster sync. Your OAuth tokens are encrypted and used only for actions you initiate.</p>
             <form class="settings-form compact-settings-form" action="/settings/deputy-api/connect" method="post">
-              <label class="form-row"><span>Deputy tenant</span><input name="tenant" placeholder="tenant.region.deputy.com" required></label>
+              <p class="muted">Deputy will ask you to choose the installation. Re-Deputy accepts only the verified regional Deputy endpoint returned by OAuth.</p>
               <button class="button button-secondary" type="submit">Connect Deputy</button>
             </form>
           {% endif %}

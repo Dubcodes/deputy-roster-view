@@ -218,3 +218,13 @@ This remains the governing boundary. Build 2026.08.13.1 implements only the cont
 - A linked Timesheet (`canEdit=false`, Timesheet ID, or MatchedByTimesheet) is a hard stop. No workaround is offered.
 - Historical Changed-time data is kept as evidence because its start/finish meaning is ambiguous; it is not guessed into the new personal fields.
 - Contractor identity remains the existing canonical crew person plus a restricted app account, never a second crew identity model.
+
+# 2026.08.13.3 release-gate decisions
+
+- Re-Deputy uses Deputy's general/multi-install OAuth flow. Ordinary users do not type a token recipient; initial authorization and code exchange are pinned to `once.deputy.com`, and the returned regional Deputy endpoint becomes the exact tenant binding.
+- The OAuth callback origin is explicit Admin configuration. Request Host and forwarded headers cannot alter the registered redirect URI.
+- V2 single-shift payloads use the documented `data.shift`/`data.override` envelope. Responses require `success=true` and `data`; malformed HTTP 200 bodies are failures, not retry evidence.
+- Full workday Start and Finish are Deputy shift boundaries. On-track and last-race markers never substitute for missing boundaries. Truck assignments use the established early-start offset; duration-only meal breaks use typed `mealbreakSlots`.
+- Create reconciliation is bounded by operational date, Employee, and Operational Unit. One exact roster is adopted and GET-verified; multiple exact or overlapping rosters stop mutation.
+- A batch publishes only after every intended mutation is verified and every unchanged roster is read-ready. Any failed, locked, unknown, or ambiguous result stops the batch and prevents partial publish.
+- Local assignment keys are generated as globally unique IDs across creation/migration paths, even though the workday table also enforces per-workday uniqueness. Roster links keep workday, assignment, canonical person, Employee, Area, Roster ID, and ownership provenance.

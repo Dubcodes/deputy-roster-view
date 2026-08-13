@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from fastapi import Request
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -33,7 +34,22 @@ def main() -> None:
     from playwright.sync_api import sync_playwright
 
     from app.database import get_connection, get_default_team_id, init_db, save_crew_vehicle, set_crew_person_team
-    from app.main import app
+    from app.main import app, templates
+
+    @app.get("/__release_gate_trial_preview")
+    def release_gate_trial_preview(request: Request):
+        preview = {
+            "workday_id": 123, "workday_label": "2026-08-16 · Taupo", "acting_user_id": 1,
+            "tenant_host": "fixture.au.deputy.com", "connected_identity": "Responsive Fixture Manager",
+            "connected_user_id": 901, "connected_employee_id": 902,
+            "scope": "Assigned production shifts only. Travel, vehicles, Open, TBC, and Making my own way remain local-only.",
+            "counts": {"create": 2, "update": 1, "delete": 1, "unchanged": 3, "local_only": 2},
+            "blockers": ["Employee #902 has multiple overlapping full-duration roles; no Deputy mutation is permitted."],
+            "actions": [{"operation": "update", "assignment_key": "fixture-assignment", "role_label": "Director", "roster_id": 7001,
+                         "desired": {"employee": 201, "area": 301, "start": "2026-08-16T07:30:00+12:00", "end": "2026-08-16T19:30:00+12:00"}}],
+            "local_only": [{"assignment_key": "open-position-fixture", "reason": "Open Position · Local only"}],
+        }
+        return templates.TemplateResponse("deputy_trial_preview.html", {"request": request, "current_user": None, "notice": None, "preview": preview, "results": []})
 
     init_db()
     port = free_port()
@@ -79,6 +95,12 @@ def main() -> None:
                         raise AssertionError(f"{label} month navigation overlapped the first row at {width}px.")
                     if month_box["x"] > width * .35:
                         raise AssertionError(f"{label} month navigation remained rigidly viewport-centred at {width}px.")
+                for path, selector in (("/settings", ".settings-grid"), ("/__release_gate_trial_preview", ".settings-grid")):
+                    response = page.goto(f"http://127.0.0.1:{port}{path}")
+                    if not response or response.status != 200 or page.locator(selector).count() == 0:
+                        raise AssertionError(f"{path} did not render for responsive check: status={response.status if response else None}, body={page.locator('body').inner_text()[:500]!r}")
+                    if page.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1"):
+                        raise AssertionError(f"{path} overflowed horizontally at {width}px.")
             page.set_viewport_size({"width": 1280, "height": 900})
             init_db()
             with get_connection() as conn:

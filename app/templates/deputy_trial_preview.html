@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Deputy trial sync - Re-Deputy{% endblock %}
 {% block content %}
-<section class="page-heading compact-heading"><div><p class="eyebrow">Deputy writes · TRIAL ONLY</p><h1>Review Deputy trial changes</h1><p>Workday #{{ preview.workday_id }} · {{ preview.tenant_host }}</p><p><strong>Using: {{ preview.connected_identity }}</strong> · Employee #{{ preview.connected_employee_id }}</p></div></section>
+<section class="page-heading compact-heading"><div><p class="eyebrow">Deputy writes · TRIAL ONLY</p><h1>Review Deputy trial changes</h1><p>{{ preview.workday_label }} · Workday #{{ preview.workday_id }} · {{ preview.tenant_host }}</p><p><strong>Re-Deputy user #{{ preview.acting_user_id }} acting as {{ preview.connected_identity }}</strong> · Deputy User #{{ preview.connected_user_id }} · Employee #{{ preview.connected_employee_id }}</p><p>{{ preview.scope }}</p></div></section>
 <section class="settings-grid">
   <article class="settings-panel"><span>CREATE</span><strong>{{ preview.counts.create }}</strong></article>
   <article class="settings-panel"><span>UPDATE</span><strong>{{ preview.counts.update }}</strong></article>
@@ -9,11 +9,12 @@
   <article class="settings-panel"><span>UNCHANGED</span><strong>{{ preview.counts.unchanged }}</strong></article>
   <article class="settings-panel"><span>LOCAL ONLY</span><strong>{{ preview.counts.local_only }}</strong></article>
 </section>
+{% if preview.blockers %}<section class="table-panel"><h2>Blocking preflight issues</h2>{% for blocker in preview.blockers %}<p class="notice-inline">{{ blocker }}</p>{% endfor %}<p><strong>No Deputy mutation will run while these issues remain.</strong></p></section>{% endif %}
 <section class="table-panel"><h2>Dry preview</h2>
 {% for action in preview.actions %}<p><strong>{{ action.operation|upper }}</strong> · {{ action.role_label or action.assignment_key }}{% if action.roster_id %} · Roster #{{ action.roster_id }}{% endif %}{% if action.desired.employee %} · Employee #{{ action.desired.employee }}{% endif %}{% if action.desired.area %} · Area #{{ action.desired.area }}{% endif %}{% if action.desired.start %} · {{ action.desired.start }}–{{ action.desired.end }}{% endif %}</p>{% endfor %}
 {% for action in preview.local_only %}<p><strong>LOCAL ONLY</strong> · {{ action.assignment_key }} · {{ action.reason }}</p>{% endfor %}
 </section>
-{% if preview.counts.create or preview.counts.update or preview.counts.delete %}<section class="table-panel"><h2>Monitored confirmation</h2><p><strong>Using: {{ preview.connected_identity }}</strong> on <strong>{{ preview.tenant_host }}</strong>. This can create, change, or delete Re-Deputy-owned assigned shifts only. Deputy deletes remove the roster; Re-Deputy retains the audited before-image. Production mode does not exist.</p>
+{% if (preview.counts.create or preview.counts.update or preview.counts.delete) and not preview.blockers %}<section class="table-panel"><h2>Monitored confirmation</h2><p><strong>Using: {{ preview.connected_identity }}</strong> on <strong>{{ preview.tenant_host }}</strong>. This can create, change, or delete Re-Deputy-owned assigned production shifts only. Deputy deletes remove the roster; Re-Deputy retains the audited before-image. Production mode does not exist.</p>
 <form method="post" action="/admin/roster-days/{{ preview.workday_id }}/deputy-trial/execute" class="settings-form"><input type="hidden" name="tenant_host" value="{{ preview.tenant_host }}"><label class="form-row"><span>Type CONFIRM</span><input name="confirm" autocomplete="off" required></label><button class="button" type="submit">Execute monitored trial sync</button></form></section>{% endif %}
 {% if results %}<dialog open class="builder-duplicate-dialog"><div><h2>Deputy trial result</h2>{% for result in results %}<p><strong>{{ result.status|upper }}</strong> · operation {{ result.operation_uuid[:8] }}{% if result.roster_id %} · Roster #{{ result.roster_id }}{% endif %} · read-back {{ 'verified' if result.readback_verified else 'not verified' }}{% if result.message %}<br>{{ result.message }}{% endif %}</p>{% endfor %}<div class="dialog-actions"><a class="button" href="/admin/roster-days/{{ preview.workday_id }}">Close</a><a class="button button-secondary" href="/admin">View audit</a></div></div></dialog>{% endif %}
 {% endblock %}

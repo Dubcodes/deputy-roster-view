@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.contractors import activate_invite, authenticate_contractor_link, create_invite, deactivate_inactive_contractors, invite_details, revoke_invite
 from app.database import create_app_user, create_trusted_device, fetch_shift, get_connection, init_db, update_shift_marks
 from app.deputy_integration import (
-    complete_oauth, connection_status, disconnect, execute_operation, load_config, permission_hash,
+    begin_oauth, build_v2_shift_payload, complete_oauth, connection_status, disconnect, execute_operation, extract_v2_shift, load_config, normalize_v2_response, permission_hash,
     prepare_operation, refresh_references, save_config, trial_host_allowed, verify_read_access,
     verify_write_readiness,
 )
@@ -31,39 +31,61 @@ class Response:
 
 
 class FakeDeputy:
-    def __init__(self, user_id: int = 51, employee_id: int = 17, *, token: str = "ACCESS-SECRET", permissions: list[str] | None = None, name: str = "Trial Manager", deny_resources: set[str] | None = None):
+    def __init__(self, user_id: int = 51, employee_id: int = 17, *, token: str = "ACCESS-SECRET", permissions: list[str] | None = None, name: str = "Trial Manager", deny_resources: set[str] | None = None, timeout_resources: set[str] | None = None, endpoint: str = "trial-safe.au.deputy.com", me_status: int = 200, me_timeout: bool = False):
         self.user_id, self.employee_id, self.token, self.permissions, self.name = user_id, employee_id, token, list(permissions if permissions is not None else ["Can_Roster_Manage"]), name
-        self.calls, self.authorization_headers, self.rosters, self.deny_resources = [], [], {}, set(deny_resources or set())
-    def post(self, url: str, **_kwargs: object):
-        self.calls.append(("TOKEN", url)); return Response(200, {"access_token": self.token, "refresh_token": f"REFRESH-{self.token}", "expires_in": 3600})
+        self.calls, self.authorization_headers, self.rosters, self.deny_resources, self.timeout_resources, self.token_posts, self.endpoint, self.me_status, self.me_timeout = [], [], {}, set(deny_resources or set()), set(timeout_resources or set()), [], endpoint, me_status, me_timeout
+    def post(self, url: str, **kwargs: object):
+        self.calls.append(("TOKEN", url)); self.token_posts.append((url, dict(kwargs.get("data") or {})))
+        return Response(200, {"access_token": self.token, "refresh_token": f"ROTATED-{self.token}", "expires_in": 3600, "scope": "longlife_refresh_token", "endpoint": self.endpoint})
     def request(self, method: str, url: str, **kwargs: object):
         self.calls.append((method, url))
         self.authorization_headers.append(str((kwargs.get("headers") or {}).get("Authorization") or ""))
         if url.endswith("/api/v1/me"):
-            return Response(200, {"UserId": self.user_id, "EmployeeId": self.employee_id, "Name": self.name, "Permissions": self.permissions})
+            if self.me_timeout: raise requests.Timeout("fixture /me timeout")
+            return Response(self.me_status, {"UserId": self.user_id, "EmployeeId": self.employee_id, "Name": self.name, "Permissions": self.permissions})
         if method == "POST" and "/api/v1/resource/Employee/QUERY" in url:
+            if "Employee" in self.timeout_resources: raise requests.Timeout("fixture Employee timeout")
             return Response(403, {}) if "Employee" in self.deny_resources else Response(200, [{"Id": 22, "UserId": 122, "DisplayName": "Readable Worker", "Active": True}])
         if method == "POST" and "/api/v1/resource/OperationalUnit/QUERY" in url:
+            if "OperationalUnit" in self.timeout_resources: raise requests.Timeout("fixture OperationalUnit timeout")
             return Response(403, {}) if "OperationalUnit" in self.deny_resources else Response(200, [{"Id": 10, "OperationalUnitName": "Director", "Active": True, "ShowOnRoster": True}])
+        if method == "POST" and "/api/v1/resource/Roster/QUERY" in url:
+            rows = []
+            for roster in self.rosters.values():
+                rows.append({"Id": roster["id"], "Employee": roster["employee"], "OperationalUnit": roster["area"],
+                             "StartTime": roster["start"], "EndTime": roster["end"], "Mealbreak": int(round(float(roster.get("mealbreakDuration") or 0) * 60)),
+                             "Comment": roster.get("note", ""), "Open": roster.get("isOpen", False), "Published": roster.get("isPublished", False)})
+            return Response(200, rows)
         if method == "POST" and url.endswith("/api/management/v2/shifts"):
-            desired = dict(kwargs.get("json") or {}); desired.update({"id": 77, "canEdit": True}); self.rosters[77] = desired
-            return Response(200, {"shift": desired})
+            envelope = dict(kwargs.get("json") or {}); assert set(envelope) == {"data"} and set(envelope["data"]) == {"shift", "override"}
+            desired = dict(envelope["data"]["shift"]); desired.update({"id": 77, "canEdit": True, "mealbreakDuration": sum(int(s["end"])-int(s["start"]) for s in desired.get("mealbreakSlots", []))/3600, "isPublished": False, "timesheet": 0}); self.rosters[77] = desired
+            return Response(200, {"success": True, "data": desired})
+        if method == "PUT" and "/api/management/v2/shifts/" in url:
+            roster_id = int(url.rsplit("/", 1)[-1]); desired = dict((kwargs.get("json") or {})["data"]["shift"])
+            desired.update({"id": roster_id, "canEdit": True, "mealbreakDuration": sum(int(s["end"])-int(s["start"]) for s in desired.get("mealbreakSlots", []))/3600, "isPublished": self.rosters[roster_id].get("isPublished", False), "timesheet": 0}); self.rosters[roster_id] = desired
+            return Response(200, {"success": True, "data": desired})
         if method == "POST" and url.endswith("/api/v1/supervise/roster/publish"):
             for roster_id in (kwargs.get("json") or {}).get("intRosterArray", []): self.rosters[int(roster_id)]["isPublished"] = True
             return Response(200, {"success": True})
         if method == "GET" and "/api/management/v2/shifts/77" in url:
-            return Response(200, {"shift": self.rosters[77]}) if 77 in self.rosters else Response(404, {})
+            return Response(200, {"success": True, "data": self.rosters[77]}) if 77 in self.rosters else Response(404, {"success": False, "error": {"code": "NOT_FOUND"}})
         if method == "DELETE" and url.endswith("/api/management/v2/shifts/77"):
             self.rosters.pop(77, None); return Response(200, {"success": True})
         raise AssertionError((method, url, kwargs))
 
 
 class UnknownCreate(FakeDeputy):
+    def __init__(self):
+        super().__init__(); self.create_lost = False
     def request(self, method: str, url: str, **kwargs: object):
         if method == "POST" and url.endswith("/api/management/v2/shifts"):
+            self.create_lost = True
             raise requests.Timeout("response lost")
         if method == "POST" and url.endswith("/api/v1/resource/Roster/QUERY"):
-            return Response(200, [{"Id": 88, "Employee": 22, "OperationalUnit": 10, "start": "2026-08-21T09:00:00+12:00", "end": "2026-08-21T17:00:00+12:00", "Comment": "Re-Deputy reconcile", "Open": False}])
+            if not self.create_lost: return Response(200, [])
+            return Response(200, [{"Id": 88, "Employee": 22, "OperationalUnit": 10, "StartTime": "2026-08-21T09:00:00+12:00", "EndTime": "2026-08-21T17:00:00+12:00", "Mealbreak": 0, "Comment": "Re-Deputy reconcile", "Open": False}])
+        if method == "GET" and url.endswith("/api/management/v2/shifts/88"):
+            return Response(200, {"success": True, "data": {"id": 88, "employee": 22, "area": 10, "start": "2026-08-21T09:00:00+12:00", "end": "2026-08-21T17:00:00+12:00", "mealbreakDuration": 0, "mealbreakSlots": [], "note": "Re-Deputy reconcile", "isOpen": False, "isPublished": False, "approvalRequired": False, "canEdit": True, "timesheet": 0}})
         return super().request(method, url, **kwargs)
 
 
@@ -133,11 +155,13 @@ def client_for(user_id: int, token: str) -> TestClient:
 ordinary_client = client_for(int(ordinary["id"]), "ordinary-session")
 assert ordinary_client.get("/admin").status_code == 403
 assert ordinary_client.post(f"/admin/roster-days/1/deputy-trial/execute", data={"confirm": "CONFIRM"}).status_code == 403
+assert ordinary_client.post("/settings/deputy-api-test", headers={"origin": "http://testserver"}).status_code == 403
 contractor_client = client_for(int(contractor["id"]), "contractor-session")
 assert contractor_client.get("/month").status_code == 303 and contractor_client.get("/admin").status_code == 303
 assert contractor_client.get("/settings/deputy-api/callback").status_code in {303, 403}
 assert contractor_client.post("/settings/deputy-api/recheck", headers={"origin": "http://testserver"}).status_code in {303, 403}
 assert contractor_client.post("/settings/deputy-api/connect", data={"tenant": "trial.example.deputy.com"}, headers={"origin": "http://testserver"}).status_code in {303, 403}
+assert contractor_client.post("/settings/deputy-api-test", headers={"origin": "http://testserver"}).status_code in {303, 403}
 contractor_home = contractor_client.get("/contractor")
 assert contractor_home.status_code == 200 and "My work" in contractor_home.text and "Crew directory" not in contractor_home.text
 with get_connection() as conn:
@@ -152,8 +176,8 @@ with get_connection() as conn:
 assert deactivate_inactive_contractors() == 1
 with get_connection() as conn: assert not int(conn.execute("SELECT is_active FROM app_users WHERE id=?", (int(contractor["id"]),)).fetchone()["is_active"])
 
-host = "trial-safe.example.deputy.com"
-save_config(client_id="client", client_secret="OAUTH-SECRET", write_mode="trial", allowed_hosts=host, actor_user_id=admin_id)
+host = "trial-safe.au.deputy.com"
+save_config(client_id="client", client_secret="OAUTH-SECRET", callback_origin="https://redeputy.example", write_mode="trial", allowed_hosts=host, actor_user_id=admin_id)
 admin_client = client_for(admin_id, "admin-session")
 admin_page = admin_client.get("/admin")
 assert admin_page.status_code == 200 and "OAUTH-SECRET" not in admin_page.text and "Deputy API" in admin_page.text
@@ -163,8 +187,8 @@ assert admin_client.post(f"/admin/users/{int(ordinary['id'])}/role", data={"is_a
 with get_connection() as conn:
     assert int(conn.execute("SELECT is_admin FROM app_users WHERE id=?", (int(ordinary["id"]),)).fetchone()["is_admin"])
     assert conn.execute("SELECT COUNT(*) n FROM app_role_audit").fetchone()["n"] == 1
-from app.deputy_integration import begin_oauth
 oauth_url = begin_oauth(app_user_id=admin_id, tenant=host, origin="https://redeputy.example")
+assert oauth_url.startswith("https://once.deputy.com/my/oauth/login?") and parse_qs(urlparse(oauth_url).query)["scope"] == ["longlife_refresh_token"]
 state = parse_qs(urlparse(oauth_url).query)["state"][0]
 with get_connection() as conn:
     assert conn.execute("SELECT 1 FROM deputy_oauth_states WHERE state_hash=?", (state,)).fetchone() is None
@@ -174,10 +198,22 @@ try: complete_oauth(state=other_state, code="code", current_user_id=int(ordinary
 except ValueError: pass
 else: raise AssertionError("OAuth callback bound to another app user")
 complete_oauth(state=state, code="code", current_user_id=admin_id, session=fake)
+assert fake.token_posts[0][0] == "https://once.deputy.com/my/oauth/access_token"
+assert fake.token_posts[0][1]["scope"] == "longlife_refresh_token" and fake.token_posts[0][1]["redirect_uri"] == "https://redeputy.example/settings/deputy-api/callback"
+bad_state = parse_qs(urlparse(begin_oauth(app_user_id=admin_id)).query)["state"][0]
+attacker = FakeDeputy(endpoint="attacker.example.com")
+try: complete_oauth(state=bad_state, code="code", current_user_id=admin_id, session=attacker)
+except ValueError: pass
+else: raise AssertionError("OAuth accepted a non-Deputy returned endpoint")
+assert all("attacker.example.com" not in url for url, _payload in attacker.token_posts)
 try: complete_oauth(state=state, code="code", current_user_id=admin_id, session=fake)
 except ValueError: pass
 else: raise AssertionError("OAuth state replay was accepted")
-assert trial_host_allowed(host) and not trial_host_allowed("production.example.deputy.com") and not trial_host_allowed(f"evil.{host}")
+assert trial_host_allowed(host)
+for malicious in ("attacker.example.com", f"evil.{host}"):
+    try: trial_host_allowed(malicious)
+    except ValueError: pass
+    else: raise AssertionError("Malicious hostname passed Deputy validation")
 
 def connect_fixture(user_id: int, deputy: FakeDeputy) -> None:
     fixture_state = parse_qs(urlparse(begin_oauth(app_user_id=user_id, tenant=host, origin="https://redeputy.example")).query)["state"][0]
@@ -192,6 +228,16 @@ connect_fixture(james_id, james_fake); connect_fixture(sarah_id, sarah_fake)
 verify_read_access(james_id, session=james_fake); verify_read_access(sarah_id, session=sarah_fake)
 assert james_fake.authorization_headers[-1] == "Bearer JAMES-TOKEN"
 assert sarah_fake.authorization_headers[-1] == "Bearer SARAH-TOKEN"
+for transient in (FakeDeputy(61, 31, token="JAMES-TOKEN", me_status=500), FakeDeputy(61, 31, token="JAMES-TOKEN", me_timeout=True)):
+    try: verify_read_access(james_id, session=transient)
+    except ValueError: pass
+    else: raise AssertionError("Temporary /me failure was accepted")
+    assert connection_status(james_id)["read_ready"]
+try: verify_read_access(sarah_id, session=FakeDeputy(62, 32, token="SARAH-TOKEN", me_status=401))
+except PermissionError: pass
+else: raise AssertionError("/me 401 did not invalidate authentication")
+assert not connection_status(sarah_id)["read_ready"]
+connect_fixture(sarah_id, sarah_fake)
 
 # Read/write readiness matrix and permission changes always use the current /me snapshot.
 ordinary_fake = FakeDeputy(71, 41, token="ORDINARY-TOKEN", permissions=[], name="Ordinary Deputy")
@@ -206,7 +252,7 @@ assert verify_read_access(admin_id, session=fake)["read_ready"]
 try: verify_write_readiness(admin_id, session=fake)
 except PermissionError as exc: assert "trial writes are currently disabled" in str(exc)
 else: raise AssertionError("Writes were ready while trial mode was off")
-save_config(client_id="client", client_secret="", write_mode="trial", allowed_hosts="other.example.deputy.com", actor_user_id=admin_id)
+save_config(client_id="client", client_secret="", write_mode="trial", allowed_hosts="other.au.deputy.com", actor_user_id=admin_id)
 try: verify_write_readiness(admin_id, session=fake)
 except PermissionError as exc: assert "not approved" in str(exc)
 else: raise AssertionError("Non-allow-listed tenant became write ready")
@@ -232,10 +278,16 @@ assert verify_write_readiness(admin_id, session=gained_permission)["write_ready"
 partial_refresh = refresh_references(james_id, session=FakeDeputy(61, 31, token="JAMES-TOKEN", deny_resources={"OperationalUnit"}))
 assert partial_refresh["employees"] == 1 and partial_refresh["units"] == 0 and "units" in partial_refresh["errors"]
 assert connection_status(james_id)["read_ready"]
+for resource in ("Employee", "OperationalUnit"):
+    timed = refresh_references(james_id, session=FakeDeputy(61, 31, token="JAMES-TOKEN", timeout_resources={resource}))
+    assert ("employees" if resource == "Employee" else "units") in timed["errors"] and connection_status(james_id)["read_ready"]
 with get_connection() as conn:
     conn.execute("UPDATE deputy_oauth_connections SET token_expires_at=? WHERE app_user_id=?", ((datetime.now().astimezone() - timedelta(minutes=5)).isoformat(), james_id))
 verify_read_access(james_id, session=james_fake)
 assert any(method == "TOKEN" for method, _url in james_fake.calls)
+refresh_url, refresh_payload = james_fake.token_posts[-1]
+assert refresh_url == f"https://{host}/oauth/access_token" and refresh_payload["grant_type"] == "refresh_token"
+assert refresh_payload["scope"] == "longlife_refresh_token" and refresh_payload["redirect_uri"] == "https://redeputy.example/settings/deputy-api/callback"
 
 now = datetime.now().astimezone().isoformat(timespec="seconds")
 with get_connection() as conn:

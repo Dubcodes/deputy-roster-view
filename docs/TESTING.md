@@ -134,3 +134,9 @@ isolation, cross-owner prepared-operation rejection, disconnected-user non-fallb
 contractor OAuth-route denial, independent personal start/finish behavior, and a
 second idempotent migration pass with row-count preservation. All Deputy HTTP remains
 mocked; the suite performs zero live Deputy writes.
+
+# 2026.08.13.3 final Deputy release gate
+
+`python scripts/smoke_deputy_release_gate.py` uses only sanitized Lab Round 2 and official-documentation response fixtures. It covers the v2 envelope/normalizer, Resource QUERY syntax, Taupo and Ruakaka full intervals, truck early start, duration-only breaks, incomplete timing, duplicate full-duration roles, bounded create preflight/reconciliation, malformed success bodies, strict Deputy endpoint validation, partial-batch publication blocking, and idempotent database initialization.
+
+`python scripts/smoke_release_integration.py` additionally covers general OAuth at `once.deputy.com`, configured callback origin, returned endpoint rejection, long-life refresh scope, rotating refresh token fields, OAuth replay/cross-user isolation, per-user references/readiness, contractor and Admin boundaries, operation ownership, Timesheet locks, publish idempotency, and unknown-create recovery. Neither suite contacts Deputy.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -17,6 +18,11 @@ from .security import decrypt_text, encrypt_text
 
 WRITE_PERMISSION = "Can_Roster_Manage"
 ACTIVE_OPERATION_STATES = {"prepared", "sending", "unknown"}
+OAUTH_HOST = "once.deputy.com"
+OAUTH_SCOPE = "longlife_refresh_token"
+OAUTH_AUTHORIZE_PATH = "/my/oauth/login"
+OAUTH_INITIAL_TOKEN_PATH = "/my/oauth/access_token"
+OAUTH_REFRESH_PATH = "/oauth/access_token"
 
 
 def now_iso() -> str:
@@ -26,12 +32,20 @@ def now_iso() -> str:
 def normalize_tenant_host(value: str) -> str:
     raw = str(value or "").strip().lower()
     parsed = urlparse(raw if "://" in raw else f"https://{raw}")
-    if parsed.scheme != "https" or not parsed.hostname or parsed.port not in (None, 443):
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.port not in (None, 443)
+            or parsed.username or parsed.password or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
         raise ValueError("Deputy tenant must be an exact HTTPS hostname.")
     host = parsed.hostname.rstrip(".")
-    if any(char in host for char in "* /\\") or "." not in host:
-        raise ValueError("Deputy tenant hostname is invalid.")
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:au|eu|uk|us)\.deputy\.com", host):
+        raise ValueError("Deputy tenant must be an exact regional *.deputy.com hostname.")
     return host
+
+
+def normalize_callback_origin(value: str) -> str:
+    parsed = urlparse(str(value or "").strip())
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        raise ValueError("OAuth callback origin must be a configured HTTPS origin without a path.")
+    return f"https://{parsed.hostname.lower()}" + (f":{parsed.port}" if parsed.port and parsed.port != 443 else "")
 
 
 def permission_hash(permissions: list[str]) -> str:
@@ -47,7 +61,7 @@ def load_config(*, include_secret: bool = False) -> dict[str, object]:
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM deputy_oauth_config WHERE id=1").fetchone()
     if row is None:
-        return {"client_id": "", "client_secret": "", "authorize_path": "/oauth/authorize", "token_path": "/oauth/access_token", "write_mode": "off", "allowed_trial_hosts": []}
+        return {"client_id": "", "client_secret": "", "callback_origin": "", "write_mode": "off", "allowed_trial_hosts": []}
     item = dict(row)
     try:
         item["allowed_trial_hosts"] = json.loads(str(item.get("allowed_trial_hosts") or "[]"))
@@ -59,7 +73,7 @@ def load_config(*, include_secret: bool = False) -> dict[str, object]:
     return item
 
 
-def save_config(*, client_id: str, client_secret: str, write_mode: str, allowed_hosts: str, actor_user_id: int) -> None:
+def save_config(*, client_id: str, client_secret: str, write_mode: str, allowed_hosts: str, actor_user_id: int, callback_origin: str = "") -> None:
     mode = "trial" if write_mode == "trial" else "off"
     hosts = []
     for value in str(allowed_hosts or "").replace(",", "\n").splitlines():
@@ -69,14 +83,15 @@ def save_config(*, client_id: str, client_secret: str, write_mode: str, allowed_
                 hosts.append(host)
     existing = load_config(include_secret=True)
     secret = client_secret or str(existing.get("client_secret") or "")
+    callback = normalize_callback_origin(callback_origin) if callback_origin.strip() else str(existing.get("callback_origin") or "")
     with get_connection() as conn:
         conn.execute(
-            """INSERT INTO deputy_oauth_config(id,client_id,encrypted_client_secret,write_mode,allowed_trial_hosts,updated_by_user_id,updated_at)
-               VALUES(1,?,?,?,?,?,?)
+            """INSERT INTO deputy_oauth_config(id,client_id,encrypted_client_secret,callback_origin,write_mode,allowed_trial_hosts,updated_by_user_id,updated_at)
+               VALUES(1,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET client_id=excluded.client_id,
                encrypted_client_secret=excluded.encrypted_client_secret,write_mode=excluded.write_mode,
-               allowed_trial_hosts=excluded.allowed_trial_hosts,updated_by_user_id=excluded.updated_by_user_id,updated_at=excluded.updated_at""",
-            (client_id.strip(), encrypt_text(secret), mode, json.dumps(hosts), actor_user_id, now_iso()),
+               callback_origin=excluded.callback_origin,allowed_trial_hosts=excluded.allowed_trial_hosts,updated_by_user_id=excluded.updated_by_user_id,updated_at=excluded.updated_at""",
+            (client_id.strip(), encrypt_text(secret), callback, mode, json.dumps(hosts), actor_user_id, now_iso()),
         )
 
 
@@ -85,25 +100,21 @@ def trial_host_allowed(host: str) -> bool:
     return config.get("write_mode") == "trial" and normalize_tenant_host(host) in set(config.get("allowed_trial_hosts") or [])
 
 
-def begin_oauth(*, app_user_id: int, tenant: str, origin: str) -> str:
+def begin_oauth(*, app_user_id: int, tenant: str = "", origin: str = "") -> str:
     config = load_config(include_secret=True)
     if not config.get("client_id") or not config.get("client_secret"):
         raise ValueError("Deputy OAuth is not configured by an Admin.")
-    host = normalize_tenant_host(tenant)
-    parsed_origin = urlparse(origin)
-    if parsed_origin.scheme != "https" or not parsed_origin.hostname:
-        raise ValueError("Connect Deputy from Re-Deputy's HTTPS address.")
-    safe_origin = f"https://{parsed_origin.hostname}" + (f":{parsed_origin.port}" if parsed_origin.port and parsed_origin.port != 443 else "")
+    safe_origin = normalize_callback_origin(str(config.get("callback_origin") or ""))
     state = secrets.token_urlsafe(32)
     now = datetime.now(get_settings().timezone).replace(microsecond=0)
     with get_connection() as conn:
         conn.execute(
             "INSERT INTO deputy_oauth_states(state_hash,app_user_id,tenant_host,redirect_origin,created_at,expires_at) VALUES(?,?,?,?,?,?)",
-            (state_hash(state), app_user_id, host, safe_origin, now.isoformat(), (now + timedelta(minutes=10)).isoformat()),
+            (state_hash(state), app_user_id, OAUTH_HOST, safe_origin, now.isoformat(), (now + timedelta(minutes=10)).isoformat()),
         )
     callback = f"{safe_origin}/settings/deputy-api/callback"
-    query = urlencode({"client_id": config["client_id"], "redirect_uri": callback, "response_type": "code", "state": state})
-    return f"https://{host}{config.get('authorize_path') or '/oauth/authorize'}?{query}"
+    query = urlencode({"client_id": config["client_id"], "redirect_uri": callback, "response_type": "code", "scope": OAUTH_SCOPE, "state": state})
+    return f"https://{OAUTH_HOST}{OAUTH_AUTHORIZE_PATH}?{query}"
 
 
 @dataclass
@@ -128,16 +139,22 @@ class DeputyClient:
         return int(response.status_code), body
 
 
-def _token_request(host: str, payload: dict[str, str], *, session: object = requests) -> dict[str, object]:
+def _token_request(host: str, path: str, payload: dict[str, str], *, session: object = requests) -> dict[str, object]:
     config = load_config(include_secret=True)
-    response = session.post(
-        f"https://{host}{config.get('token_path') or '/oauth/access_token'}",
-        data={**payload, "client_id": config["client_id"], "client_secret": config["client_secret"]},
-        timeout=20,
-    )
+    try:
+        response = session.post(
+            f"https://{host}{path}",
+            data={**payload, "client_id": config["client_id"], "client_secret": config["client_secret"], "scope": OAUTH_SCOPE},
+            timeout=20,
+        )
+    except requests.RequestException as exc:
+        raise ValueError("Deputy authorization is temporarily unavailable.") from exc
     if int(response.status_code) != 200:
-        raise ValueError("Deputy authorization failed. Reconnect and try again.")
-    data = response.json()
+        raise PermissionError("Deputy authorization failed. Reconnect and try again.")
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise ValueError("Deputy returned an unexpected authorization response.") from exc
     if not data.get("access_token"):
         raise ValueError("Deputy did not return an access token.")
     return data
@@ -152,11 +169,14 @@ def complete_oauth(*, state: str, code: str, current_user_id: int, session: obje
         if int(row["app_user_id"]) != current_user_id:
             raise ValueError("Deputy connection belongs to another Re-Deputy account.")
         conn.execute("UPDATE deputy_oauth_states SET consumed_at=? WHERE state_hash=?", (now.isoformat(), state_hash(state)))
-    host = str(row["tenant_host"])
     callback = f"{row['redirect_origin']}/settings/deputy-api/callback"
-    tokens = _token_request(host, {"grant_type": "authorization_code", "code": code, "redirect_uri": callback}, session=session)
+    tokens = _token_request(OAUTH_HOST, OAUTH_INITIAL_TOKEN_PATH, {"grant_type": "authorization_code", "code": code, "redirect_uri": callback}, session=session)
+    host = normalize_tenant_host(str(tokens.get("endpoint") or ""))
     client = DeputyClient(host, str(tokens["access_token"]), session=session)
-    status, me = client.request("GET", "/api/v1/me")
+    try:
+        status, me = client.request("GET", "/api/v1/me")
+    except requests.RequestException as exc:
+        raise ValueError("Deputy identity verification is temporarily unavailable.") from exc
     if status != 200 or not isinstance(me, dict) or me.get("UserId") is None or me.get("EmployeeId") is None:
         raise ValueError("Deputy identity verification failed.")
     permissions = [str(item) for item in me.get("Permissions") or []]
@@ -255,8 +275,9 @@ def client_for_user(app_user_id: int, *, session: object = requests) -> tuple[De
                 conn.execute("UPDATE deputy_oauth_connections SET status='authentication_unavailable',unavailable_reason=?,updated_at=? WHERE app_user_id=?", ("Stored Deputy authentication has expired.", now_iso(), app_user_id))
             raise PermissionError("Deputy connection expired. Reconnect your account.")
         try:
-            tokens = _token_request(str(item["tenant_host"]), {"grant_type": "refresh_token", "refresh_token": refresh}, session=session)
-        except ValueError as exc:
+            callback_origin = normalize_callback_origin(str(load_config().get("callback_origin") or ""))
+            tokens = _token_request(normalize_tenant_host(str(item["tenant_host"])), OAUTH_REFRESH_PATH, {"grant_type": "refresh_token", "refresh_token": refresh, "redirect_uri": f"{callback_origin}/settings/deputy-api/callback"}, session=session)
+        except PermissionError as exc:
             with get_connection() as conn:
                 conn.execute("UPDATE deputy_oauth_connections SET status='authentication_unavailable',unavailable_reason=?,updated_at=? WHERE app_user_id=?", ("Deputy token refresh failed.", now_iso(), app_user_id))
             raise PermissionError("Deputy refresh failed. Reconnect your account.") from exc
@@ -270,11 +291,16 @@ def client_for_user(app_user_id: int, *, session: object = requests) -> tuple[De
 
 def verify_read_access(app_user_id: int, *, session: object = requests) -> dict[str, object]:
     client, stored = client_for_user(app_user_id, session=session)
-    status, me = client.request("GET", "/api/v1/me")
-    if status != 200 or not isinstance(me, dict):
+    try:
+        status, me = client.request("GET", "/api/v1/me")
+    except requests.RequestException as exc:
+        raise ValueError("Deputy is temporarily unavailable; your connection was not changed.") from exc
+    if status == 401:
         with get_connection() as conn:
             conn.execute("UPDATE deputy_oauth_connections SET status='authentication_unavailable',unavailable_reason=?,updated_at=? WHERE app_user_id=?", ("Deputy identity could not be authenticated.", now_iso(), app_user_id))
         raise PermissionError("Deputy identity could not be verified. Reconnect your account.")
+    if status != 200 or not isinstance(me, dict):
+        raise ValueError("Deputy is temporarily unavailable; your connection was not changed.")
     permissions = [str(item) for item in me.get("Permissions") or []]
     if int(me.get("UserId") or 0) != int(stored["deputy_user_id"]) or int(me.get("EmployeeId") or 0) != int(stored["deputy_employee_id"]):
         with get_connection() as conn:
@@ -306,7 +332,8 @@ def resource_query(client: DeputyClient, resource: str, *, search: dict[str, obj
     seen: set[int] = set()
     start = 0
     while True:
-        status, body = client.request("POST", f"/api/v1/resource/{resource}/QUERY", json={"search": search or {}, "sort": {"Id": "asc"}, "start": start, "max": 500})
+        filters = {f"s{index}": {"field": field, "data": data, "type": "eq"} for index, (field, data) in enumerate((search or {}).items(), 1)}
+        status, body = client.request("POST", f"/api/v1/resource/{resource}/QUERY", json={"search": filters, "sort": {"Id": "asc"}, "start": start, "max": 500})
         if status != 200 or not isinstance(body, list):
             raise ValueError(f"Deputy {resource} reference refresh failed.")
         for row in body:
@@ -318,6 +345,73 @@ def resource_query(client: DeputyClient, resource: str, *, search: dict[str, obj
     return result
 
 
+def roster_candidates(client: DeputyClient, desired: dict[str, object]) -> list[NormalizedShift]:
+    operational_date = _instant(desired.get("start"))
+    if operational_date is None:
+        raise ValueError("Complete workday timing is required.")
+    rows = resource_query(client, "Roster", search={
+        "Date": operational_date.astimezone(get_settings().timezone).date().isoformat(),
+        "Employee": int(desired.get("employee") or 0),
+        "OperationalUnit": int(desired.get("area") or 0),
+    })
+    normalized = [normalize_shift(row, resource=True) for row in rows]
+    return [row for row in normalized if row.employee_id == int(desired.get("employee") or 0) and row.area_id == int(desired.get("area") or 0)
+            and row.start and row.start.astimezone(get_settings().timezone).date() == operational_date.astimezone(get_settings().timezone).date()]
+
+
+def employee_day_candidates(client: DeputyClient, desired: dict[str, object]) -> list[NormalizedShift]:
+    operational_date = _instant(desired.get("start"))
+    if operational_date is None:
+        return []
+    rows = resource_query(client, "Roster", search={
+        "Date": operational_date.astimezone(get_settings().timezone).date().isoformat(),
+        "Employee": int(desired.get("employee") or 0),
+    })
+    normalized = [normalize_shift(row, resource=True) for row in rows]
+    return [row for row in normalized if row.employee_id == int(desired.get("employee") or 0) and row.start
+            and row.start.astimezone(get_settings().timezone).date() == operational_date.astimezone(get_settings().timezone).date()]
+
+
+def shifts_overlap(left: NormalizedShift, right: NormalizedShift) -> bool:
+    return bool(left.start and left.end and right.start and right.end and left.start < right.end and right.start < left.end)
+
+
+def preflight_trial_batch(preview: dict[str, object], *, app_user_id: int, session: object = requests) -> list[str]:
+    blockers = list(preview.get("blockers") or [])
+    verified = verify_write_readiness(app_user_id, session=session)
+    client: DeputyClient = verified["client"]
+    for action in preview.get("actions") or []:
+        operation = str(action.get("operation") or "")
+        desired = dict(action.get("desired") or {})
+        label = str(action.get("role_label") or action.get("assignment_key") or "Assignment")
+        if operation == "create":
+            exact = [row for row in roster_candidates(client, desired) if _business_equal(row, desired)]
+            if len(exact) > 1:
+                blockers.append(f"{label}: multiple exact Deputy rosters exist; operator reconciliation is required.")
+            intended = normalized_desired(desired)
+            conflicts = [row for row in employee_day_candidates(client, desired) if not _business_equal(row, desired) and shifts_overlap(row, intended)]
+            if conflicts:
+                blockers.append(f"{label}: an overlapping Deputy roster already exists for Employee #{intended.employee_id}.")
+        elif operation in {"update", "delete", "unchanged"}:
+            roster_id = int(action.get("roster_id") or 0)
+            if not roster_id:
+                blockers.append(f"{label}: the linked Deputy roster ID is missing.")
+                continue
+            status, body = client.request("GET", f"/api/management/v2/shifts/{roster_id}")
+            if status != 200:
+                blockers.append(f"{label}: Roster #{roster_id} could not be verified before mutation.")
+                continue
+            try:
+                current = normalize_v2_response(body)
+            except ValueError:
+                blockers.append(f"{label}: Roster #{roster_id} returned an unexpected v2 response.")
+                continue
+            if current.can_edit is False or current.timesheet_id:
+                suffix = f" #{current.timesheet_id}" if current.timesheet_id else ""
+                blockers.append(f"{label}: locked by Timesheet{suffix}.")
+    return sorted(set(blockers))
+
+
 def refresh_references(app_user_id: int, *, session: object = requests) -> dict[str, object]:
     verified = verify_read_access(app_user_id, session=session)
     client = verified["client"]
@@ -326,11 +420,11 @@ def refresh_references(app_user_id: int, *, session: object = requests) -> dict[
     errors: dict[str, str] = {}
     try:
         employees = resource_query(client, "Employee")
-    except ValueError:
+    except (ValueError, requests.RequestException):
         errors["employees"] = "Employee references are unavailable or permission denied."
     try:
         units = resource_query(client, "OperationalUnit")
-    except ValueError:
+    except (ValueError, requests.RequestException):
         errors["units"] = "Operational Unit references are unavailable or permission denied."
     observed = now_iso()
     with get_connection() as conn:
@@ -351,31 +445,138 @@ def normalized_hash(value: dict[str, object]) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def _api_desired(desired: dict[str, object]) -> dict[str, object]:
-    return {key: value for key, value in desired.items() if key in {"area", "employee", "start", "end", "break", "note", "approvalRequired"}}
+@dataclass(frozen=True)
+class NormalizedShift:
+    roster_id: int | None
+    employee_id: int
+    area_id: int
+    start: datetime | None
+    end: datetime | None
+    break_minutes: int
+    note: str
+    is_open: bool
+    is_published: bool
+    approval_required: bool
+    timesheet_id: int | None
+    can_edit: bool | None
 
 
-def _business_equal(current: dict[str, object], desired: dict[str, object]) -> bool:
-    aliases = {"area": ("area", "OperationalUnit"), "employee": ("employee", "Employee"), "start": ("start", "startAt"), "end": ("end", "endAt"), "note": ("note", "Comment")}
-    for key, current_keys in aliases.items():
-        if key not in desired:
-            continue
-        actual = next((current.get(name) for name in current_keys if current.get(name) is not None), None)
-        if str(actual or "") != str(desired[key] or ""):
-            return False
-    return True
+class DeputyOperationError(RuntimeError):
+    def __init__(self, error_class: str, message: str):
+        super().__init__(message)
+        self.error_class = error_class
+
+
+def deputy_error(status: int, body: object, action: str) -> DeputyOperationError:
+    sanitized = json.dumps(body, separators=(",", ":"))[:1000].lower() if isinstance(body, (dict, list)) else str(body)[:1000].lower()
+    if status == 401:
+        kind = "AUTH"
+    elif status == 403:
+        kind = "LOCKED" if "timesheet" in sanitized or "locked" in sanitized else "PERMISSION"
+    elif "overlap" in sanitized or "start_time" in sanitized or "end_time" in sanitized:
+        kind = "OVERLAP"
+    elif "timesheet" in sanitized or "shift_validation" in sanitized and "edit" in sanitized:
+        kind = "LOCKED"
+    elif status == 400:
+        kind = "VALIDATION"
+    elif status == 429 or status >= 500:
+        kind = "TRANSIENT"
+    else:
+        kind = "UNKNOWN"
+    return DeputyOperationError(kind, f"Deputy {action} was not accepted ({status}; {kind}).")
+
+
+def _instant(value: object) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)) or str(value).isdigit():
+        return datetime.fromtimestamp(float(value), tz=get_settings().timezone)
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=get_settings().timezone)
+    return parsed
+
+
+def extract_v2_shift(body: object) -> dict[str, object]:
+    if not isinstance(body, dict) or body.get("success") is not True or "data" not in body:
+        raise ValueError("Deputy returned an unexpected v2 shift response.")
+    data = body["data"]
+    if isinstance(data, dict) and isinstance(data.get("shift"), dict):
+        data = data["shift"]
+    if not isinstance(data, dict):
+        raise ValueError("Deputy returned an unexpected v2 shift response.")
+    return data
+
+
+def normalize_shift(value: dict[str, object], *, resource: bool = False) -> NormalizedShift:
+    def first(*names: str) -> object:
+        return next((value[name] for name in names if value.get(name) is not None), None)
+    slots = first("mealbreakSlots", "MealbreakSlots") or []
+    duration = first("mealbreakDuration", "Mealbreak", "mealbreak")
+    if duration is not None:
+        numeric = float(duration or 0)
+        break_minutes = int(round(numeric if resource or numeric > 8 else numeric * 60))
+    else:
+        break_minutes = sum(max(0, int(slot.get("end") or 0) - int(slot.get("start") or 0)) for slot in slots if isinstance(slot, dict) and str(slot.get("type") or "MEAL_BREAK") == "MEAL_BREAK") // 60
+    timesheet = first("timesheet", "MatchedByTimesheet", "matchedByTimesheet")
+    return NormalizedShift(
+        roster_id=int(first("id", "Id") or 0) or None,
+        employee_id=int(first("employee", "Employee") or 0), area_id=int(first("area", "OperationalUnit") or 0),
+        start=_instant(first("start", "startAt", "StartTime")), end=_instant(first("end", "endAt", "EndTime")),
+        break_minutes=break_minutes, note=str(first("note", "Comment") or ""),
+        is_open=bool(first("isOpen", "Open") or False), is_published=bool(first("isPublished", "Published") or False),
+        approval_required=bool(first("approvalRequired", "ConfirmStatus") or False),
+        timesheet_id=int(timesheet or 0) or None,
+        can_edit=value.get("canEdit") if isinstance(value.get("canEdit"), bool) else None,
+    )
+
+
+def normalize_v2_response(body: object) -> NormalizedShift:
+    return normalize_shift(extract_v2_shift(body))
+
+
+def normalized_desired(desired: dict[str, object]) -> NormalizedShift:
+    return normalize_shift({
+        "employee": desired.get("employee"), "area": desired.get("area"), "start": desired.get("start"), "end": desired.get("end"),
+        "mealbreakDuration": float(int(desired.get("break_minutes") or 0)) / 60, "note": desired.get("note"),
+        "isOpen": bool(desired.get("is_open", False)), "approvalRequired": bool(desired.get("approval_required", False)),
+    })
+
+
+def build_v2_shift_payload(desired: dict[str, object]) -> dict[str, object]:
+    shift: dict[str, object] = {
+        "area": int(desired["area"]), "employee": int(desired["employee"]), "start": str(desired["start"]), "end": str(desired["end"]),
+        "note": str(desired.get("note") or ""), "isOpen": bool(desired.get("is_open", False)), "approvalRequired": bool(desired.get("approval_required", False)),
+    }
+    break_minutes = int(desired.get("break_minutes") or 0)
+    shift["mealbreakSlots"] = ([{"slotType": "BREAK", "state": 3, "canStartEarly": True, "canEndEarly": True,
+                                  "isMandatory": True, "type": "MEAL_BREAK", "start": 0, "end": break_minutes * 60}]
+                                if break_minutes else [])
+    return {"data": {"shift": shift, "override": {"shiftValidation": False, "publishValidation": False}}}
+
+
+def _business_equal(current: NormalizedShift | dict[str, object], desired: NormalizedShift | dict[str, object]) -> bool:
+    left = current if isinstance(current, NormalizedShift) else normalize_shift(current, resource=any(k in current for k in ("Id", "Employee", "OperationalUnit")))
+    right = desired if isinstance(desired, NormalizedShift) else normalized_desired(desired)
+    return (left.employee_id == right.employee_id and left.area_id == right.area_id
+            and left.start is not None and right.start is not None and left.start.astimezone(get_settings().timezone) == right.start.astimezone(get_settings().timezone)
+            and left.end is not None and right.end is not None and left.end.astimezone(get_settings().timezone) == right.end.astimezone(get_settings().timezone)
+            and left.break_minutes == right.break_minutes and left.note == right.note
+            and left.is_open == right.is_open and left.approval_required == right.approval_required)
 
 
 def _reconcile_after_network_error(client: DeputyClient, operation: dict[str, object], desired: dict[str, object], roster_id: int | None) -> dict[str, object]:
     op_type = str(operation["operation_type"])
     if op_type == "create":
-        candidates = resource_query(client, "Roster", search={"Employee": int(desired.get("employee") or 0), "OperationalUnit": int(desired.get("area") or 0)})
-        exact = [row for row in candidates if _business_equal(row, _api_desired(desired)) and not bool(row.get("Open"))]
+        candidates = roster_candidates(client, desired)
+        exact = [row for row in candidates if _business_equal(row, desired) and not row.is_open]
         if len(exact) == 1:
-            adopted = int(exact[0].get("Id") or 0)
+            adopted = int(exact[0].roster_id or 0)
             if adopted:
-                _save_roster_link(operation, desired, adopted, exact[0])
-                return _finish_operation(str(operation["operation_uuid"]), "verified", adopted, {"reconciled": True}, True)
+                status, body = client.request("GET", f"/api/management/v2/shifts/{adopted}")
+                if status == 200 and _business_equal(normalize_v2_response(body), desired):
+                    _save_roster_link(operation, desired, adopted, extract_v2_shift(body))
+                    return _finish_operation(str(operation["operation_uuid"]), "verified", adopted, {"reconciled": True}, True)
         if len(exact) > 1:
             return _finish_operation(str(operation["operation_uuid"]), "ambiguous", None, {"message": "Multiple exact Deputy candidates require manual reconciliation."}, False, "AMBIGUOUS")
         return _finish_operation(str(operation["operation_uuid"]), "unknown", None, {"message": "No exact Deputy candidate found; controlled retry requires review."}, False, "UNKNOWN_NETWORK_RESULT")
@@ -383,23 +584,22 @@ def _reconcile_after_network_error(client: DeputyClient, operation: dict[str, ob
         status, body = client.request("GET", f"/api/management/v2/shifts/{roster_id}")
         if op_type == "delete" and status == 404:
             return _finish_operation(str(operation["operation_uuid"]), "verified", roster_id, {"deleted": True, "reconciled": True}, True)
-        current = body.get("shift", body) if isinstance(body, dict) else {}
-        if op_type == "update" and status == 200 and _business_equal(current, _api_desired(desired)):
+        if op_type == "update" and status == 200 and _business_equal(normalize_v2_response(body), desired):
             return _finish_operation(str(operation["operation_uuid"]), "verified", roster_id, {"reconciled": True}, True)
     if op_type == "publish":
         ids = [int(value) for value in desired.get("roster_ids") or []]
         states = [client.request("GET", f"/api/management/v2/shifts/{value}") for value in ids]
-        if all(status == 200 and isinstance(body, dict) and bool((body.get("shift", body)).get("isPublished") or (body.get("shift", body)).get("Published")) for status, body in states):
+        if all(status == 200 and normalize_v2_response(body).is_published for status, body in states):
             return _finish_operation(str(operation["operation_uuid"]), "verified", None, {"published_ids": ids, "reconciled": True}, True)
     return _finish_operation(str(operation["operation_uuid"]), "unknown", roster_id, {"message": "Deputy result is unknown; reconciliation is required."}, False, "UNKNOWN_NETWORK_RESULT")
 
 
 def _save_roster_link(operation: dict[str, object], desired: dict[str, object], roster_id: int, readback: dict[str, object]) -> None:
     with get_connection() as conn:
-        conn.execute("""INSERT INTO deputy_roster_links(tenant_host,workday_id,stable_assignment_key,deputy_employee_id,deputy_unit_id,deputy_roster_id,context_type,ownership,last_desired_hash,last_verified_hash,last_verified_state,created_at,updated_at)
-            VALUES(?,?,?,?,?,?,?,'re_deputy_created_trial',?,?,?,?,?) ON CONFLICT(tenant_host,stable_assignment_key) DO UPDATE SET deputy_roster_id=excluded.deputy_roster_id,
+        conn.execute("""INSERT INTO deputy_roster_links(tenant_host,workday_id,stable_assignment_key,crew_person_id,deputy_employee_id,deputy_unit_id,deputy_roster_id,context_type,ownership,last_desired_hash,last_verified_hash,last_verified_state,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,'re_deputy_created_trial',?,?,?,?,?) ON CONFLICT(tenant_host,stable_assignment_key) DO UPDATE SET deputy_roster_id=excluded.deputy_roster_id,
             last_desired_hash=excluded.last_desired_hash,last_verified_hash=excluded.last_verified_hash,last_verified_state=excluded.last_verified_state,updated_at=excluded.updated_at""",
-            (operation["tenant_host"], operation["workday_id"], operation["stable_assignment_key"], int(desired.get("employee") or 0), int(desired.get("area") or 0), roster_id,
+            (operation["tenant_host"], operation["workday_id"], operation["stable_assignment_key"], desired.get("crew_person_id"), int(desired.get("employee") or 0), int(desired.get("area") or 0), roster_id,
              str(desired.get("context_type") or "production"), normalized_hash(desired), normalized_hash(readback), json.dumps(readback)[:10000], now_iso(), now_iso()))
 
 
@@ -445,13 +645,27 @@ def build_trial_preview(app_user_id: int, workday_id: int, *, session: object = 
         workday = conn.execute("SELECT * FROM roster_days WHERE id=? AND status IN ('published','changes_pending')", (workday_id,)).fetchone()
         if workday is None:
             raise ValueError("Publish this Re-Deputy workday before trial sync.")
-        assignments = [dict(r) for r in conn.execute("SELECT * FROM workday_assignments WHERE roster_day_id=? ORDER BY sort_order,id", (workday_id,))]
-        people = {int(r["crew_person_id"]): int(r["deputy_employee_id"]) for r in conn.execute("SELECT * FROM deputy_person_mappings WHERE tenant_host=?", (host,))}
-        units = {str(r["mapping_key"]): dict(r) for r in conn.execute("SELECT * FROM deputy_unit_mappings WHERE tenant_host=?", (host,))}
+        assignments = [dict(r) for r in conn.execute("""SELECT a.*,COALESCE(v.is_truck,0) vehicle_is_truck
+            FROM workday_assignments a LEFT JOIN crew_vehicles v ON v.id=a.vehicle_id
+            WHERE a.roster_day_id=? ORDER BY a.sort_order,a.id""", (workday_id,))]
+        people = {int(r["crew_person_id"]): int(r["deputy_employee_id"]) for r in conn.execute("""SELECT m.* FROM deputy_person_mappings m
+            JOIN deputy_reference_employees e ON e.app_user_id=? AND e.tenant_host=m.tenant_host AND e.deputy_employee_id=m.deputy_employee_id AND e.active=1
+            WHERE m.tenant_host=?""", (app_user_id, host))}
+        units = {str(r["mapping_key"]): dict(r) for r in conn.execute("""SELECT m.* FROM deputy_unit_mappings m
+            JOIN deputy_reference_units u ON u.app_user_id=? AND u.tenant_host=m.tenant_host AND u.deputy_unit_id=m.deputy_unit_id AND u.active=1
+            WHERE m.tenant_host=?""", (app_user_id, host))}
         links = {str(r["stable_assignment_key"]): dict(r) for r in conn.execute("SELECT * FROM deputy_roster_links WHERE tenant_host=? AND workday_id=?", (host, workday_id))}
-    start_text = str(workday["on_track_time"] or workday["office_start"] or "")
-    finish_text = str(workday["last_race_time"] or "")
-    actions: list[dict[str, object]] = []; local_only: list[dict[str, str]] = []
+    start_text = str(workday["office_start"] or "")
+    finish_text = str(workday["end_time"] or "")
+    actions: list[dict[str, object]] = []; local_only: list[dict[str, str]] = []; blockers: list[str] = []
+    if not start_text or not finish_text:
+        blockers.append("Deputy write unavailable until the full workday Start and Finish are known; race markers are not shift boundaries.")
+    employee_counts: dict[int, int] = {}
+    for assignment in assignments:
+        if str(assignment.get("assignment_state") or "assigned") == "assigned" and assignment.get("person_id"):
+            employee = people.get(int(assignment["person_id"]))
+            if employee:
+                employee_counts[employee] = employee_counts.get(employee, 0) + 1
     current_keys: set[str] = set()
     for assignment in assignments:
         state = str(assignment.get("assignment_state") or "assigned")
@@ -460,14 +674,27 @@ def build_trial_preview(app_user_id: int, workday_id: int, *, session: object = 
             continue
         key = str(assignment.get("assignment_key") or assignment["id"]); current_keys.add(key)
         employee = people.get(int(assignment["person_id"])); unit = units.get(str(assignment.get("role_key") or ""))
+        if employee and employee_counts.get(employee, 0) > 1:
+            local_only.append({"assignment_key": key, "reason": "Multiple full-duration roles for one employee · Local only until resolved"})
+            blockers.append(f"Employee #{employee} has multiple overlapping full-duration roles; no Deputy mutation is permitted.")
+            continue
         if not employee or not unit or not start_text or not finish_text:
-            local_only.append({"assignment_key": str(assignment.get("assignment_key") or ""), "reason": "Missing explicit person/Area/time mapping · Local only"})
+            local_only.append({"assignment_key": key, "reason": "Missing acting-user-readable Employee/Area or complete timing · Local only"})
+            blockers.append(f"{assignment.get('role_label') or key}: complete timing and acting-user-readable Employee/Area mappings are required.")
+            continue
+        if str(unit.get("context_type") or "") != "production_role":
+            local_only.append({"assignment_key": key, "reason": "Travel / vehicle / non-production context · Local only"})
             continue
         day = date.fromisoformat(str(workday["roster_date"])); start_dt = datetime.combine(day, time.fromisoformat(start_text), tzinfo=get_settings().timezone)
+        if bool(assignment.get("vehicle_is_truck")) and int(workday["truck_start_offset_minutes"] or 0) > 0:
+            start_dt -= timedelta(minutes=int(workday["truck_start_offset_minutes"] or 0))
         end_dt = datetime.combine(day, time.fromisoformat(finish_text), tzinfo=get_settings().timezone)
         if end_dt <= start_dt: end_dt += timedelta(days=1)
         link = links.get(key)
-        desired = {"area": int(unit["deputy_unit_id"]), "employee": employee, "start": start_dt.isoformat(), "end": end_dt.isoformat(), "note": f"Re-Deputy trial · workday {workday_id} · {key}", "context_type": str(unit["context_type"])}
+        desired = {"area": int(unit["deputy_unit_id"]), "employee": employee, "crew_person_id": int(assignment["person_id"]),
+                   "start": start_dt.isoformat(), "end": end_dt.isoformat(), "break_minutes": int(workday["break_minutes"] or 0),
+                   "note": f"Re-Deputy trial · workday {workday_id} · {key}", "is_open": False, "approval_required": False,
+                   "context_type": str(unit["context_type"])}
         op = "update" if link and link.get("deputy_roster_id") else "create"
         if link and str(link.get("last_desired_hash") or "") == normalized_hash(desired): op = "unchanged"
         actions.append({"operation": op, "assignment_key": key, "role_label": assignment.get("role_label"), "desired": desired, "roster_id": link.get("deputy_roster_id") if link else None})
@@ -476,7 +703,11 @@ def build_trial_preview(app_user_id: int, workday_id: int, *, session: object = 
             actions.append({"operation": "delete", "assignment_key": key, "role_label": "Removed assignment", "desired": {}, "roster_id": int(link["deputy_roster_id"])})
     counts = {name: sum(1 for row in actions if row["operation"] == name) for name in ("create", "update", "delete", "unchanged")}
     counts.update({"local_only": len(local_only)})
-    return {"workday_id": workday_id, "tenant_host": host, "connected_identity": str(verified["me"].get("Name") or "Deputy user"), "connected_employee_id": int(verified["me"]["EmployeeId"]), "actions": actions, "local_only": local_only, "counts": counts}
+    return {"workday_id": workday_id, "workday_label": f"{workday['roster_date']} · {workday['track_label']}", "acting_user_id": app_user_id,
+            "tenant_host": host, "connected_identity": str(verified["me"].get("Name") or "Deputy user"),
+            "connected_user_id": int(verified["me"]["UserId"]), "connected_employee_id": int(verified["me"]["EmployeeId"]),
+            "scope": "Assigned production shifts only. Travel, vehicles, Open, TBC, and Making my own way remain local-only.",
+            "actions": actions, "local_only": local_only, "blockers": sorted(set(blockers)), "counts": counts}
 
 
 def prepare_operation(*, app_user_id: int, workday_id: int, assignment_key: str, operation_type: str, desired: dict[str, object], roster_id: int | None = None, session: object = requests) -> dict[str, object]:
@@ -513,6 +744,8 @@ def execute_operation(operation_uuid: str, app_user_id: int, *, session: object 
         verified = verify_write_readiness(app_user_id, session=session)
     except PermissionError as exc:
         return _finish_operation(operation_uuid, "failed", row["deputy_roster_id"], {"message": str(exc)}, False, "PERMISSION")
+    except ValueError as exc:
+        return _finish_operation(operation_uuid, "failed", row["deputy_roster_id"], {"message": str(exc)}, False, "TRANSIENT")
     client: DeputyClient = verified["client"]
     operation = dict(row)
     if (str(operation["tenant_host"]) != str(verified["tenant_host"])
@@ -523,48 +756,58 @@ def execute_operation(operation_uuid: str, app_user_id: int, *, session: object 
         return _finish_operation(operation_uuid, "failed", operation.get("deputy_roster_id"), {"message": "Deputy permissions changed after this operation was prepared. Review and prepare it again."}, False, "PERMISSION")
     with get_connection() as conn:
         conn.execute("UPDATE deputy_write_operations SET status='sending',sending_at=?,updated_at=? WHERE id=?", (now_iso(), now_iso(), row["id"]))
-    desired = json.loads(str(operation["desired_state"])); api_desired = _api_desired(desired); roster_id = operation.get("deputy_roster_id")
+    desired = json.loads(str(operation["desired_state"])); roster_id = operation.get("deputy_roster_id")
     op_type = str(operation["operation_type"])
     try:
         if op_type == "create":
-            status, body = client.request("POST", "/api/management/v2/shifts", json=api_desired)
-            if status != 200 or not isinstance(body, dict):
-                raise RuntimeError(f"Deputy create failed ({status}).")
-            shift = body.get("shift") if isinstance(body.get("shift"), dict) else body
-            roster_id = int(shift.get("id") or shift.get("Id") or 0)
-            if not roster_id:
-                raise ConnectionError("Deputy create result did not include a roster ID.")
+            exact = [row for row in roster_candidates(client, desired) if _business_equal(row, desired)]
+            if len(exact) > 1:
+                return _finish_operation(operation_uuid, "ambiguous", None, {"message": "Multiple exact Deputy candidates require operator reconciliation."}, False, "OVERLAP")
+            intended = normalized_desired(desired)
+            conflicts = [row for row in employee_day_candidates(client, desired) if not _business_equal(row, desired) and shifts_overlap(row, intended)]
+            if conflicts:
+                return _finish_operation(operation_uuid, "failed", None, {"message": "An overlapping Deputy roster exists for this employee."}, False, "OVERLAP")
+            if exact:
+                roster_id = int(exact[0].roster_id or 0)
+            else:
+                status, body = client.request("POST", "/api/management/v2/shifts", json=build_v2_shift_payload(desired))
+                if status != 200:
+                    raise deputy_error(status, body, "create")
+                created = normalize_v2_response(body)
+                roster_id = int(created.roster_id or 0)
+                if not roster_id:
+                    raise ValueError("Deputy create response did not contain a roster ID.")
             with get_connection() as conn:
                 conn.execute("UPDATE deputy_write_operations SET deputy_roster_id=?,updated_at=? WHERE operation_uuid=?", (roster_id, now_iso(), operation_uuid))
         elif op_type == "update":
             if not roster_id: raise ValueError("Update requires a known Deputy roster ID.")
             get_status, current = client.request("GET", f"/api/management/v2/shifts/{roster_id}")
-            current_shift = current.get("shift", current) if isinstance(current, dict) else {}
             if get_status != 200: raise RuntimeError("Deputy roster could not be read before update.")
+            current_shift = normalize_v2_response(current)
             with get_connection() as conn:
-                conn.execute("UPDATE deputy_write_operations SET before_state=?,updated_at=? WHERE operation_uuid=?", (json.dumps(current_shift)[:10000], now_iso(), operation_uuid))
-            timesheet_id = current_shift.get("timesheet") or current_shift.get("MatchedByTimesheet") or current_shift.get("matchedByTimesheet")
-            if current_shift.get("canEdit") is False or int(timesheet_id or 0):
-                raise PermissionError(f"Locked by Timesheet #{timesheet_id or ''}".rstrip(" #"))
-            if _business_equal(current_shift, api_desired):
+                conn.execute("UPDATE deputy_write_operations SET before_state=?,updated_at=? WHERE operation_uuid=?", (json.dumps(extract_v2_shift(current))[:10000], now_iso(), operation_uuid))
+            if current_shift.can_edit is False or current_shift.timesheet_id:
+                raise PermissionError(f"Locked by Timesheet #{current_shift.timesheet_id or ''}".rstrip(" #"))
+            if _business_equal(current_shift, desired):
                 return _finish_operation(operation_uuid, "verified", roster_id, {"unchanged": True}, True)
-            status, body = client.request("PUT", f"/api/management/v2/shifts/{roster_id}", json=api_desired)
-            if status != 200: raise RuntimeError(f"Deputy update failed ({status}).")
+            status, body = client.request("PUT", f"/api/management/v2/shifts/{roster_id}", json=build_v2_shift_payload(desired))
+            if status != 200: raise deputy_error(status, body, "update")
+            normalize_v2_response(body)
         elif op_type == "delete":
             with get_connection() as conn:
                 link = conn.execute("SELECT * FROM deputy_roster_links WHERE tenant_host=? AND stable_assignment_key=?", (verified["tenant_host"], operation["stable_assignment_key"])).fetchone()
             if link is None or link["ownership"] != "re_deputy_created_trial" or not roster_id:
                 raise PermissionError("Only a Re-Deputy-created trial roster can be deleted.")
             get_status, current = client.request("GET", f"/api/management/v2/shifts/{roster_id}")
-            current_shift = current.get("shift", current) if isinstance(current, dict) else {}
             if get_status != 200: raise RuntimeError("Deputy roster could not be read before delete.")
+            current_shift = normalize_v2_response(current)
             with get_connection() as conn:
-                conn.execute("UPDATE deputy_write_operations SET before_state=?,updated_at=? WHERE operation_uuid=?", (json.dumps(current_shift)[:10000], now_iso(), operation_uuid))
-            timesheet_id = current_shift.get("timesheet") or current_shift.get("MatchedByTimesheet") or current_shift.get("matchedByTimesheet")
-            if current_shift.get("canEdit") is False or int(timesheet_id or 0):
-                raise PermissionError(f"Locked by Timesheet #{timesheet_id or ''}".rstrip(" #"))
+                conn.execute("UPDATE deputy_write_operations SET before_state=?,updated_at=? WHERE operation_uuid=?", (json.dumps(extract_v2_shift(current))[:10000], now_iso(), operation_uuid))
+            if current_shift.can_edit is False or current_shift.timesheet_id:
+                raise PermissionError(f"Locked by Timesheet #{current_shift.timesheet_id or ''}".rstrip(" #"))
             status, body = client.request("DELETE", f"/api/management/v2/shifts/{roster_id}")
-            if status != 200: raise RuntimeError(f"Deputy delete failed ({status}).")
+            if status != 200: raise deputy_error(status, body, "delete")
+            if not isinstance(body, dict) or body.get("success") is not True: raise ValueError("Deputy returned an unexpected delete response.")
             verify_status, _ = client.request("GET", f"/api/management/v2/shifts/{roster_id}")
             if verify_status != 404: raise ConnectionError("Deputy delete result is unknown.")
             with get_connection() as conn:
@@ -575,16 +818,14 @@ def execute_operation(operation_uuid: str, app_user_id: int, *, session: object 
             unpublished = []
             for value in ids:
                 read_status, current = client.request("GET", f"/api/management/v2/shifts/{value}")
-                shift = current.get("shift", current) if isinstance(current, dict) else {}
                 if read_status != 200: raise ConnectionError("Deputy publish readiness could not be verified.")
-                if not bool(shift.get("isPublished") or shift.get("Published")): unpublished.append(value)
+                if not normalize_v2_response(current).is_published: unpublished.append(value)
             if not unpublished: return _finish_operation(operation_uuid, "verified", None, {"unchanged": True}, True)
             status, body = client.request("POST", "/api/v1/supervise/roster/publish", json={"intMode": 4, "blnAllLocationsMode": 0, "intRosterArray": unpublished})
-            if status != 200: raise RuntimeError(f"Deputy publish failed ({status}).")
+            if status != 200: raise deputy_error(status, body, "publish")
             for value in unpublished:
                 read_status, current = client.request("GET", f"/api/management/v2/shifts/{value}")
-                shift = current.get("shift", current) if isinstance(current, dict) else {}
-                if read_status != 200 or not bool(shift.get("isPublished") or shift.get("Published")):
+                if read_status != 200 or not normalize_v2_response(current).is_published:
                     raise ConnectionError("Deputy publish result is unknown; reconciliation required.")
             return _finish_operation(operation_uuid, "verified", None, {"published_ids": unpublished}, True)
         else:
@@ -592,7 +833,10 @@ def execute_operation(operation_uuid: str, app_user_id: int, *, session: object 
         verify_status, readback = client.request("GET", f"/api/management/v2/shifts/{roster_id}")
         if verify_status != 200:
             raise ConnectionError("Deputy result unknown after write; reconciliation required.")
-        _save_roster_link(operation, desired, int(roster_id), readback if isinstance(readback, dict) else {})
+        normalized_readback = normalize_v2_response(readback)
+        if not _business_equal(normalized_readback, desired):
+            raise ConnectionError("Deputy read-back did not match the intended shift.")
+        _save_roster_link(operation, desired, int(roster_id), extract_v2_shift(readback))
         return _finish_operation(operation_uuid, "verified", roster_id, {"readback": "verified"}, True)
     except requests.RequestException:
         try:
@@ -604,8 +848,13 @@ def execute_operation(operation_uuid: str, app_user_id: int, *, session: object 
         return _finish_operation(operation_uuid, status, roster_id, {"message": str(exc)}, False, "LOCKED" if status == "locked" else "PERMISSION")
     except ConnectionError as exc:
         return _finish_operation(operation_uuid, "unknown", roster_id, {"message": str(exc)}, False, "UNKNOWN_NETWORK_RESULT")
+    except ValueError as exc:
+        return _finish_operation(operation_uuid, "failed", roster_id, {"message": str(exc)[:500]}, False, "VALIDATION")
+    except DeputyOperationError as exc:
+        status = "locked" if exc.error_class == "LOCKED" else ("ambiguous" if exc.error_class == "OVERLAP" else "failed")
+        return _finish_operation(operation_uuid, status, roster_id, {"message": str(exc)[:500]}, False, exc.error_class)
     except Exception as exc:
-        return _finish_operation(operation_uuid, "failed", roster_id, {"message": str(exc)[:500]}, False, "FAILED")
+        return _finish_operation(operation_uuid, "failed", roster_id, {"message": str(exc)[:500]}, False, "TRANSIENT" if isinstance(exc, RuntimeError) and "(5" in str(exc) else "UNKNOWN")
 
 
 def _finish_operation(operation_uuid: str, status: str, roster_id: int | None, result: dict[str, object], verified: bool, error_class: str | None = None) -> dict[str, object]:
@@ -613,6 +862,31 @@ def _finish_operation(operation_uuid: str, status: str, roster_id: int | None, r
         conn.execute("UPDATE deputy_write_operations SET status=?,deputy_roster_id=COALESCE(?,deputy_roster_id),error_class=?,sanitized_result=?,readback_verified=?,completed_at=?,updated_at=? WHERE operation_uuid=?",
                      (status, roster_id, error_class, json.dumps(result)[:10000], 1 if verified else 0, now_iso(), now_iso(), operation_uuid))
     return {"operation_uuid": operation_uuid, "status": status, "roster_id": roster_id, "readback_verified": verified, **result}
+
+
+def execute_trial_batch(preview: dict[str, object], *, app_user_id: int, session: object = requests) -> tuple[list[dict[str, object]], list[str]]:
+    try:
+        blockers = preflight_trial_batch(preview, app_user_id=app_user_id, session=session)
+    except (ValueError, PermissionError, requests.RequestException) as exc:
+        return [], [str(exc)[:500]]
+    if blockers:
+        return [], blockers
+    results: list[dict[str, object]] = []
+    intended = [action for action in preview.get("actions") or [] if action.get("operation") in {"create", "update", "delete"}]
+    for action in intended:
+        prepared = prepare_operation(app_user_id=app_user_id, workday_id=int(preview["workday_id"]), assignment_key=str(action["assignment_key"]),
+                                     operation_type=str(action["operation"]), desired=dict(action.get("desired") or {}), roster_id=action.get("roster_id"), session=session)
+        outcome = execute_operation(str(prepared["operation_uuid"]), app_user_id, session=session)
+        results.append(outcome)
+        if outcome.get("status") != "verified" or not outcome.get("readback_verified"):
+            return results, []
+    verified_ids = [int(row["roster_id"]) for row in results if row.get("roster_id")]
+    verified_ids.extend(int(action["roster_id"]) for action in preview.get("actions") or [] if action.get("operation") == "unchanged" and action.get("roster_id"))
+    if verified_ids and len(results) == len(intended):
+        prepared = prepare_operation(app_user_id=app_user_id, workday_id=int(preview["workday_id"]), assignment_key=f"publish:{preview['workday_id']}",
+                                     operation_type="publish", desired={"roster_ids": verified_ids}, session=session)
+        results.append(execute_operation(str(prepared["operation_uuid"]), app_user_id, session=session))
+    return results, []
 
 
 def write_audit_summary(limit: int = 30) -> dict[str, object]:

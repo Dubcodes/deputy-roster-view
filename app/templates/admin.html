@@ -55,6 +55,7 @@
       <form class="settings-form" action="/admin/deputy-api/config" method="post">
         <label class="form-row"><span>OAuth client ID</span><input name="client_id" value="{{ deputy_api_config.client_id or '' }}"></label>
         <label class="form-row"><span>OAuth client secret</span><input type="password" name="client_secret" placeholder="{{ 'Configured — leave blank to keep' if deputy_api_config.client_secret_configured else 'Required to connect' }}"></label>
+        <label class="form-row"><span>OAuth callback origin</span><input type="url" name="callback_origin" value="{{ deputy_api_config.callback_origin or '' }}" placeholder="https://redeputy.example" required></label>
         <label class="form-row"><span>Deputy writes</span><select name="write_mode"><option value="off">Off</option><option value="trial"{% if deputy_api_config.write_mode == 'trial' %} selected{% endif %}>Trial tenant only</option></select></label>
         <label class="form-row"><span>Exact allowed trial hostnames</span><textarea name="allowed_hosts" rows="3">{{ deputy_api_config.allowed_trial_hosts|join('\n') }}</textarea></label>
         <button class="button" type="submit">Save Deputy API configuration</button>

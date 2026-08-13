@@ -1206,6 +1206,7 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "app_users", "account_type", "TEXT NOT NULL DEFAULT 'user'")
         _ensure_column(conn, "app_users", "contractor_person_id", "INTEGER")
         _ensure_column(conn, "app_users", "last_activity_at", "TEXT")
+        _ensure_column(conn, "deputy_oauth_config", "callback_origin", "TEXT NOT NULL DEFAULT ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_contractor_invites_person ON contractor_invites(crew_person_id, expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_deputy_write_status ON deputy_write_operations(status, created_at DESC)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_deputy_active_assignment_operation ON deputy_write_operations(tenant_host, stable_assignment_key) WHERE status IN ('prepared','sending','unknown')")
@@ -3437,7 +3438,11 @@ def save_roster_day(
                 canonical_user_id = _optional_int(person["app_user_id"])
                 canonical_label = str(person["canonical_display_name"] or canonical_label)
             assignment_key = str(assignment.get("assignment_key") or "").strip()[:80]
-            if not assignment_key or assignment_key in {
+            key_used_elsewhere = bool(assignment_key and conn.execute(
+                "SELECT 1 FROM workday_assignments WHERE assignment_key=? AND roster_day_id!=? LIMIT 1",
+                (assignment_key, saved_id),
+            ).fetchone())
+            if not assignment_key or key_used_elsewhere or assignment_key in {
                 str(item.get("assignment_key") or "") for item in assignments
                 if item is not assignment and str(item.get("assignment_key") or "")
             }:
