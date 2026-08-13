@@ -124,3 +124,13 @@ The self-travel smoke confirms owner-only today/future authorization, stable ide
 `python scripts/smoke_workday_responsive.py` checks August, September, and November 2026 at 375px and 320px, including first-row brand/actions, left-fluid second-row month navigation, overlap, and horizontal overflow.
 
 Automated tests never contact a live Deputy tenant. A real disposable trial smoke must be initiated by an Admin from a published workday, reviewed in the dry preview, and confirmed by typing `CONFIRM`; verify tenant, operation short ID, Roster ID, and read-back result in the popup and Admin audit.
+
+# 2026.08.13.2 Deputy readiness checks
+
+`python scripts/smoke_release_integration.py` also covers ordinary-user read readiness,
+the write-readiness trial/host matrix, same-identity permission loss and gain, EmployeeId
+mismatch, independent reference-resource denial, token refresh, James/Sarah OAuth-token
+isolation, cross-owner prepared-operation rejection, disconnected-user non-fallback,
+contractor OAuth-route denial, independent personal start/finish behavior, and a
+second idempotent migration pass with row-count preservation. All Deputy HTTP remains
+mocked; the suite performs zero live Deputy writes.

@@ -205,14 +205,27 @@ account, so an unavailable device does not create an orphan queue row. The deliv
 worker separately marks legacy/raced queued events with no devices as failed without
 raising. Push identity and subscription ownership remain per-account.
 
-## Future Deputy Write Identity (Not Implemented)
+## Deputy OAuth Read And Write Identity
 
 Re-Deputy roles remain `user` and `admin`; application administration is separate
-from Deputy authority. Any future write service must accept the authenticated
-Re-Deputy user as an explicit input, resolve only that user's verified Deputy
-identity and credential, reject missing/mismatched authority, and prohibit every
-cross-user or shared fallback. Early live writes should add conspicuous target/account
-confirmation and persist read-back verification. No Deputy mutation endpoint exists.
+from Deputy authority. Every Deputy service accepts the authenticated Re-Deputy user
+as an explicit input and resolves only that user's encrypted OAuth connection. There
+is no cross-user, shared, Admin, or failed-connection credential fallback.
+
+Connection presence, read readiness, and write readiness are separate states. Read
+verification authenticates `/me`, binds both Deputy UserId and EmployeeId, and updates
+the current permission snapshot without requiring roster-management permission or a
+trial host. Write verification immediately repeats that read check, requires the
+fresh `Can_Roster_Manage` capability, exact trial-host allow-list membership, and
+trial mode. Trial mode defaults to off. The monitored write flow additionally keeps
+operation ownership, prepared-operation identity and permission snapshots, duplicate
+and Timesheet locks, explicit confirmation, and read-back/unknown-result handling.
+
+Employee and OperationalUnit reference refreshes are read-only and independent: a
+permission denial for one resource preserves the other resource's useful cache and
+does not invalidate a correctly authenticated connection. Local mappings display
+cached per-user references without write readiness and changes require the acting
+Admin's own currently readable reference IDs.
 
 ## Page Timing Diagnostics
 

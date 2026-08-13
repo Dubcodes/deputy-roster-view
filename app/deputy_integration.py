@@ -182,15 +182,54 @@ def connection_status(app_user_id: int) -> dict[str, object]:
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM deputy_oauth_connections WHERE app_user_id=?", (app_user_id,)).fetchone()
     if row is None:
-        return {"connected": False, "ready": False}
+        return {
+            "connected": False,
+            "read_ready": False,
+            "write_ready": False,
+            "connection_state": "disconnected",
+            "read_reason": "Connect your Deputy account to enable read access.",
+            "write_reason": "Connect and verify your Deputy account first.",
+        }
     item = dict(row)
-    permissions = json.loads(str(item.get("permissions_json") or "[]"))
+    try:
+        permissions = [str(value) for value in json.loads(str(item.get("permissions_json") or "[]"))]
+    except (TypeError, ValueError):
+        permissions = []
+    connection_state = str(item.get("status") or "authentication_unavailable")
+    read_ready = connection_state == "connected" and bool(item.get("last_verified_at"))
+    config = load_config()
+    roster_manage = WRITE_PERMISSION in permissions
+    allowed_hosts = set(str(value) for value in config.get("allowed_trial_hosts") or [])
+    if not read_ready:
+        write_reason = {
+            "identity_mismatch": "Deputy identity mismatch. Reconnect and review this connection.",
+            "authentication_unavailable": "Deputy authentication is unavailable. Reconnect your account.",
+            "unavailable": "Deputy authentication is unavailable. Reconnect your account.",
+        }.get(connection_state, "Verify your Deputy read access first.")
+    elif not roster_manage:
+        write_reason = "Your Deputy account does not have roster-management permission."
+    elif config.get("write_mode") != "trial":
+        write_reason = "Available, but trial writes are currently disabled."
+    elif str(item["tenant_host"]) not in allowed_hosts:
+        write_reason = "This tenant is not approved for trial writes."
+    else:
+        write_reason = "Trial ready"
+    read_reason = {
+        "identity_mismatch": "Deputy identity mismatch. Reconnect and review this connection.",
+        "authentication_unavailable": "Deputy authentication is expired or unavailable.",
+        "unavailable": "Deputy authentication is expired or unavailable.",
+    }.get(connection_state, "Ready" if read_ready else "Read access has not been verified.")
     return {
-        "connected": item.get("status") == "connected",
-        "ready": item.get("status") == "connected" and WRITE_PERMISSION in permissions and trial_host_allowed(str(item["tenant_host"])),
+        "connected": True,
+        "read_ready": read_ready,
+        "write_ready": read_ready and roster_manage and config.get("write_mode") == "trial" and str(item["tenant_host"]) in allowed_hosts,
+        "write_label": "Trial ready" if write_reason == "Trial ready" else (write_reason if write_reason.startswith("Available,") else "Not available"),
+        "connection_state": connection_state,
+        "read_reason": read_reason,
+        "write_reason": write_reason,
         "tenant_host": item["tenant_host"], "deputy_user_id": item["deputy_user_id"],
         "deputy_employee_id": item["deputy_employee_id"], "display_label": item["display_label"],
-        "permissions": permissions, "roster_manage": WRITE_PERMISSION in permissions,
+        "permissions": permissions, "roster_manage": roster_manage,
         "last_verified_at": item["last_verified_at"], "status": item["status"], "unavailable_reason": item["unavailable_reason"],
     }
 
@@ -203,19 +242,23 @@ def disconnect(app_user_id: int) -> None:
 def client_for_user(app_user_id: int, *, session: object = requests) -> tuple[DeputyClient, dict[str, object]]:
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM deputy_oauth_connections WHERE app_user_id=?", (app_user_id,)).fetchone()
-    if row is None or row["status"] != "connected":
+    if row is None:
         raise PermissionError("Connect your own Deputy account first.")
     item = dict(row)
+    if item.get("status") == "identity_mismatch":
+        raise PermissionError("Deputy identity mismatch. Reconnect and review this connection.")
     access = decrypt_text(str(item["encrypted_access_token"] or ""))
     refresh = decrypt_text(str(item["encrypted_refresh_token"] or ""))
     if item.get("token_expires_at") and datetime.fromisoformat(str(item["token_expires_at"])) <= datetime.now(get_settings().timezone) + timedelta(minutes=1):
         if not refresh:
+            with get_connection() as conn:
+                conn.execute("UPDATE deputy_oauth_connections SET status='authentication_unavailable',unavailable_reason=?,updated_at=? WHERE app_user_id=?", ("Stored Deputy authentication has expired.", now_iso(), app_user_id))
             raise PermissionError("Deputy connection expired. Reconnect your account.")
         try:
             tokens = _token_request(str(item["tenant_host"]), {"grant_type": "refresh_token", "refresh_token": refresh}, session=session)
         except ValueError as exc:
             with get_connection() as conn:
-                conn.execute("UPDATE deputy_oauth_connections SET status='unavailable',unavailable_reason=?,updated_at=? WHERE app_user_id=?", (str(exc), now_iso(), app_user_id))
+                conn.execute("UPDATE deputy_oauth_connections SET status='authentication_unavailable',unavailable_reason=?,updated_at=? WHERE app_user_id=?", ("Deputy token refresh failed.", now_iso(), app_user_id))
             raise PermissionError("Deputy refresh failed. Reconnect your account.") from exc
         access = str(tokens["access_token"])
         refresh = str(tokens.get("refresh_token") or refresh)
@@ -225,24 +268,37 @@ def client_for_user(app_user_id: int, *, session: object = requests) -> tuple[De
     return DeputyClient(str(item["tenant_host"]), access, session=session), item
 
 
-def verify_readiness(app_user_id: int, *, require_trial: bool = True, session: object = requests) -> dict[str, object]:
+def verify_read_access(app_user_id: int, *, session: object = requests) -> dict[str, object]:
     client, stored = client_for_user(app_user_id, session=session)
     status, me = client.request("GET", "/api/v1/me")
     if status != 200 or not isinstance(me, dict):
+        with get_connection() as conn:
+            conn.execute("UPDATE deputy_oauth_connections SET status='authentication_unavailable',unavailable_reason=?,updated_at=? WHERE app_user_id=?", ("Deputy identity could not be authenticated.", now_iso(), app_user_id))
         raise PermissionError("Deputy identity could not be verified. Reconnect your account.")
     permissions = [str(item) for item in me.get("Permissions") or []]
     if int(me.get("UserId") or 0) != int(stored["deputy_user_id"]) or int(me.get("EmployeeId") or 0) != int(stored["deputy_employee_id"]):
+        with get_connection() as conn:
+            conn.execute("UPDATE deputy_oauth_connections SET status='identity_mismatch',unavailable_reason=?,updated_at=? WHERE app_user_id=?", ("Deputy returned a different user or employee identity.", now_iso(), app_user_id))
         raise PermissionError("Deputy identity changed. Recheck or reconnect your Deputy account.")
     new_hash = permission_hash(permissions)
-    if new_hash != str(stored["permission_hash"]):
-        raise PermissionError("Deputy permissions changed. Recheck or reconnect your Deputy account.")
-    if WRITE_PERMISSION not in permissions:
-        raise PermissionError("This Deputy account cannot manage rosters.")
-    if require_trial and not trial_host_allowed(client.tenant_host):
-        raise PermissionError("Deputy writes are restricted to explicitly allowed trial tenants.")
     with get_connection() as conn:
-        conn.execute("UPDATE deputy_oauth_connections SET last_verified_at=?,updated_at=? WHERE app_user_id=?", (now_iso(), now_iso(), app_user_id))
-    return {"client": client, "me": me, "tenant_host": client.tenant_host, "permission_hash": new_hash, "permissions": permissions}
+        observed = now_iso()
+        conn.execute("""UPDATE deputy_oauth_connections SET display_label=?,permissions_json=?,permission_hash=?,
+                     last_verified_at=?,status='connected',unavailable_reason=NULL,updated_at=? WHERE app_user_id=?""",
+                     (str(me.get("Name") or stored.get("display_label") or "Deputy user"), json.dumps(permissions), new_hash, observed, observed, app_user_id))
+    return {"client": client, "me": me, "tenant_host": client.tenant_host, "permission_hash": new_hash, "permissions": permissions, "read_ready": True}
+
+
+def verify_write_readiness(app_user_id: int, *, session: object = requests) -> dict[str, object]:
+    verified = verify_read_access(app_user_id, session=session)
+    if WRITE_PERMISSION not in verified["permissions"]:
+        raise PermissionError("Your Deputy account does not have roster-management permission.")
+    config = load_config()
+    if config.get("write_mode") != "trial":
+        raise PermissionError("Deputy roster writes are available, but trial writes are currently disabled.")
+    if verified["tenant_host"] not in set(str(value) for value in config.get("allowed_trial_hosts") or []):
+        raise PermissionError("This Deputy tenant is not approved for trial writes.")
+    return {**verified, "write_ready": True}
 
 
 def resource_query(client: DeputyClient, resource: str, *, search: dict[str, object] | None = None) -> list[dict[str, object]]:
@@ -262,11 +318,20 @@ def resource_query(client: DeputyClient, resource: str, *, search: dict[str, obj
     return result
 
 
-def refresh_references(app_user_id: int, *, session: object = requests) -> dict[str, int]:
-    verified = verify_readiness(app_user_id, require_trial=False, session=session)
+def refresh_references(app_user_id: int, *, session: object = requests) -> dict[str, object]:
+    verified = verify_read_access(app_user_id, session=session)
     client = verified["client"]
-    employees = resource_query(client, "Employee")
-    units = resource_query(client, "OperationalUnit")
+    employees: list[dict[str, object]] = []
+    units: list[dict[str, object]] = []
+    errors: dict[str, str] = {}
+    try:
+        employees = resource_query(client, "Employee")
+    except ValueError:
+        errors["employees"] = "Employee references are unavailable or permission denied."
+    try:
+        units = resource_query(client, "OperationalUnit")
+    except ValueError:
+        errors["units"] = "Operational Unit references are unavailable or permission denied."
     observed = now_iso()
     with get_connection() as conn:
         for item in employees:
@@ -279,7 +344,7 @@ def refresh_references(app_user_id: int, *, session: object = requests) -> dict[
                 VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(app_user_id,tenant_host,deputy_unit_id) DO UPDATE SET display_name=excluded.display_name,
                 active=excluded.active,show_on_roster=excluded.show_on_roster,metadata_json=excluded.metadata_json,last_observed_at=excluded.last_observed_at""",
                 (app_user_id, client.tenant_host, int(item["Id"]), str(item.get("OperationalUnitName") or ""), 1 if item.get("Active", True) else 0, 1 if item.get("ShowOnRoster", True) else 0, json.dumps({"type": item.get("OperationalUnitType")}), observed))
-    return {"employees": len(employees), "units": len(units)}
+    return {"employees": len(employees), "units": len(units), "errors": errors}
 
 
 def normalized_hash(value: dict[str, object]) -> str:
@@ -353,7 +418,7 @@ def mapping_snapshot(app_user_id: int) -> dict[str, object]:
 
 
 def save_person_mapping(*, app_user_id: int, crew_person_id: int, deputy_employee_id: int) -> None:
-    verified = verify_readiness(app_user_id, require_trial=False)
+    verified = verify_read_access(app_user_id)
     with get_connection() as conn:
         if conn.execute("SELECT 1 FROM deputy_reference_employees WHERE app_user_id=? AND tenant_host=? AND deputy_employee_id=? AND active=1", (app_user_id, verified["tenant_host"], deputy_employee_id)).fetchone() is None:
             raise ValueError("That Deputy employee is not readable by your connected account.")
@@ -363,7 +428,7 @@ def save_person_mapping(*, app_user_id: int, crew_person_id: int, deputy_employe
 
 
 def save_unit_mapping(*, app_user_id: int, mapping_key: str, context_type: str, deputy_unit_id: int) -> None:
-    verified = verify_readiness(app_user_id, require_trial=False)
+    verified = verify_read_access(app_user_id)
     kind = context_type if context_type in {"production_role", "travel", "vehicle_context", "generic"} else "generic"
     with get_connection() as conn:
         if conn.execute("SELECT 1 FROM deputy_reference_units WHERE app_user_id=? AND tenant_host=? AND deputy_unit_id=? AND active=1", (app_user_id, verified["tenant_host"], deputy_unit_id)).fetchone() is None:
@@ -374,7 +439,7 @@ def save_unit_mapping(*, app_user_id: int, mapping_key: str, context_type: str, 
 
 
 def build_trial_preview(app_user_id: int, workday_id: int, *, session: object = requests) -> dict[str, object]:
-    verified = verify_readiness(app_user_id, session=session)
+    verified = verify_write_readiness(app_user_id, session=session)
     host = str(verified["tenant_host"])
     with get_connection() as conn:
         workday = conn.execute("SELECT * FROM roster_days WHERE id=? AND status IN ('published','changes_pending')", (workday_id,)).fetchone()
@@ -411,11 +476,11 @@ def build_trial_preview(app_user_id: int, workday_id: int, *, session: object = 
             actions.append({"operation": "delete", "assignment_key": key, "role_label": "Removed assignment", "desired": {}, "roster_id": int(link["deputy_roster_id"])})
     counts = {name: sum(1 for row in actions if row["operation"] == name) for name in ("create", "update", "delete", "unchanged")}
     counts.update({"local_only": len(local_only)})
-    return {"workday_id": workday_id, "tenant_host": host, "actions": actions, "local_only": local_only, "counts": counts}
+    return {"workday_id": workday_id, "tenant_host": host, "connected_identity": str(verified["me"].get("Name") or "Deputy user"), "connected_employee_id": int(verified["me"]["EmployeeId"]), "actions": actions, "local_only": local_only, "counts": counts}
 
 
 def prepare_operation(*, app_user_id: int, workday_id: int, assignment_key: str, operation_type: str, desired: dict[str, object], roster_id: int | None = None, session: object = requests) -> dict[str, object]:
-    verified = verify_readiness(app_user_id, session=session)
+    verified = verify_write_readiness(app_user_id, session=session)
     if operation_type in {"create", "update"}:
         with get_connection() as conn:
             employee_ok = conn.execute("SELECT 1 FROM deputy_reference_employees WHERE app_user_id=? AND tenant_host=? AND deputy_employee_id=? AND active=1", (app_user_id, verified["tenant_host"], int(desired.get("employee") or 0))).fetchone()
@@ -444,11 +509,21 @@ def execute_operation(operation_uuid: str, app_user_id: int, *, session: object 
         row = conn.execute("SELECT * FROM deputy_write_operations WHERE operation_uuid=? AND app_user_id=?", (operation_uuid, app_user_id)).fetchone()
         if row is None or row["status"] != "prepared":
             raise ValueError("Deputy operation is not available to execute.")
-    verified = verify_readiness(app_user_id, session=session)
+    try:
+        verified = verify_write_readiness(app_user_id, session=session)
+    except PermissionError as exc:
+        return _finish_operation(operation_uuid, "failed", row["deputy_roster_id"], {"message": str(exc)}, False, "PERMISSION")
     client: DeputyClient = verified["client"]
+    operation = dict(row)
+    if (str(operation["tenant_host"]) != str(verified["tenant_host"])
+            or int(operation["deputy_user_id"]) != int(verified["me"]["UserId"])
+            or int(operation["deputy_employee_id"]) != int(verified["me"]["EmployeeId"])):
+        return _finish_operation(operation_uuid, "failed", operation.get("deputy_roster_id"), {"message": "Prepared Deputy operation does not match your current Deputy identity."}, False, "PERMISSION")
+    if str(operation["permission_hash"]) != str(verified["permission_hash"]):
+        return _finish_operation(operation_uuid, "failed", operation.get("deputy_roster_id"), {"message": "Deputy permissions changed after this operation was prepared. Review and prepare it again."}, False, "PERMISSION")
     with get_connection() as conn:
         conn.execute("UPDATE deputy_write_operations SET status='sending',sending_at=?,updated_at=? WHERE id=?", (now_iso(), now_iso(), row["id"]))
-    operation = dict(row); desired = json.loads(str(operation["desired_state"])); api_desired = _api_desired(desired); roster_id = operation.get("deputy_roster_id")
+    desired = json.loads(str(operation["desired_state"])); api_desired = _api_desired(desired); roster_id = operation.get("deputy_roster_id")
     op_type = str(operation["operation_type"])
     try:
         if op_type == "create":

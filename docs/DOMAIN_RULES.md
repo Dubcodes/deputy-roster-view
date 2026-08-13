@@ -263,3 +263,11 @@ For race days, the app may show a cached or admin-uploaded 2D course map at the 
 - Re-Deputy Admin authority is separate from Deputy authority. Every Deputy action uses the initiating app user's own encrypted OAuth connection; there is no shared or cross-user fallback.
 - `Employee.Id` is the canonical Deputy employee identity. `/me` `UserId` and `EmployeeId` are independently bound and checked. Supervisor was the lowest fully tested lab role, but readiness is based on `/me` capability (`Can_Roster_Manage`) and readable targets, not Employee.Role.
 - Only assigned real-person shifts can enter the trial write preview. TBC and Open Position remain local only. Weak legacy travel-note inference never generates a Deputy write.
+
+# Deputy readiness hardening (2026.08.13.2)
+
+- Re-Deputy Admin and Deputy roster manager are independent permissions. Neither one grants the other.
+- A connected ordinary Deputy user can verify identity, use permitted reads, refresh readable references, and maintain local mappings without `Can_Roster_Manage`.
+- Deputy permission changes update the verified local capability snapshot after the same UserId and EmployeeId are confirmed. Losing roster management disables writes immediately; gaining it still requires every trial guard.
+- Every read and write uses only the logged-in Re-Deputy user's own OAuth connection. Disconnected, expired, failed, or Admin accounts never fall back to another user's credential.
+- Trial writes remain disabled by default and can be executed only by the conspicuous, confirmed Admin trial route. No scheduler, page render, contractor, or background sync executes prepared operations.

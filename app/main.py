@@ -239,14 +239,13 @@ from .deputy_integration import (
     save_config as save_deputy_api_config,
     save_person_mapping,
     save_unit_mapping,
-    verify_readiness,
     write_audit_summary,
 )
 
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.13.1"
+APP_BUILD = "2026.08.13.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -5898,7 +5897,7 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
             "notice": notice,
             "header_mode": "settings",
             "current_user": user,
-            "deputy_trial_ready": bool(connection_status(int(user["id"])).get("ready")),
+            "deputy_trial_ready": bool(connection_status(int(user["id"])).get("write_ready")),
             "roster_day": roster_day,
             "assignment_rows": assignment_rows,
             "hotel_rows": hotel_rows,
@@ -7910,9 +7909,20 @@ def settings_deputy_api_recheck(request: Request) -> RedirectResponse:
     if not user or user.get("account_type") == "contractor":
         raise HTTPException(status_code=403, detail="Login required")
     try:
-        verify_readiness(int(user["id"]), require_trial=False)
-        refresh_references(int(user["id"]))
-        message = "Deputy identity and roster access rechecked. Reference data refreshed."
+        refreshed = refresh_references(int(user["id"]))
+        errors = dict(refreshed.get("errors") or {})
+        if errors:
+            available = []
+            if int(refreshed.get("employees") or 0):
+                available.append("Employee")
+            if int(refreshed.get("units") or 0):
+                available.append("Operational Unit")
+            prefix = "Deputy identity and read access verified."
+            if available:
+                prefix += f" Refreshed {' and '.join(available)} references."
+            message = f"{prefix} {' '.join(errors.values())}"
+        else:
+            message = "Deputy identity and read access verified. Employee and Operational Unit references refreshed."
     except (ValueError, PermissionError) as exc:
         message = str(exc)
     return RedirectResponse(url=notice_url("/settings", message), status_code=303)
