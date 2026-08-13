@@ -14,6 +14,7 @@ Re-Deputy is a private FastAPI/Jinja/SQLite multi-user roster and workday planni
 - `docs/DECISIONS.md` - decisions and why they were made.
 - `docs/MULTI_USER_PLAN.md` - planned shared multi-user expansion.
 - `docs/TESTING.md` - local checks before committing.
+- `docs/PRE_DEPLOYMENT_SAFETY_LOG.md` - release defects, remaining gates, evidence, and decisions; preserve old entries and update their status when resolved.
 - `docs/AI_TASK_TEMPLATE.md` - prompt template for future AI handovers.
 
 ## Safety
