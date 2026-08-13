@@ -207,7 +207,7 @@ def main() -> None:
             deputy_email="admin@example.com",
             display_name="Override Admin",
             pin_hash="test-hash",
-            deputy_web_url="https://example.deputy.com/",
+            deputy_web_url="https://example.au.deputy.com/",
             encrypted_email="",
             encrypted_password="",
         )

@@ -127,6 +127,14 @@ def init_db(settings: Settings | None = None) -> None:
                 deactivated_at TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS login_throttle (
+                account_key TEXT PRIMARY KEY,
+                failures INTEGER NOT NULL DEFAULT 0,
+                first_failed_at TEXT NOT NULL,
+                blocked_until TEXT,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS app_role_audit (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 actor_user_id INTEGER NOT NULL,

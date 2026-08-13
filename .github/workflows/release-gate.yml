@@ -1,0 +1,21 @@
+name: Release gate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  offline-smokes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m py_compile app/*.py
+      - run: python scripts/smoke_render_templates.py
+      - run: python scripts/smoke_deputy_release_gate.py
+      - run: python scripts/smoke_security_closure.py
+      - run: python scripts/smoke_release_integration.py

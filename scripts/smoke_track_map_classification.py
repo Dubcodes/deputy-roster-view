@@ -160,7 +160,7 @@ def main() -> None:
     signup = client.post(
         "/signup",
         data={
-            "deputy_web_url": "https://example.invalid/#/", "deputy_email": "admin@example.com",
+            "deputy_web_url": "https://example.au.deputy.com/#/", "deputy_email": "admin@example.com",
             "deputy_password": "password", "pin": "1234", "pin_confirm": "1234",
             "next_url": "/admin",
         },

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import hashlib
+import hmac
 from urllib.parse import quote
 from datetime import datetime, timedelta
 
@@ -14,6 +16,7 @@ from .database import (
     revoke_trusted_device,
     update_app_user_seen,
     update_trusted_device_seen,
+    get_connection,
 )
 from .security import SESSION_COOKIE_NAME, hash_session_token, session_expires_at
 
@@ -37,6 +40,47 @@ CONTRACTOR_ALLOWED_PREFIXES = (
     "/manifest.webmanifest",
     "/service-worker.js",
 )
+
+LOGIN_FAILURE_LIMIT = 5
+LOGIN_WINDOW = timedelta(minutes=15)
+LOGIN_BLOCK = timedelta(minutes=15)
+
+
+def _login_account_key(email: str) -> str:
+    secret = get_settings().app_secret_key.encode("utf-8")
+    return hmac.new(secret, email.strip().lower().encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def login_is_throttled(email: str, *, now: datetime | None = None) -> bool:
+    moment = now or datetime.now(get_settings().timezone)
+    key = _login_account_key(email)
+    with get_connection() as conn:
+        conn.execute("DELETE FROM login_throttle WHERE updated_at < ?", ((moment - timedelta(days=1)).isoformat(),))
+        row = conn.execute("SELECT blocked_until FROM login_throttle WHERE account_key=?", (key,)).fetchone()
+    if row is None or not row["blocked_until"]:
+        return False
+    return datetime.fromisoformat(str(row["blocked_until"])) > moment
+
+
+def record_login_failure(email: str, *, now: datetime | None = None) -> None:
+    moment = now or datetime.now(get_settings().timezone)
+    key = _login_account_key(email)
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM login_throttle WHERE account_key=?", (key,)).fetchone()
+        if row is None or datetime.fromisoformat(str(row["first_failed_at"])) <= moment - LOGIN_WINDOW:
+            failures, first = 1, moment
+        else:
+            failures, first = int(row["failures"]) + 1, datetime.fromisoformat(str(row["first_failed_at"]))
+        blocked = (moment + LOGIN_BLOCK).isoformat() if failures >= LOGIN_FAILURE_LIMIT else None
+        conn.execute("""INSERT INTO login_throttle(account_key,failures,first_failed_at,blocked_until,updated_at) VALUES(?,?,?,?,?)
+            ON CONFLICT(account_key) DO UPDATE SET failures=excluded.failures,first_failed_at=excluded.first_failed_at,
+            blocked_until=excluded.blocked_until,updated_at=excluded.updated_at""",
+            (key, failures, first.isoformat(), blocked, moment.isoformat()))
+
+
+def clear_login_failures(email: str) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM login_throttle WHERE account_key=?", (_login_account_key(email),))
 
 
 def current_user(request: Request) -> dict[str, object] | None:

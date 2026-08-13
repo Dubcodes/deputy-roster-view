@@ -155,6 +155,8 @@ def _token_request(host: str, path: str, payload: dict[str, str], *, session: ob
         data = response.json()
     except ValueError as exc:
         raise ValueError("Deputy returned an unexpected authorization response.") from exc
+    if not isinstance(data, dict):
+        raise ValueError("Deputy returned an unexpected authorization response.")
     if not data.get("access_token"):
         raise ValueError("Deputy did not return an access token.")
     return data
@@ -409,6 +411,13 @@ def preflight_trial_batch(preview: dict[str, object], *, app_user_id: int, sessi
             if current.can_edit is False or current.timesheet_id:
                 suffix = f" #{current.timesheet_id}" if current.timesheet_id else ""
                 blockers.append(f"{label}: locked by Timesheet{suffix}.")
+            if operation == "unchanged" and not _business_equal(current, desired):
+                blockers.append(f"{label}: Deputy changed outside Re-Deputy; review before continuing.")
+            if operation in {"update", "delete"}:
+                with get_connection() as conn:
+                    link = conn.execute("SELECT last_verified_state FROM deputy_roster_links WHERE tenant_host=? AND stable_assignment_key=?", (verified["tenant_host"], action.get("assignment_key"))).fetchone()
+                if link is None or not _matches_stored_baseline(current, link["last_verified_state"]):
+                    blockers.append(f"{label}: Deputy changed outside Re-Deputy since the last verified read-back.")
     return sorted(set(blockers))
 
 
@@ -511,13 +520,8 @@ def extract_v2_shift(body: object) -> dict[str, object]:
 def normalize_shift(value: dict[str, object], *, resource: bool = False) -> NormalizedShift:
     def first(*names: str) -> object:
         return next((value[name] for name in names if value.get(name) is not None), None)
-    slots = first("mealbreakSlots", "MealbreakSlots") or []
-    duration = first("mealbreakDuration", "Mealbreak", "mealbreak")
-    if duration is not None:
-        numeric = float(duration or 0)
-        break_minutes = int(round(numeric if resource or numeric > 8 else numeric * 60))
-    else:
-        break_minutes = sum(max(0, int(slot.get("end") or 0) - int(slot.get("start") or 0)) for slot in slots if isinstance(slot, dict) and str(slot.get("type") or "MEAL_BREAK") == "MEAL_BREAK") // 60
+    slots = first("mealbreakSlots", "MealbreakSlots", "Slots") or []
+    break_minutes = _resource_break_minutes(slots, first("Mealbreak", "mealbreak")) if resource else _v2_break_minutes(slots, first("mealbreakDuration"))
     timesheet = first("timesheet", "MatchedByTimesheet", "matchedByTimesheet")
     return NormalizedShift(
         roster_id=int(first("id", "Id") or 0) or None,
@@ -525,10 +529,56 @@ def normalize_shift(value: dict[str, object], *, resource: bool = False) -> Norm
         start=_instant(first("start", "startAt", "StartTime")), end=_instant(first("end", "endAt", "EndTime")),
         break_minutes=break_minutes, note=str(first("note", "Comment") or ""),
         is_open=bool(first("isOpen", "Open") or False), is_published=bool(first("isPublished", "Published") or False),
-        approval_required=bool(first("approvalRequired", "ConfirmStatus") or False),
+        approval_required=bool(first("approvalRequired", "ApprovalRequired", "ConfirmStatus") or False),
         timesheet_id=int(timesheet or 0) or None,
         can_edit=value.get("canEdit") if isinstance(value.get("canEdit"), bool) else None,
     )
+
+
+def _slot_is_break(slot: dict[str, object]) -> bool:
+    values = {str(slot.get(name) or "").strip().upper() for name in ("strType", "type", "slotType", "Type")}
+    return bool(values & {"B", "BREAK", "MEAL_BREAK", "MEAL BREAK"})
+
+
+def _slot_seconds(slot: dict[str, object]) -> int:
+    for start_name, end_name in (("intStart", "intEnd"), ("start", "end"), ("Start", "End")):
+        try:
+            start, end = int(slot[start_name]), int(slot[end_name])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 <= start <= end <= 172800:
+            return end - start
+    return 0
+
+
+def _resource_mealbreak_fallback(value: object) -> int:
+    if not isinstance(value, str):
+        return 0
+    match = re.fullmatch(r"(?:\d{4}-\d{2}-\d{2}T)?(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?", value.strip())
+    if not match:
+        return 0
+    hours, minutes, seconds = (int(match.group(1)), int(match.group(2)), int(match.group(3) or 0))
+    if hours > 23 or minutes > 59 or seconds > 59:
+        return 0
+    return int(round((hours * 3600 + minutes * 60 + seconds) / 60))
+
+
+def _resource_break_minutes(slots: object, mealbreak: object) -> int:
+    if isinstance(slots, list):
+        seconds = sum(_slot_seconds(slot) for slot in slots if isinstance(slot, dict) and _slot_is_break(slot))
+        if seconds:
+            return int(round(seconds / 60))
+    return _resource_mealbreak_fallback(mealbreak)
+
+
+def _v2_break_minutes(slots: object, duration: object) -> int:
+    if isinstance(duration, (int, float)) and not isinstance(duration, bool):
+        return max(0, int(round(float(duration) * 60)))
+    if isinstance(duration, str) and re.fullmatch(r"\d+(?:\.\d+)?", duration.strip()):
+        return max(0, int(round(float(duration) * 60)))
+    if isinstance(slots, list):
+        return int(round(sum(_slot_seconds(slot) for slot in slots if isinstance(slot, dict) and _slot_is_break(slot)) / 60))
+    return 0
 
 
 def normalize_v2_response(body: object) -> NormalizedShift:
@@ -565,6 +615,14 @@ def _business_equal(current: NormalizedShift | dict[str, object], desired: Norma
             and left.is_open == right.is_open and left.approval_required == right.approval_required)
 
 
+def _matches_stored_baseline(current: NormalizedShift, stored: object) -> bool:
+    try:
+        raw = json.loads(str(stored or ""))
+        return isinstance(raw, dict) and _business_equal(current, normalize_shift(raw))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+
+
 def _reconcile_after_network_error(client: DeputyClient, operation: dict[str, object], desired: dict[str, object], roster_id: int | None) -> dict[str, object]:
     op_type = str(operation["operation_type"])
     if op_type == "create":
@@ -575,7 +633,7 @@ def _reconcile_after_network_error(client: DeputyClient, operation: dict[str, ob
             if adopted:
                 status, body = client.request("GET", f"/api/management/v2/shifts/{adopted}")
                 if status == 200 and _business_equal(normalize_v2_response(body), desired):
-                    _save_roster_link(operation, desired, adopted, extract_v2_shift(body))
+                    _save_roster_link(operation, desired, adopted, extract_v2_shift(body), ownership="re_deputy_created_trial")
                     return _finish_operation(str(operation["operation_uuid"]), "verified", adopted, {"reconciled": True}, True)
         if len(exact) > 1:
             return _finish_operation(str(operation["operation_uuid"]), "ambiguous", None, {"message": "Multiple exact Deputy candidates require manual reconciliation."}, False, "AMBIGUOUS")
@@ -594,13 +652,15 @@ def _reconcile_after_network_error(client: DeputyClient, operation: dict[str, ob
     return _finish_operation(str(operation["operation_uuid"]), "unknown", roster_id, {"message": "Deputy result is unknown; reconciliation is required."}, False, "UNKNOWN_NETWORK_RESULT")
 
 
-def _save_roster_link(operation: dict[str, object], desired: dict[str, object], roster_id: int, readback: dict[str, object]) -> None:
+def _save_roster_link(operation: dict[str, object], desired: dict[str, object], roster_id: int, readback: dict[str, object], *, ownership: str = "re_deputy_created_trial") -> None:
     with get_connection() as conn:
         conn.execute("""INSERT INTO deputy_roster_links(tenant_host,workday_id,stable_assignment_key,crew_person_id,deputy_employee_id,deputy_unit_id,deputy_roster_id,context_type,ownership,last_desired_hash,last_verified_hash,last_verified_state,created_at,updated_at)
-            VALUES(?,?,?,?,?,?,?,?,'re_deputy_created_trial',?,?,?,?,?) ON CONFLICT(tenant_host,stable_assignment_key) DO UPDATE SET deputy_roster_id=excluded.deputy_roster_id,
-            last_desired_hash=excluded.last_desired_hash,last_verified_hash=excluded.last_verified_hash,last_verified_state=excluded.last_verified_state,updated_at=excluded.updated_at""",
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(tenant_host,stable_assignment_key) DO UPDATE SET workday_id=excluded.workday_id,
+            crew_person_id=excluded.crew_person_id,deputy_employee_id=excluded.deputy_employee_id,deputy_unit_id=excluded.deputy_unit_id,
+            deputy_roster_id=excluded.deputy_roster_id,context_type=excluded.context_type,last_desired_hash=excluded.last_desired_hash,
+            last_verified_hash=excluded.last_verified_hash,last_verified_state=excluded.last_verified_state,updated_at=excluded.updated_at""",
             (operation["tenant_host"], operation["workday_id"], operation["stable_assignment_key"], desired.get("crew_person_id"), int(desired.get("employee") or 0), int(desired.get("area") or 0), roster_id,
-             str(desired.get("context_type") or "production"), normalized_hash(desired), normalized_hash(readback), json.dumps(readback)[:10000], now_iso(), now_iso()))
+             str(desired.get("context_type") or "production"), ownership, normalized_hash(desired), normalized_hash(readback), json.dumps(readback)[:10000], now_iso(), now_iso()))
 
 
 def mapping_snapshot(app_user_id: int) -> dict[str, object]:
@@ -757,6 +817,7 @@ def execute_operation(operation_uuid: str, app_user_id: int, *, session: object 
     with get_connection() as conn:
         conn.execute("UPDATE deputy_write_operations SET status='sending',sending_at=?,updated_at=? WHERE id=?", (now_iso(), now_iso(), row["id"]))
     desired = json.loads(str(operation["desired_state"])); roster_id = operation.get("deputy_roster_id")
+    link_ownership = "re_deputy_created_trial"
     op_type = str(operation["operation_type"])
     try:
         if op_type == "create":
@@ -769,6 +830,7 @@ def execute_operation(operation_uuid: str, app_user_id: int, *, session: object 
                 return _finish_operation(operation_uuid, "failed", None, {"message": "An overlapping Deputy roster exists for this employee."}, False, "OVERLAP")
             if exact:
                 roster_id = int(exact[0].roster_id or 0)
+                link_ownership = "adopted_existing"
             else:
                 status, body = client.request("POST", "/api/management/v2/shifts", json=build_v2_shift_payload(desired))
                 if status != 200:
@@ -788,6 +850,10 @@ def execute_operation(operation_uuid: str, app_user_id: int, *, session: object 
                 conn.execute("UPDATE deputy_write_operations SET before_state=?,updated_at=? WHERE operation_uuid=?", (json.dumps(extract_v2_shift(current))[:10000], now_iso(), operation_uuid))
             if current_shift.can_edit is False or current_shift.timesheet_id:
                 raise PermissionError(f"Locked by Timesheet #{current_shift.timesheet_id or ''}".rstrip(" #"))
+            with get_connection() as conn:
+                link = conn.execute("SELECT last_verified_state FROM deputy_roster_links WHERE tenant_host=? AND stable_assignment_key=?", (verified["tenant_host"], operation["stable_assignment_key"])).fetchone()
+            if link is None or not _matches_stored_baseline(current_shift, link["last_verified_state"]):
+                raise PermissionError("Deputy changed outside Re-Deputy since the last verified read-back.")
             if _business_equal(current_shift, desired):
                 return _finish_operation(operation_uuid, "verified", roster_id, {"unchanged": True}, True)
             status, body = client.request("PUT", f"/api/management/v2/shifts/{roster_id}", json=build_v2_shift_payload(desired))
@@ -805,6 +871,8 @@ def execute_operation(operation_uuid: str, app_user_id: int, *, session: object 
                 conn.execute("UPDATE deputy_write_operations SET before_state=?,updated_at=? WHERE operation_uuid=?", (json.dumps(extract_v2_shift(current))[:10000], now_iso(), operation_uuid))
             if current_shift.can_edit is False or current_shift.timesheet_id:
                 raise PermissionError(f"Locked by Timesheet #{current_shift.timesheet_id or ''}".rstrip(" #"))
+            if not _matches_stored_baseline(current_shift, link["last_verified_state"]):
+                raise PermissionError("Deputy changed outside Re-Deputy since the last verified read-back.")
             status, body = client.request("DELETE", f"/api/management/v2/shifts/{roster_id}")
             if status != 200: raise deputy_error(status, body, "delete")
             if not isinstance(body, dict) or body.get("success") is not True: raise ValueError("Deputy returned an unexpected delete response.")
@@ -836,7 +904,7 @@ def execute_operation(operation_uuid: str, app_user_id: int, *, session: object 
         normalized_readback = normalize_v2_response(readback)
         if not _business_equal(normalized_readback, desired):
             raise ConnectionError("Deputy read-back did not match the intended shift.")
-        _save_roster_link(operation, desired, int(roster_id), extract_v2_shift(readback))
+        _save_roster_link(operation, desired, int(roster_id), extract_v2_shift(readback), ownership=link_ownership)
         return _finish_operation(operation_uuid, "verified", roster_id, {"readback": "verified"}, True)
     except requests.RequestException:
         try:
@@ -896,5 +964,10 @@ def write_audit_summary(limit: int = 30) -> dict[str, object]:
             FROM deputy_write_operations o JOIN app_users u ON u.id=o.app_user_id LEFT JOIN roster_days r ON r.id=o.workday_id
             ORDER BY o.created_at DESC LIMIT ?""", (limit,)).fetchall()]
     for row in rows:
+        try:
+            desired = json.loads(str(row.get("desired_state") or "{}"))
+        except (TypeError, ValueError):
+            desired = {}
+        row["recovery_summary"] = {name: desired.get(name) for name in ("employee", "area", "start", "end", "break_minutes", "note") if desired.get(name) not in (None, "")}
         row.pop("permission_snapshot", None); row.pop("desired_state", None); row.pop("before_state", None)
     return {"counts": counts, "rows": rows, "mode": load_config().get("write_mode", "off")}

@@ -5,11 +5,11 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
 
 import requests
 
 from .config import Settings
+from .url_safety import normalize_deputy_web_url
 
 
 TOKEN_RE = re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+|OAuth\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
@@ -34,11 +34,11 @@ def redacted_api_text(value: str) -> str:
 
 
 def deputy_api_base_url(settings: Settings) -> str:
-    raw_url = settings.deputy_web_url.strip() or "https://bb12c621103108.au.deputy.com/#/"
-    parsed = urlsplit(raw_url)
-    if not parsed.scheme or not parsed.netloc:
+    try:
+        safe_url = normalize_deputy_web_url(settings.deputy_web_url)
+    except ValueError:
         return ""
-    return f"{parsed.scheme}://{parsed.netloc}/api/v1"
+    return safe_url.split("/#/", 1)[0] + "/api/v1"
 
 
 def _safe_error_message(response: requests.Response) -> str:

@@ -19,6 +19,7 @@ from .database import (
     write_sync_log,
 )
 from .models import ShiftEvent
+from .url_safety import fetch_public_https
 
 
 COMPARE_FIELDS = (
@@ -212,13 +213,9 @@ def _parse_event(event: Any, source_url_hash: str, settings: Settings) -> ShiftE
 
 def _fetch_calendar(url: str) -> bytes:
     try:
-        response = requests.get(url, timeout=30)
-    except requests.RequestException as exc:
+        return fetch_public_https(url)
+    except (requests.RequestException, ValueError) as exc:
         raise CalendarSyncError(f"Deputy calendar fetch failed: {exc.__class__.__name__}.") from exc
-
-    if not response.ok:
-        raise CalendarSyncError(f"Deputy calendar fetch failed with HTTP {response.status_code}.")
-    return response.content
 
 
 def _load_events(settings: Settings, calendar_url: str) -> list[ShiftEvent]:

@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .config import Settings, get_settings
+from .url_safety import normalize_deputy_web_url
 from .database import (
     DEPUTY_LOCATION_CODES,
     get_current_or_next_shift,
@@ -163,8 +164,9 @@ def _include_full_response_in_copy(response: dict[str, Any]) -> bool:
 
 
 def _origin_url(settings: Settings) -> str:
-    parsed = urlsplit(settings.deputy_web_url.strip())
-    if not parsed.scheme or not parsed.netloc:
+    try:
+        parsed = urlsplit(normalize_deputy_web_url(settings.deputy_web_url))
+    except ValueError:
         return ""
     return urlunsplit((parsed.scheme, parsed.netloc, "/", "", ""))
 
@@ -177,8 +179,9 @@ def _api_url(settings: Settings, path: str) -> str:
 
 
 def _login_url(settings: Settings) -> str:
-    parsed = urlsplit(settings.deputy_web_url.strip())
-    if not parsed.scheme or not parsed.netloc:
+    try:
+        parsed = urlsplit(normalize_deputy_web_url(settings.deputy_web_url))
+    except ValueError:
         return ""
     return urlunsplit((parsed.scheme, parsed.netloc, "/login", "noredirectonce=1", ""))
 
@@ -1485,7 +1488,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     )
                     events.append(login_problem_message)
                 else:
-                    await page.goto(settings.deputy_web_url, wait_until="domcontentloaded", timeout=45_000)
+                    await page.goto(normalize_deputy_web_url(settings.deputy_web_url), wait_until="domcontentloaded", timeout=45_000)
                     events.append("Opened Deputy web app.")
                     await wait_for_page_to_settle("Deputy web app", timeout=35_000)
                     await log_page_context("Deputy web app")

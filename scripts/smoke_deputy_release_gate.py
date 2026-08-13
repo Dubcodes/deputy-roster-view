@@ -12,8 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.database import create_app_user, get_connection, init_db, save_roster_day
 from app.deputy_integration import (
+    _token_request,
     build_trial_preview, build_v2_shift_payload, complete_oauth, DeputyClient, execute_operation, execute_trial_batch,
-    extract_v2_shift, normalize_tenant_host, normalize_v2_response, resource_query,
+    extract_v2_shift, normalize_shift, normalize_tenant_host, normalize_v2_response, resource_query,
     prepare_operation, save_config, state_hash,
 )
 from app.security import encrypt_text, hash_pin
@@ -32,6 +33,7 @@ class FixtureDeputy:
         self.rosters: dict[int, dict[str, object]] = {}
         self.next_id = 70
         self.fail_create_number: int | None = None
+        self.lose_after_create_number: int | None = None
         self.create_count = 0
     def post(self, url: str, **kwargs: object):
         self.calls.append(("TOKEN", url, kwargs.get("data")))
@@ -48,8 +50,15 @@ class FixtureDeputy:
             assert all(set(item) == {"field", "data", "type"} and item["type"] == "eq" for item in body["search"].values())
             rows = []
             for row in self.rosters.values():
-                rows.append({"Id": row["id"], "Employee": row["employee"], "OperationalUnit": row["area"], "StartTime": row["start"], "EndTime": row["end"],
-                             "Mealbreak": int(round(float(row.get("mealbreakDuration") or 0) * 60)), "Comment": row.get("note", ""), "Open": False, "Published": row.get("isPublished", False)})
+                seconds = int(round(float(row.get("mealbreakDuration") or 0) * 3600))
+                slots = ([{"strType": "B", "intStart": 32400, "intEnd": 32400 + seconds},
+                          {"strType": "W", "intStart": 0, "intEnd": 32400}] if seconds else [])
+                rows.append({"Id": row["id"], "Employee": row["employee"], "OperationalUnit": row["area"],
+                             "StartTime": int(datetime.fromisoformat(str(row["start"])).timestamp()),
+                             "EndTime": int(datetime.fromisoformat(str(row["end"])).timestamp()),
+                             "Mealbreak": "2026-08-13T00:30:00+12:00" if seconds else "2026-08-13T00:00:00+12:00",
+                             "Slots": slots, "Comment": row.get("note", ""), "Open": False,
+                             "Published": row.get("isPublished", False), "ApprovalRequired": row.get("approvalRequired", False)})
             return Response(200, rows)
         if method == "POST" and url.endswith("/api/management/v2/shifts"):
             self.create_count += 1
@@ -60,6 +69,8 @@ class FixtureDeputy:
             shift.update({"id": self.next_id, "canEdit": True, "timesheet": 0, "isPublished": False,
                           "mealbreakDuration": sum(int(s["end"]) - int(s["start"]) for s in shift["mealbreakSlots"]) / 3600})
             self.rosters[self.next_id] = shift
+            if self.lose_after_create_number == self.create_count:
+                raise __import__("requests").Timeout("fixture response lost after create")
             return Response(200, {"success": True, "data": shift})
         if method == "PUT" and "/api/management/v2/shifts/" in url:
             roster_id = int(url.rsplit("/", 1)[-1]); shift = dict(payload["data"]["shift"])
@@ -121,10 +132,27 @@ payload = build_v2_shift_payload(preview["actions"][0]["desired"])
 assert payload["data"]["shift"]["mealbreakSlots"][0]["end"] == 1800 and payload["data"]["override"] == {"shiftValidation": False, "publishValidation": False}
 normalized = normalize_v2_response({"success": True, "data": {**payload["data"]["shift"], "id": 9, "mealbreakDuration": 0.5, "canEdit": False, "timesheet": 44, "isPublished": True}})
 assert normalized.roster_id == 9 and normalized.break_minutes == 30 and normalized.timesheet_id == 44 and normalized.can_edit is False and normalized.is_published
+resource_base = {"Id": 7, "Employee": 201, "OperationalUnit": 301, "StartTime": 1786851000, "EndTime": 1786894200, "ApprovalRequired": True}
+assert normalize_shift({**resource_base, "Mealbreak": "2026-08-16T00:00:00+12:00", "Slots": []}, resource=True).break_minutes == 0
+assert normalize_shift({**resource_base, "Mealbreak": "2026-08-16T00:30:00+12:00", "Slots": [{"strType": "B", "intStart": 32400, "intEnd": 34200}]}, resource=True).break_minutes == 30
+assert normalize_shift({**resource_base, "Slots": [{"strType": "B", "intStart": 100, "intEnd": 1000}, {"strType": "B", "intStart": 2000, "intEnd": 2900}]}, resource=True).break_minutes == 30
+assert normalize_shift({**resource_base, "Slots": [{"strType": "W", "intStart": 0, "intEnd": 28800}]}, resource=True).break_minutes == 0
+assert normalize_shift({**resource_base, "Mealbreak": "not-a-duration", "Slots": [{"strType": "B", "intStart": 1, "intEnd": 1801}]}, resource=True).break_minutes == 30
+fallback = normalize_shift({**resource_base, "Mealbreak": "2026-08-16T00:30:00+12:00"}, resource=True)
+assert fallback.break_minutes == 30 and fallback.approval_required is True
+for malformed_break in ("0.5", "30", "banana", 30, None):
+    assert normalize_shift({**resource_base, "Mealbreak": malformed_break}, resource=True).break_minutes == 0
 for malformed in ({"shift": {}}, {"success": False, "error": {"code": "SHIFT_VALIDATION"}}, {"success": True}):
     try: extract_v2_shift(malformed)
     except ValueError: pass
     else: raise AssertionError("Malformed v2 response was accepted")
+class MalformedTokenSession:
+    def __init__(self, body): self.body = body
+    def post(self, url, **kwargs): return Response(200, self.body)
+for malformed_token in ([], "text", {"endpoint": host}):
+    try: _token_request("once.deputy.com", "/my/oauth/access_token", {"grant_type": "authorization_code"}, session=MalformedTokenSession(malformed_token))
+    except ValueError: pass
+    else: raise AssertionError("Malformed OAuth token response was accepted")
 
 resource_query(DeputyClient(host, "OBVIOUS-TEST-ACCESS", session=fixture), "Roster", search={"Date": "2026-08-16", "Employee": 201, "OperationalUnit": 301})
 for host_attempt in ("attacker.example.com", "evil.gate.au.deputy.com", "http://gate.au.deputy.com", "https://gate.au.deputy.com/token-recipient"):
@@ -138,6 +166,22 @@ fixture.fail_create_number = 2
 results, blockers = execute_trial_batch(partial, app_user_id=admin_id, session=fixture)
 assert not blockers and [row["status"] for row in results] == ["verified", "unknown"], (blockers, results)
 assert not any(method == "POST" and url.endswith("/api/v1/supervise/roster/publish") for method, url, _ in fixture.calls)
+created_roster_id = int(results[0]["roster_id"])
+fixture.rosters[created_roster_id]["note"] = "External delete drift"
+delete_count = sum(method == "DELETE" for method, _, _ in fixture.calls)
+drift_delete = prepare_operation(app_user_id=admin_id, workday_id=taupo, assignment_key=preview["actions"][0]["assignment_key"], operation_type="delete", desired={}, roster_id=created_roster_id, session=fixture)
+delete_result = execute_operation(drift_delete["operation_uuid"], admin_id, session=fixture)
+assert delete_result["status"] == "failed" and "outside Re-Deputy" in delete_result["message"]
+assert sum(method == "DELETE" for method, _, _ in fixture.calls) == delete_count
+fixture.fail_create_number = None
+lost_day = day("2026-08-20", "lost", "08:00", "17:00", assignments=[(people[0], None, "director")])
+lost_preview = build_trial_preview(admin_id, lost_day, session=fixture)
+fixture.lose_after_create_number = fixture.create_count + 1
+lost_results, lost_blockers = execute_trial_batch(lost_preview, app_user_id=admin_id, session=fixture)
+assert not lost_blockers and lost_results[0]["status"] == "verified" and lost_results[0].get("reconciled") is True
+with get_connection() as conn:
+    assert conn.execute("SELECT ownership FROM deputy_roster_links WHERE workday_id=?", (lost_day,)).fetchone()["ownership"] == "re_deputy_created_trial"
+fixture.lose_after_create_number = None
 
 # One exact existing roster is adopted without POST; update then uses v2 PUT + GET verification.
 rua_preview = build_trial_preview(admin_id, ruakaka, session=fixture)
@@ -149,10 +193,45 @@ posts_before = sum(method == "POST" and url.endswith("/api/management/v2/shifts"
 adopted, adoption_blockers = execute_trial_batch(rua_preview, app_user_id=admin_id, session=fixture)
 assert not adoption_blockers and adopted[0]["roster_id"] == 88 and adopted[0]["status"] == "verified"
 assert sum(method == "POST" and url.endswith("/api/management/v2/shifts") for method, url, _ in fixture.calls) == posts_before
+with get_connection() as conn:
+    adopted_link = dict(conn.execute("SELECT * FROM deputy_roster_links WHERE deputy_roster_id=88").fetchone())
+assert adopted_link["ownership"] == "adopted_existing"
 changed = {**rua_desired, "note": "Re-Deputy trial changed fixture"}
 updated = prepare_operation(app_user_id=admin_id, workday_id=ruakaka, assignment_key=rua_preview["actions"][0]["assignment_key"], operation_type="update", desired=changed, roster_id=88, session=fixture)
 update_result = execute_operation(updated["operation_uuid"], admin_id, session=fixture)
 assert update_result["status"] == "verified" and any(method == "PUT" and url.endswith("/api/management/v2/shifts/88") for method, url, _ in fixture.calls)
+with get_connection() as conn:
+    assert conn.execute("SELECT ownership FROM deputy_roster_links WHERE deputy_roster_id=88").fetchone()["ownership"] == "adopted_existing"
+    conn.execute("INSERT INTO deputy_reference_units(app_user_id,tenant_host,deputy_unit_id,display_name,active,last_observed_at) VALUES(?,?,?,?,1,?)", (admin_id, host, 302, "Camera", now))
+provenance_desired = {**changed, "employee": 202, "area": 302, "crew_person_id": people[1], "context_type": "production"}
+provenance_update = prepare_operation(app_user_id=admin_id, workday_id=ruakaka, assignment_key=rua_preview["actions"][0]["assignment_key"], operation_type="update", desired=provenance_desired, roster_id=88, session=fixture)
+assert execute_operation(provenance_update["operation_uuid"], admin_id, session=fixture)["status"] == "verified"
+with get_connection() as conn:
+    provenance_link = dict(conn.execute("SELECT * FROM deputy_roster_links WHERE deputy_roster_id=88").fetchone())
+assert (provenance_link["crew_person_id"], provenance_link["deputy_employee_id"], provenance_link["deputy_unit_id"], provenance_link["ownership"]) == (people[1], 202, 302, "adopted_existing")
+blocked_delete = prepare_operation(app_user_id=admin_id, workday_id=ruakaka, assignment_key=rua_preview["actions"][0]["assignment_key"], operation_type="delete", desired={}, roster_id=88, session=fixture)
+assert execute_operation(blocked_delete["operation_uuid"], admin_id, session=fixture)["status"] == "failed"
+for field, external_value in (("employee", 999), ("area", 998), ("start", "2026-08-15T10:00:00+12:00"),
+                              ("end", "2026-08-15T23:00:00+12:00"), ("mealbreakDuration", 0.75), ("note", "External Deputy edit")):
+    original = fixture.rosters[88][field]
+    fixture.rosters[88][field] = external_value
+    put_count = sum(method == "PUT" for method, _, _ in fixture.calls)
+    drifted = prepare_operation(app_user_id=admin_id, workday_id=ruakaka, assignment_key=rua_preview["actions"][0]["assignment_key"], operation_type="update", desired={**provenance_desired, "note": "Another local edit"}, roster_id=88, session=fixture)
+    drift_result = execute_operation(drifted["operation_uuid"], admin_id, session=fixture)
+    assert drift_result["status"] == "failed" and "outside Re-Deputy" in drift_result["message"]
+    assert sum(method == "PUT" for method, _, _ in fixture.calls) == put_count
+    fixture.rosters[88][field] = original
+fixture.rosters[88]["note"] = "External unchanged drift"
+publish_count = sum(method == "POST" and url.endswith("/api/v1/supervise/roster/publish") for method, url, _ in fixture.calls)
+unchanged_preview = {**rua_preview, "actions": [{**rua_preview["actions"][0], "operation": "unchanged", "desired": provenance_desired, "roster_id": 88}], "blockers": []}
+unchanged_results, unchanged_blockers = execute_trial_batch(unchanged_preview, app_user_id=admin_id, session=fixture)
+assert not unchanged_results and any("outside Re-Deputy" in blocker for blocker in unchanged_blockers)
+assert sum(method == "POST" and url.endswith("/api/v1/supervise/roster/publish") for method, url, _ in fixture.calls) == publish_count
+fixture.rosters[88]["note"] = provenance_desired["note"]
+with get_connection() as conn:
+    conn.execute("DELETE FROM workday_assignments WHERE roster_day_id=? AND assignment_key=?", (ruakaka, rua_preview["actions"][0]["assignment_key"]))
+removed_adopted_preview = build_trial_preview(admin_id, ruakaka, session=fixture)
+assert not any(action["operation"] == "delete" and action.get("roster_id") == 88 for action in removed_adopted_preview["actions"])
 
 # Multiple exact candidates and a conflicting overlap are whole-batch blockers.
 fixture.rosters[89] = {**exact_shift, "id": 89}

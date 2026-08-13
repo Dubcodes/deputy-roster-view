@@ -5,6 +5,7 @@ from dataclasses import replace
 from .config import Settings, get_settings
 from .database import get_deputy_user_secret
 from .security import decrypt_text
+from .url_safety import normalize_deputy_web_url
 
 
 def settings_for_user(user_id: int, settings: Settings | None = None) -> Settings | None:
@@ -17,7 +18,10 @@ def settings_for_user(user_id: int, settings: Settings | None = None) -> Setting
     password = decrypt_text(str(secret["encrypted_password"] or ""), settings).strip()
     encrypted_ical_url = str(secret["encrypted_ical_url"] or "")
     ical_url = decrypt_text(encrypted_ical_url, settings) if encrypted_ical_url else ""
-    web_url = str(secret["deputy_web_url"] or settings.deputy_web_url).strip()
+    try:
+        web_url = normalize_deputy_web_url(str(secret["deputy_web_url"] or settings.deputy_web_url))
+    except ValueError:
+        return None
     display_name = str(secret["display_name"] or secret["deputy_email"] or "").strip()
     if not email or not password or not web_url:
         return None

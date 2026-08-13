@@ -69,7 +69,8 @@
       </details>
       {% endif %}
       <details><summary>Deputy writes · {{ deputy_write_audit.counts.get('verified', 0) }} verified · {{ deputy_write_audit.counts.get('unknown', 0) }} unknown · {{ deputy_write_audit.counts.get('locked', 0) }} locked</summary>
-        {% for operation in deputy_write_audit.rows %}<p><small>{{ operation.created_at|datetime }} · {{ operation.actor_name }} · {{ operation.tenant_host }} · {{ operation.operation_type }} · {{ operation.status }}{% if operation.deputy_roster_id %} · Roster #{{ operation.deputy_roster_id }}{% endif %} · read-back {{ 'yes' if operation.readback_verified else 'no' }}</small></p>{% else %}<p class="muted">No write operations.</p>{% endfor %}
+        <p class="muted">Unknown or ambiguous means stop: never retry blindly. Open Deputy read-only and compare the employee, Area, start, end, break and note below. One exact create match may be reconciled as Re-Deputy-created only by an operator who confirms the original request was transmitted; zero or multiple matches remain unresolved.</p>
+        {% for operation in deputy_write_audit.rows %}<p><small>{{ operation.created_at|datetime }} · {{ operation.actor_name }} · {{ operation.tenant_host }} · {{ operation.operation_type }} · {{ operation.status }}{% if operation.deputy_roster_id %} · Roster #{{ operation.deputy_roster_id }}{% endif %} · read-back {{ 'yes' if operation.readback_verified else 'no' }}{% if operation.status in ['unknown', 'ambiguous'] %} · assignment {{ operation.stable_assignment_key }} · expected {{ operation.recovery_summary }}{% endif %}</small></p>{% else %}<p class="muted">No write operations.</p>{% endfor %}
       </details>
     </div>
   </details>

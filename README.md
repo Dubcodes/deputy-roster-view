@@ -1,8 +1,8 @@
 # Re-Deputy
 
-Re-Deputy is a small private web app that mirrors Deputy roster data into SQLite and shows it as a cleaner month calendar with shift details, crew assignments, local notes, timing adjustments, and sync history.
+Re-Deputy is a small private multi-user web app that mirrors Deputy roster data into SQLite and shows a clearer calendar plus local workday planning, contractor access, notifications, and narrowly gated Deputy trial-write tooling.
 
-The app is read-only against Deputy. It never writes back to Deputy.
+Normal roster sync, iCal, web capture, planning, travel, vehicles, Open/TBC positions, Making My Own Way and contractor workflows are read-only against Deputy. Optional per-user OAuth supports an Admin-triggered trial workflow for assigned production shifts on an exact allowlisted tenant; write mode is off by default, and every mutation uses the initiating user's own OAuth identity plus preview, permission, overlap, optimistic-drift, read-back and audit safeguards. There is no production-write mode.
 
 ## Setup
 
@@ -94,6 +94,8 @@ If you do have a Deputy API token, set `DEPUTY_API_TOKEN` and use Settings -> Te
 
 For temporary testing, run `cloudflared` as a separate Portainer stack. This keeps app redeploys from recreating the tunnel container and changing the temporary URL.
 
+Before a real HTTPS deployment, set `COOKIE_SECURE=true`; leaving it false permits the trusted-device cookie over HTTP. Disable public account creation with `SIGNUP_ENABLED=false` once the intended accounts exist; leaving it true exposes the signup route to anyone who can reach the app.
+
 1. In Portainer, open the app container and copy its network name. It will usually look like `deputy-roster-multi_default`.
 2. Create a second stack, for example `deputy-roster-tunnel`.
 3. Use `docker-compose.tunnel.yml` from this repo, or paste this compose:
@@ -161,7 +163,11 @@ paid_hours = raw_hours - break_minutes / 60
 
 Notes and timing adjustments are stored locally in SQLite and are never overwritten by Deputy syncs. Deputy/iCal updates only change the source roster fields.
 
-The app displays whatever events Deputy puts in the iCal feed. If an open shift appears in that feed and later disappears, the app marks it as cancelled/removed after the next sync. Applying for available shifts is not supported unless a future Deputy API integration is added.
+The app displays whatever events Deputy puts in the iCal feed. If an open shift appears in that feed and later disappears, the app marks it as cancelled/removed after the next sync. Open-position applications are local Re-Deputy workflow only and never apply for a Deputy shift.
+
+## Unknown Deputy write outcomes
+
+Never retry an unknown or ambiguous write blindly. Admin → Deputy API → Deputy writes exposes the operation ID, assignment key, roster ID when known, and the expected employee, Area, times, break and note. Inspect Deputy read-only and compare those exact fields. Zero or multiple matches remain unresolved; an exact match may only be linked as Re-Deputy-created when the original create was actually transmitted. Adopted pre-existing rosters never gain delete authority.
 
 ## Reset Local Database
 

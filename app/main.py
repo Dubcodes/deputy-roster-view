@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 
-from .auth import clear_trusted_device, current_user, require_admin_user, trusted_device_middleware
+from .auth import clear_login_failures, clear_trusted_device, current_user, login_is_throttled, record_login_failure, require_admin_user, trusted_device_middleware
 from .config import get_settings
 from .database import (
     calendar_location_key,
@@ -192,6 +192,7 @@ from .security import (
     verify_pin,
 )
 from .user_credentials import settings_for_user
+from .url_safety import normalize_deputy_web_url, validate_public_https_url
 from .track_maps import (
     MAX_MANUAL_MAP_BYTES,
     classify_track_map_location,
@@ -247,7 +248,7 @@ from .deputy_integration import (
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.13.3"
+APP_BUILD = "2026.08.13.4"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -643,7 +644,20 @@ async def route_timing_middleware(request: Request, call_next):
         response.headers["Server-Timing"] = f'app;dur={duration_ms:.1f}'
     return response
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
-templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+class AppTemplates(Jinja2Templates):
+    """Keep call sites explicit while adapting to Starlette's request-first API."""
+
+    def TemplateResponse(self, name: str, context: dict[str, object] | None = None, status_code: int = 200,
+                         headers: dict[str, str] | None = None, media_type: str | None = None, background: object = None):  # noqa: N802
+        values = context or {}
+        request = values.get("request")
+        if request is None:
+            raise ValueError("Template context requires a request.")
+        return super().TemplateResponse(request=request, name=name, context=values, status_code=status_code,
+                                        headers=headers, media_type=media_type, background=background)
+
+
+templates = AppTemplates(directory=str(APP_DIR / "templates"))
 _sync_worker_lock = threading.Lock()
 _vehicle_suffix_cache: tuple[float, dict[str, str]] = (0.0, {})
 _sync_state_lock = threading.Lock()
@@ -5442,8 +5456,10 @@ def validate_deputy_credentials(
         return "Enter the Deputy email address."
     if password_required and not deputy_password:
         return "Enter the Deputy password."
-    if not deputy_web_url.startswith(("http://", "https://")):
-        return "Deputy URL must start with http:// or https://."
+    try:
+        normalize_deputy_web_url(deputy_web_url)
+    except ValueError as exc:
+        return str(exc)
     return ""
 
 
@@ -5615,8 +5631,10 @@ async def signup_submit(request: Request, background_tasks: BackgroundTasks) -> 
         return RedirectResponse(url=notice_url("/signup", "Choose a numeric PIN with at least 4 digits."), status_code=303)
     if pin != pin_confirm:
         return RedirectResponse(url=notice_url("/signup", "PIN entries did not match."), status_code=303)
-    if not deputy_web_url.startswith(("http://", "https://")):
-        return RedirectResponse(url=notice_url("/signup", "Deputy URL must start with http:// or https://."), status_code=303)
+    try:
+        deputy_web_url = normalize_deputy_web_url(deputy_web_url)
+    except ValueError as exc:
+        return RedirectResponse(url=notice_url("/signup", str(exc)), status_code=303)
     if get_app_user_by_email(deputy_email) is not None:
         return RedirectResponse(url=notice_url("/login", "That Deputy email is already signed up."), status_code=303)
 
@@ -5653,10 +5671,15 @@ async def login_submit(request: Request) -> RedirectResponse:
     next_url = safe_next_url(str(form.get("next_url") or ""))
     deputy_email = str(form.get("deputy_email") or "").strip().lower()
     pin = str(form.get("pin") or "")
+    generic_error = "Email or PIN was not recognised."
+    if login_is_throttled(deputy_email):
+        return RedirectResponse(url=notice_url("/login", generic_error), status_code=303)
     user = get_app_user_by_email(deputy_email)
     if user is None or not int(user["is_active"] or 0) or not verify_pin(pin, str(user["pin_hash"] or "")):
-        return RedirectResponse(url=notice_url("/login", "Email or PIN was not recognised."), status_code=303)
+        record_login_failure(deputy_email)
+        return RedirectResponse(url=notice_url("/login", generic_error), status_code=303)
 
+    clear_login_failures(deputy_email)
     response = RedirectResponse(url=next_url, status_code=303)
     set_trusted_device_cookie(response, user, request)
     return response
@@ -6231,6 +6254,7 @@ async def admin_update_user_deputy_login(request: Request, user_id: int) -> Redi
         )
         if error:
             return RedirectResponse(url=notice_url("/admin", error), status_code=303)
+        deputy_web_url = normalize_deputy_web_url(deputy_web_url)
         existing = get_app_user_by_email(deputy_email)
         if existing and int(existing["id"]) != user_id:
             return RedirectResponse(url=notice_url("/admin", "That Deputy email belongs to another roster user."), status_code=303)
@@ -8354,6 +8378,7 @@ async def update_own_deputy_login(request: Request) -> RedirectResponse:
         )
         if error:
             return RedirectResponse(url=notice_url("/settings", error), status_code=303)
+        deputy_web_url = normalize_deputy_web_url(deputy_web_url)
         existing = get_app_user_by_email(deputy_email)
         if existing and int(existing["id"]) != user_id:
             return RedirectResponse(url=notice_url("/settings", "That Deputy email belongs to another roster user."), status_code=303)
@@ -8431,9 +8456,11 @@ async def save_calendar_settings(request: Request) -> RedirectResponse:
             url=notice_url("/settings", "Paste a calendar URL before saving."),
             status_code=303,
         )
-    if not calendar_url.startswith(("http://", "https://")):
+    try:
+        calendar_url = validate_public_https_url(calendar_url)
+    except ValueError as exc:
         return RedirectResponse(
-            url=notice_url("/settings", "Calendar URL must start with http:// or https://."),
+            url=notice_url("/settings", str(exc)),
             status_code=303,
         )
 

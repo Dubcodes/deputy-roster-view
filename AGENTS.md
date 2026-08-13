@@ -4,7 +4,7 @@ Start here when picking up work on this repo.
 
 ## Project
 
-Deputy Roster View is a private FastAPI/Jinja/SQLite app that re-presents Deputy roster data in a clearer calendar/day view. The current branch is evolving from the archived `single-user-v1` tag into a small multi-user Portainer deployment with trusted devices and staggered Deputy syncs.
+Re-Deputy is a private FastAPI/Jinja/SQLite multi-user roster and workday planning app with trusted devices, contractor views, staggered Deputy syncs, and an explicit OAuth-backed trial-write safety gate.
 
 ## Read First
 
@@ -21,7 +21,8 @@ Deputy Roster View is a private FastAPI/Jinja/SQLite app that re-presents Deputy
 - Do not commit `.env`, `data/`, database files, Deputy credentials, calendar URLs, browser session data, or captured secrets.
 - Do not print the Deputy calendar URL or login password.
 - Redact long Deputy URLs and tokens in diagnostics where practical.
-- Deputy is read-only from this app. Do not add write-back actions unless explicitly requested and carefully reviewed.
+- Treat Deputy as read-only everywhere except the existing, explicit OAuth-backed trial workflow. That workflow is limited to assigned production shifts on an exact allowlisted tenant and must preserve permission, ownership, overlap, drift, read-back and audit safeguards. Never extend it to travel, vehicles, Open/TBC, contractors or production-wide writes without explicit review.
+- Deputy write mode must remain off by default. Never contact a live Deputy tenant or test a live Deputy write without explicit task authorization, and never substitute another user's OAuth connection or a global token.
 
 ## Useful Commands
 

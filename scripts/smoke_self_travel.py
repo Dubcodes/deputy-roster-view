@@ -38,7 +38,7 @@ def main() -> None:
     signup = client.post(
         "/signup",
         data={
-            "deputy_web_url": "https://example.deputy.com/#/",
+            "deputy_web_url": "https://example.au.deputy.com/#/",
             "deputy_email": "owner@example.com",
             "deputy_password": "password",
             "pin": "1234",
@@ -55,7 +55,7 @@ def main() -> None:
         deputy_email="other@example.com",
         display_name="Other User",
         pin_hash=hash_pin("2345"),
-        deputy_web_url="https://example.deputy.com/#/",
+        deputy_web_url="https://example.au.deputy.com/#/",
         encrypted_email=encrypt_text("other@example.com", settings),
         encrypted_password=encrypt_text("password", settings),
     )
