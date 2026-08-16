@@ -705,8 +705,16 @@ def main() -> None:
     settings_page = client.get("/settings")
     if settings_page.status_code != 200 or "Your Roster" not in settings_page.text:
         raise AssertionError("Expected settings page to render roster insights.")
-    if "compact-stats-panel" not in settings_page.text or "sync-next-shift" not in settings_page.text:
-        raise AssertionError("Expected settings insights to be collapsed and next-shift details consolidated with sync.")
+    if "compact-stats-panel" not in settings_page.text:
+        raise AssertionError("Expected settings roster insights to remain collapsed.")
+    if "sync-next-shift" in settings_page.text or "Last sync:" not in settings_page.text:
+        raise AssertionError(
+            "Expected duplicate next-shift details removed while preserving last-sync status."
+        )
+    if "Deputy API connection" not in settings_page.text:
+        raise AssertionError(
+            "Expected Admin Settings to retain the Deputy API connection panel."
+        )
     if "Roster snapshot" in settings_page.text:
         raise AssertionError("Expected the duplicate roster snapshot panel to remain removed.")
     if "Refresh Planning Calendar" in settings_page.text:
