@@ -12,7 +12,6 @@
         <strong>Local</strong>
       {% endif %}
       <div class="settings-action-row">
-        <a class="button button-secondary" href="/help">Help</a>
         {% if current_user and current_user.is_admin %}
           <a class="button button-secondary" href="/admin">Admin</a>
         {% endif %}
@@ -92,7 +91,8 @@
           </form>
           <p class="muted">Use this if your Deputy password changed or the original signup details were wrong. Email, URL, and accidental edge spaces are cleaned up before saving. Passwords are encrypted before storage.</p>
         </details>
-        <details class="inline-settings-details" open>
+        {% if current_user and current_user.is_admin %}
+        <details class="inline-settings-details">
           <summary>Deputy API connection <span>{{ 'Connected' if deputy_api_connection.connected else 'Not connected' }}</span></summary>
           {% if deputy_api_connection.connected %}
             <p><strong>{{ deputy_api_connection.display_label }}</strong><br>Employee #{{ deputy_api_connection.deputy_employee_id }}</p>
@@ -113,6 +113,7 @@
             </form>
           {% endif %}
         </details>
+        {% endif %}
         <details class="inline-settings-details">
           <summary>Deactivate my account</summary>
           <p class="muted">This signs this device out, stops future syncs, and marks your account for deletion after 30 days unless an admin reactivates it.</p>
@@ -215,16 +216,7 @@
         </form>
       </div>
       <p class="muted">Automatic checks also run at 5am and around upcoming shifts.</p>
-      <div class="sync-next-shift">
-        <span class="summary-label">Next shift</span>
-        {% if next_shift %}
-          <strong>{{ next_shift.start_at|datetime }}</strong>
-          <span>{{ next_shift.role_full_label or next_shift.role_label or "Shift" }} at {{ next_shift.track_label }}{% if next_shift.race_type_label %}, {{ next_shift.race_type_label }}{% endif %}</span>
-        {% else %}
-          <strong>None listed</strong>
-        {% endif %}
-        <small>Last sync: {{ user_last_sync_at|datetime if user_last_sync_at else "Never" }}</small>
-      </div>
+      <p class="muted sync-last-sync">Last sync: {{ user_last_sync_at|datetime if user_last_sync_at else "Never" }}</p>
     </article>
   </section>
 
@@ -423,7 +415,7 @@
     </div>
   </details>
 
-  <details class="table-panel open-shifts-panel" {% if open_schedule_shifts %}open{% endif %}>
+  <details class="table-panel open-shifts-panel">
     <summary>Available / Open Shifts</summary>
     <div class="diagnostics-content">
       {% if not open_schedule_shifts %}

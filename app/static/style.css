@@ -5647,3 +5647,99 @@ th {
     padding-right: 6px;
   }
 }
+/* Re-Deputy compact single-row mobile header - 2026-08-16 */
+@media (max-width: 760px) {
+  .site-header.has-month-nav {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: 34px;
+    align-items: center;
+    gap: 4px;
+    padding: 6px;
+  }
+
+  .site-header.has-month-nav .brand-stack {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+  }
+
+  .site-header.has-month-nav .brand {
+    white-space: nowrap;
+    font-size: 0.9rem;
+  }
+
+  .site-header.has-month-nav .month-nav {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: center;
+    justify-content: center;
+    width: auto;
+    min-width: 0;
+    max-width: 100%;
+    gap: 0;
+  }
+
+  .site-header.has-month-nav .month-nav strong {
+    min-width: 0;
+    white-space: nowrap;
+    font-size: 0.84rem;
+  }
+
+  .site-header.has-month-nav .month-step {
+    width: 24px;
+    min-width: 24px;
+    height: 30px;
+    min-height: 30px;
+    padding: 2px;
+    border-color: transparent;
+    background: transparent;
+  }
+
+  .site-header.has-month-nav .site-nav {
+    grid-column: 3;
+    grid-row: 1;
+    gap: 2px;
+    flex-wrap: nowrap;
+  }
+
+  .site-header.has-month-nav .header-view-toggle {
+    gap: 1px;
+    padding: 1px;
+  }
+
+  .site-header.has-month-nav .site-nav .icon-button {
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+    padding: 4px;
+  }
+}
+
+@media (max-width: 360px) {
+  .site-header.has-month-nav {
+    gap: 2px;
+    padding-inline: 4px;
+  }
+
+  .site-header.has-month-nav .brand {
+    font-size: 0.82rem;
+  }
+
+  .site-header.has-month-nav .month-nav strong {
+    min-width: 0;
+    font-size: 0.78rem;
+  }
+
+  .site-header.has-month-nav .month-step {
+    width: 20px;
+    min-width: 20px;
+  }
+
+  .site-header.has-month-nav .site-nav .icon-button {
+    width: 27px;
+    min-width: 27px;
+    height: 30px;
+    min-height: 30px;
+  }
+}
