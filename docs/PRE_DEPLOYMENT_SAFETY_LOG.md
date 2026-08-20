@@ -4,6 +4,24 @@ Purpose: maintain a durable record of significant pre-deployment defects, invest
 
 Do not delete old entries when an issue is fixed. Update its status and add the release/commit that resolved it.
 
+## 2026.08.21.2 sync integrity and interpretation closure
+
+Real synchronisation proved that per-event partial-coverage warnings were being
+queued during intermediate capture states, causing an operator notification
+storm. The notification gate now waits for all sync activity to stop and for a
+90-second settle period, then produces one deterministic aggregate from the
+committed current coverage state. Unchanged aggregate signatures dedupe through
+the existing durable notification-event revision key; write safety and personal
+notification classes are unchanged.
+
+Real roster notes also exposed a legacy `WORD remaining-text` compatibility
+parser that promoted unrecognised names such as Troy, Nate and Leger to vehicle
+labels. Only the authoritative affirmative vehicle parser may now create a
+crew allocation. Personal Settings/error diagnostics now use owner-scoped
+captures and source payloads; normal users no longer receive global sync-log
+or capture data. No schema migration, live Deputy contact, or deployment was
+performed. Final status pending release-gate evidence.
+
 ## 2026.08.21.1 canonical interpreted-workday closure
 
 The 2026.08.20.3 correction joined touching vehicle/production rows and shared

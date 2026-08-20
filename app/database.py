@@ -6543,18 +6543,21 @@ def fetch_deputy_schedule_between(start_date: str, end_date: str) -> list[sqlite
     return rows
 
 
-def get_recent_source_payloads(limit: int = 6) -> list[sqlite3.Row]:
+def get_recent_source_payloads(limit: int = 6, *, owner_user_id: int | None = None) -> list[sqlite3.Row]:
     with get_connection() as conn:
+        owner_clause = "AND owner_user_id = ?" if owner_user_id is not None else ""
+        params: tuple[object, ...] = (owner_user_id, limit) if owner_user_id is not None else (limit,)
         rows = conn.execute(
-            """
+            f"""
             SELECT *
             FROM shifts
             WHERE source_payload IS NOT NULL
               AND source_payload != ''
+              {owner_clause}
             ORDER BY start_at DESC
             LIMIT ?
             """,
-            (limit,),
+            params,
         ).fetchall()
     return rows
 

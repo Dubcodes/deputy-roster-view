@@ -711,9 +711,9 @@ def main() -> None:
         raise AssertionError(
             "Expected duplicate next-shift details removed while preserving last-sync status."
         )
-    if "Deputy API connection" not in settings_page.text:
+    if "Deputy roster editing" not in settings_page.text:
         raise AssertionError(
-            "Expected Admin Settings to retain the Deputy API connection panel."
+            "Expected Admin Settings to retain the Deputy roster editing panel."
         )
     if "Roster snapshot" in settings_page.text:
         raise AssertionError("Expected the duplicate roster snapshot panel to remain removed.")

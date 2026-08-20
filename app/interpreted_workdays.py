@@ -346,3 +346,38 @@ def interpret_deputy_workdays(
         }, sort_keys=True).encode()).hexdigest()
         result.append(item)
     return sorted(result, key=lambda item: (str(item["date"]), str(item["rostered_start"]), str(item["location"])))
+
+
+def interpret_deputy_workdays_for_people(
+    rows: Iterable[dict[str, object]], *, structured_rows: Iterable[dict[str, object]] = (),
+    identity_records: Iterable[dict[str, object]] = (),
+    preceding_rows: Iterable[dict[str, object]] = (),
+    preceding_structured_rows: Iterable[dict[str, object]] = (),
+) -> dict[int, list[dict[str, object]]]:
+    """Return the canonical workday projection for every known person in a cohort.
+
+    This intentionally delegates every effective-vehicle decision to
+    :func:`interpret_deputy_workdays`; shared displays must never recreate a
+    parallel note or carryover resolver.
+    """
+    raw_rows = [dict(row) for row in rows]
+    structured = [dict(row) for row in structured_rows]
+    identities = [dict(row) for row in identity_records]
+    prior_rows = [dict(row) for row in preceding_rows]
+    prior_structured = [dict(row) for row in preceding_structured_rows]
+    result: dict[int, list[dict[str, object]]] = {}
+    for identity in identities:
+        person_id = identity.get("id")
+        try:
+            person_key = int(person_id)
+        except (TypeError, ValueError):
+            continue
+        result[person_key] = interpret_deputy_workdays(
+            raw_rows,
+            structured_rows=structured,
+            person_identity=identity,
+            identity_records=identities,
+            preceding_rows=prior_rows,
+            preceding_structured_rows=prior_structured,
+        )
+    return result

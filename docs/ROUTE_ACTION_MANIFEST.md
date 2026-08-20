@@ -14,12 +14,9 @@ route family, including parameterized instances.
 | `/timesheet/{date}`, `/settings`, `/help` | GET | No | Own data | Own data | Own data | No | Personal app surfaces |
 | `/settings/*` excluding Deputy OAuth | GET, POST, DELETE | No | Own data/actions | Own data/actions | Own data/actions | Unsafe methods | Settings forms/fetch; same-origin middleware applies |
 | `/settings/deputy-api/connect`, `/recheck`, `/disconnect`, `/callback` | GET, POST | No | Denied | Own OAuth only | Denied | Yes except callback GET | Admin-only OAuth UI and server guards |
-| `/settings/deputy-api-test` | POST | No | Denied | Allowed legacy diagnostic | Denied | Read-only external probe | Retained compatibility path pending separate token-probe removal review |
-| `/settings/deputy-web-capture` | POST | No | Own credentials | Own credentials | Own credentials | Local ingest | Settings form; read-only toward Deputy |
 | `/sync-now` | POST | No | Own sync | Own sync | Own sync | Local ingest | Settings form and calendar `S` fetch; mutating GET removed |
 | `/sync-status` | GET | No | Own status | Own status | Own status | No | Progress polling |
 | `/contractor` | GET | No | Denied | Denied | Redirect `/month` | No | Compatibility redirect |
-| `/contractor/workdays/*` | POST | No | Denied | Denied | Own assigned workday | Local preference | Legacy mini-app action compatibility |
 | `/shift/{id}`, `/shift/{id}/marks`, `/shift/{id}/mark-viewed` | GET, POST | No | Own shift only | Own shift only | Own shift only | Marks/view state only | All lookups include authenticated `owner_user_id`; guessed cross-user IDs return 404 |
 | `/admin`, `/admin/*` | GET, POST, DELETE | No | Denied centrally | Allowed | Denied centrally | Route-dependent | Admin templates/forms/fetch; endpoint guards remain defense in depth |
 | `/admin/roster-days/conflicts` | GET | No | Denied | Allowed | Denied | No | Builder same-date warning fetch |

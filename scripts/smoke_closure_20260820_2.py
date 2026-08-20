@@ -13,7 +13,7 @@ os.environ.update(DATA_DIR=str(TEMP), DB_PATH=str(TEMP / "closure.sqlite3"), APP
 
 from app.database import get_connection, init_db, save_deputy_web_schedule
 from app.deputy_web import _extract_management_shifts, _extract_schedule_shifts
-from app.interpreted_workdays import interpret_deputy_workdays
+from app.interpreted_workdays import interpret_deputy_workdays, interpret_deputy_workdays_for_people
 from app.roster_note_interpretation import note_vehicle_allocations_from_text, resolve_note_allocations
 
 
@@ -95,6 +95,44 @@ assigned = {
 assert assigned == {7: "Truck (unspecified)", 13: "Rav91", 20: "Rav91", 21: "Rav91", 22: "684", 23: "684", 24: "684", 25: "Truck (unspecified)"}
 assert any(item["name"] == "Todd" for item in travel_resolution["unresolved"])
 assert 14 not in assigned  # Gaz/Gary Russo is never confused with Gary McClure #13.
+
+# Production-shaped Rotorua and Travel cohorts: the shared projection uses the
+# same per-person resolver as a personal workday, never an independent parser.
+identities = [
+    {"id": 7, "deputy_employee_id": 7, "canonical_display_name": "Danny Hunter", "aliases": ["Esq"]},
+    {"id": 13, "deputy_employee_id": 13, "canonical_display_name": "Gary McClure", "aliases": ["Junior", "Jr"]},
+    {"id": 14, "deputy_employee_id": 14, "canonical_display_name": "Gary Russo", "aliases": ["Gaz", "Gazz"]},
+    {"id": 20, "deputy_employee_id": 20, "canonical_display_name": "Grant Woolston", "aliases": ["Grant"]},
+    {"id": 21, "deputy_employee_id": 21, "canonical_display_name": "Lans", "aliases": []},
+    {"id": 22, "deputy_employee_id": 22, "canonical_display_name": "Joshua", "aliases": ["Josh"]},
+    {"id": 23, "deputy_employee_id": 23, "canonical_display_name": "Jayden", "aliases": []},
+    {"id": 24, "deputy_employee_id": 24, "canonical_display_name": "Nathan", "aliases": ["Nate"]},
+    {"id": 25, "deputy_employee_id": 25, "canonical_display_name": "Dylan", "aliases": []},
+]
+rotorua = interpret_deputy_workdays_for_people([
+    row("rotorua-12", "2026-08-12T09:00:00+12:00", "2026-08-12T18:00:00+12:00", "Sound",
+        title="[Rotorua] Sound", location_name="Rotorua", description="Troy ,Gaz, Jayden and Nate"),
+], structured_rows=[
+    {"employee_id": 14, "employee_name": "Gary Russo", "area_name": "Rav91", "start_at": "2026-08-12T09:00:00+12:00", "end_at": "2026-08-12T18:00:00+12:00"},
+    {"employee_id": 23, "employee_name": "Jayden", "area_name": "684", "start_at": "2026-08-12T09:00:00+12:00", "end_at": "2026-08-12T18:00:00+12:00"},
+    {"employee_id": 24, "employee_name": "Nathan", "area_name": "685", "start_at": "2026-08-12T09:00:00+12:00", "end_at": "2026-08-12T18:00:00+12:00"},
+], identity_records=identities)
+assert rotorua[14][0]["vehicle"] == "Rav91" and rotorua[23][0]["vehicle"] == "684" and rotorua[24][0]["vehicle"] == "685"
+assert 13 in rotorua and 14 in rotorua  # Gary #13 and Gaz/Gary #14 remain distinct.
+
+travel_workdays = interpret_deputy_workdays_for_people([
+    row("travel-14", "2026-08-14T12:00:00+12:00", "2026-08-14T17:00:00+12:00", "Travel then Overnighter",
+        title="[Travel] Travel then Overnighter", location_name="Travel",
+        description="Trucks Dylan and Esq\nGrant, Todd, Lans and Junior Rav91\nJosh Jayden Nate qua684"),
+], structured_rows=[
+    {"employee_id": identity["deputy_employee_id"], "employee_name": identity["canonical_display_name"],
+     "area_name": "Travel", "location_name": "Travel", "start_at": "2026-08-14T12:00:00+12:00", "end_at": "2026-08-14T17:00:00+12:00"}
+    for identity in identities if identity["id"] != 14
+], identity_records=identities)
+assert {key: travel_workdays[key][0]["vehicle"] for key in (7, 13, 20, 21, 22, 23, 24, 25)} == {
+    7: "Truck (unspecified)", 13: "Rav91", 20: "Rav91", 21: "Rav91", 22: "684", 23: "684", 24: "684", 25: "Truck (unspecified)",
+}
+assert any(item["name"] == "Todd" for item in travel_workdays[20][0]["vehicle_evidence"]["unresolved_roster_note"])
 
 esq_resolution = resolve_note_allocations(
     note_vehicle_allocations_from_text("Trucks Esq"),

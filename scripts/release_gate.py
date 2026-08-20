@@ -23,6 +23,7 @@ OFFLINE_SMOKES = (
     "smoke_love_racing.py",
     "smoke_love_racing_details.py",
     "smoke_note_interpretation.py",
+    "smoke_diagnostic_privacy.py",
     "smoke_notifications.py",
     "smoke_roster_integrity.py",
     "smoke_route_flows.py",
@@ -50,7 +51,6 @@ def main() -> int:
         "DEPUTY_WEB_URL": "",
         "DEPUTY_LOGIN_EMAIL": "",
         "DEPUTY_LOGIN_PASSWORD": "",
-        "DEPUTY_API_TOKEN": "",
     })
     run("Python compilation", [sys.executable, "-m", "compileall", "-q", "app", "scripts"], env)
     for script in OFFLINE_SMOKES:

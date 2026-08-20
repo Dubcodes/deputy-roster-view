@@ -27,6 +27,7 @@ DEFAULT_PREFERENCES = {
     "reminder_time": "19:00",
 }
 _runner_lock = threading.Lock()
+INTEGRITY_SETTLE_SECONDS = 90
 
 
 def notification_preferences(user_id: int) -> dict[str, object]:
@@ -462,11 +463,27 @@ def _queue_admin_operational_alerts(now: datetime) -> int:
                  AND last_capture_at>=?""",
             (cutoff,),
         ).fetchall()]
+        sync_activity = conn.execute(
+            """SELECT MAX(updated_at) AS latest,
+                      MAX(CASE WHEN COALESCE(sync_in_progress,0)=1 AND updated_at>=? THEN 1 ELSE 0 END) AS active
+               FROM user_sync_state""",
+            ((now - timedelta(minutes=15)).isoformat(),),
+        ).fetchone()
         write_rows = [dict(row) for row in conn.execute(
             """SELECT operation_uuid,operation_type,stable_assignment_key,status,error_class,updated_at
                FROM deputy_write_operations WHERE status IN ('unknown','ambiguous') AND updated_at>=?""",
             (cutoff,),
         ).fetchall()]
+    latest_sync = str(sync_activity["latest"] or "") if sync_activity else ""
+    sync_active = bool(sync_activity and sync_activity["active"])
+    try:
+        latest_sync_at = datetime.fromisoformat(latest_sync).astimezone(now.tzinfo) if latest_sync else None
+    except ValueError:
+        latest_sync_at = None
+    integrity_ready = bool(
+        integrity_rows and not sync_active
+        and (latest_sync_at is None or (now - latest_sync_at).total_seconds() >= INTEGRITY_SETTLE_SECONDS)
+    )
     created = 0
     for admin_id in admin_ids:
         for row in travel_rows:
@@ -505,14 +522,23 @@ def _queue_admin_operational_alerts(now: datetime) -> int:
                 target_url="/admin#sync-status", scheduled_at=now,
                 revision=f"sync-stale:{row['user_id']}:{row.get('last_sync_at') or row.get('updated_at')}",
             ))
-        for row in integrity_rows:
+        # Coverage warnings are snapshots of a multi-step sync.  Do not emit
+        # provisional per-event pushes; after the persistent 90-second settle
+        # period, send one deterministic aggregate for the committed state.
+        if integrity_ready:
+            dates = {str(row.get("date") or "") for row in integrity_rows}
+            reasons = []
+            for row in integrity_rows:
+                reason = str(row.get("reason") or "Conflicting roster evidence").casefold()
+                reason = re.sub(r"\b([a-z0-9]+)\s*,\s*([a-z0-9]+)\b", lambda match: ", ".join(sorted(match.groups())), reason)
+                reasons.append(re.sub(r"\s+", " ", reason).strip())
+            signature = hashlib.sha256(json.dumps(sorted(set(reasons)), separators=(",", ":")).encode()).hexdigest()[:20]
             created += int(queue_notification(
                 user_id=admin_id, event_type="admin_alert", workday_kind="roster_integrity",
-                workday_id=f"{row['date']}:{row['area_location_id']}:{row.get('event_start_at') or ''}",
-                event_date=str(row["date"]), title="Re-Deputy · Roster integrity warning",
-                body=str(row.get("reason") or "Conflicting roster evidence")[:140],
+                workday_id="settled-integrity", event_date="", title="Re-Deputy · Roster integrity",
+                body=f"{len(integrity_rows)} items need review · {len(dates)} dates · inspect Roster integrity",
                 target_url="/admin#roster-integrity", scheduled_at=now,
-                revision=f"integrity:{row['date']}:{row['area_location_id']}:{row.get('last_capture_at')}",
+                revision=f"integrity-settled:{signature}",
             ))
         for row in write_rows:
             created += int(queue_notification(

@@ -471,8 +471,11 @@ def main() -> None:
             ("ambiguous-fixture", owner_id, "fixture.au.deputy.com", 1, 2, "hash", "{}", "fixture-ambiguous", "update", "{}", "ambiguous", "readback_ambiguous", stamp, stamp),
         )
     serious_alerts = generate_due_notifications(alert_now)
-    if serious_alerts["admin_alerts"] != 5 or generate_due_notifications(alert_now)["admin_alerts"]:
+    if serious_alerts["admin_alerts"] != 4 or generate_due_notifications(alert_now)["admin_alerts"]:
         raise AssertionError(f"Serious Admin Alerts were not queued and deduped once: {serious_alerts!r}")
+    settled_alerts = generate_due_notifications(alert_now + timedelta(seconds=91))
+    if settled_alerts["admin_alerts"] != 1 or generate_due_notifications(alert_now + timedelta(seconds=91))["admin_alerts"]:
+        raise AssertionError(f"Integrity warnings did not settle into one durable aggregate: {settled_alerts!r}")
     with get_connection() as conn:
         serious_kinds = {
             row["workday_kind"] for row in conn.execute(

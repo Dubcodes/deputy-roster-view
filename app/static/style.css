@@ -1441,20 +1441,6 @@ a {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.shared-stats-panel > summary {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-}
-
-.shared-stats-panel > summary span {
-  color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 800;
-}
-
-
 
 .timesheet-dot {
   display: inline-flex;
@@ -3212,26 +3198,6 @@ textarea {
   grid-column: 1 / -1;
 }
 
-.sync-next-shift {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 3px 12px;
-  align-items: baseline;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-  margin-top: 12px;
-}
-
-.sync-next-shift .summary-label,
-.sync-next-shift small {
-  grid-column: 1 / -1;
-}
-
-.sync-next-shift span:not(.summary-label),
-.sync-next-shift small {
-  color: var(--muted);
-}
-
 .management-panel-summary {
   display: flex;
   align-items: center;
@@ -4751,10 +4717,6 @@ th {
     grid-template-columns: 1fr;
   }
 
-  .shared-stats-panel > summary {
-    align-items: flex-start;
-  }
-
   .management-panel-summary {
     align-items: flex-start;
     flex-direction: column;
@@ -4762,10 +4724,6 @@ th {
 
   .management-panel-summary > span:last-child {
     text-align: left;
-  }
-
-  .sync-next-shift {
-    grid-template-columns: 1fr;
   }
 
   .admin-user-row {

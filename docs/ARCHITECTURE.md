@@ -258,6 +258,15 @@ The authoritative experimental evidence is retained in `DEPUTY_API_LAB_REPORT.md
 
 Deputy browser/password capture remains the existing roster-source mechanism. Per-user OAuth is separate and supplies read/reference access plus an explicitly initiated, exact-tenant trial-write path. The general/multi-install OAuth flow always authorizes and exchanges the initial code at `once.deputy.com`; only the regional `*.{au,eu,uk,us}.deputy.com` endpoint returned by Deputy is stored. Refresh goes to that verified endpoint. The callback origin is Admin-configured and is never derived from the request Host header.
 
-Single-shift writes use `/api/management/v2/shifts` with `data.shift` and `data.override`; all v2 responses pass through one `success/data` extractor and normalized shift model. Resource Roster queries use supported `s1/s2/...` filters, immutable ID sorting, 500-row pagination, and exact operational-date bounds. The legacy publish endpoint remains isolated to mode 4. `app/deputy_api.py` and `DEPUTY_API_TOKEN` remain a read-only diagnostic and are not imported by the OAuth writer.
+Single-shift writes use `/api/management/v2/shifts` with `data.shift` and `data.override`; all v2 responses pass through one `success/data` extractor and normalized shift model. Resource Roster queries use supported `s1/s2/...` filters, immutable ID sorting, 500-row pagination, and exact operational-date bounds. The legacy publish endpoint remains isolated to mode 4. OAuth is the only Deputy API authority; the retired global bearer-token probe has no production path.
 
 Trial mode is off on fresh databases and has no production counterpart. The current write scope is assigned production shifts only. Travel, vehicle context, Open, TBC, and Making my own way stay local. Whole-workday preflight runs before mutation, and any unresolved mutation prevents publish.
+
+## Timing semantics
+
+Raw Deputy component rows retain their source start/end. The canonical rostered
+human-workday span produced by `interpret_deputy_workdays()` drives reminders,
+notification revision/dedupe, and the personal day header. Paid hours remain
+break-adjusted timesheet presentation. Race-day calculations are operational
+estimates and never replace rostered reminder timing. Personal start/finish
+overrides are per-user display/timesheet data and never mutate Deputy evidence.

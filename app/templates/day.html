@@ -182,7 +182,7 @@
       <article id="shift-{{ shift.id }}" class="detail-card{% if shift.deleted_from_source %} is-deleted{% endif %}" style="{{ shift.colour_style }}">
         <div class="detail-card-heading">
           <div>
-            <p class="eyebrow">{{ shift.time_range }}</p>
+            {% if shift.location and shift.location != shift.track_label %}<p class="eyebrow">{{ shift.location }}</p>{% endif %}
             <h2>
               {{ shift.track_label }}
               {% if shift.header_vehicle_label %}
@@ -192,7 +192,7 @@
             <p class="detail-subtitle">
               {{ shift.role_chain_label or shift.role_full_label or shift.role_label or shift.title or "Shift" }}
               {% if shift.race_type_label %} · {{ shift.race_type_label }}{% endif %}
-              {% if shift.location and shift.location != shift.track_label %} · {{ shift.location }}{% endif %}
+              {% if shift.time_range %} · {{ shift.time_range }}{% endif %}
               · {{ shift.display_hours_label }}
             </p>
           </div>

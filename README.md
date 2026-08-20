@@ -44,7 +44,6 @@ Unknown or ambiguous results are never blindly retried. Externally created match
    DEPUTY_LOGIN_EMAIL=you@example.com
    DEPUTY_LOGIN_PASSWORD=your-deputy-password
    DEPUTY_DISPLAY_NAME=Your Name
-   DEPUTY_API_TOKEN=your-deputy-api-token
    ```
 
    The app does not require a Deputy API token. If an API token is present, the settings page can test it, but the main path uses logged-in Deputy web capture.
@@ -92,8 +91,6 @@ For the new multi-user flow, open the app and complete `/signup`. The shipped `S
 `TRUSTED_PROXY_SOURCES` is a comma-separated allowlist of proxy peer IPs, CIDRs, or controlled Docker DNS names. Only requests whose actual network peer matches this list may use `X-Forwarded-Proto`/`X-Forwarded-Host` to reconstruct the browser-visible origin. The shipped Compose default names the separate `deputy-roster-tunnel` service; if your tunnel service uses another name, set that exact Docker DNS name. Direct LAN clients are not proxy-trusted and continue to use their actual HTTP origin.
 
 If using the older Deputy web diagnostics fallback, set `DEPUTY_LOGIN_EMAIL`, `DEPUTY_LOGIN_PASSWORD`, and `DEPUTY_DISPLAY_NAME` as Portainer environment variables. The app shows whether the login is configured, but never displays the password. Use Settings -> Capture Web Data to check whether the logged-in web app exposes richer roster data. Once configured, normal syncs also refresh this Deputy web crew data.
-
-If you do have a Deputy API token, set `DEPUTY_API_TOKEN` and use Settings -> Test Deputy API. Most normal users will not have this.
 
 ## Temporary Trycloudflared URL
 

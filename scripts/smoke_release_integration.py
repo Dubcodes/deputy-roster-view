@@ -169,7 +169,7 @@ def client_for(user_id: int, token: str) -> TestClient:
 ordinary_client = client_for(int(ordinary["id"]), "ordinary-session")
 assert ordinary_client.get("/admin").status_code == 403
 assert ordinary_client.post(f"/admin/roster-days/1/deputy-trial/execute", data={"confirm": "CONFIRM"}).status_code == 403
-assert ordinary_client.post("/settings/deputy-api-test", headers={"origin": "http://testserver"}).status_code == 403
+assert ordinary_client.post("/settings/deputy-api-test", headers={"origin": "http://testserver"}).status_code == 404
 for method, path in (("get", "/settings/deputy-api/callback"), ("post", "/settings/deputy-api/connect"),
                      ("post", "/settings/deputy-api/recheck"), ("post", "/settings/deputy-api/disconnect")):
     assert getattr(ordinary_client, method)(path, headers={"origin": "http://testserver"}).status_code == 403
@@ -206,9 +206,9 @@ assert contractor_client.post(f"/shift/{other_shift}/marks", data={"checked": "1
 track_map_response = contractor_client.get("/track-map/taupo")
 assert track_map_response.status_code == 200 and track_map_response.headers["content-type"] == "image/gif"
 assert TestClient(app, follow_redirects=False).get("/track-map/taupo").status_code in {303, 307}
-assert contractor_client.post(f"/contractor/workdays/{other_day}/personal-time", data={"personal_start_time": "08:00"}, headers={"origin": "http://testserver"}).status_code == 403
-assert contractor_client.post(f"/contractor/workdays/{own_day}/personal-time", data={"personal_start_time": "08:00"}, headers={"origin": "http://testserver"}).status_code == 303
-assert contractor_client.post(f"/contractor/workdays/{other_day}/self-travel", data={"self_travel": "1"}, headers={"origin": "http://testserver"}).status_code == 403
+assert contractor_client.post(f"/contractor/workdays/{other_day}/personal-time", data={"personal_start_time": "08:00"}, headers={"origin": "http://testserver"}).status_code == 404
+assert contractor_client.post(f"/contractor/workdays/{own_day}/personal-time", data={"personal_start_time": "08:00"}, headers={"origin": "http://testserver"}).status_code == 404
+assert contractor_client.post(f"/contractor/workdays/{other_day}/self-travel", data={"self_travel": "1"}, headers={"origin": "http://testserver"}).status_code == 404
 assert contractor_client.get("/day/2026-08-22").status_code == 200
 assert contractor_client.get("/day/2026-08-22?scope=global").status_code == 403
 assert contractor_client.get("/timesheet/2026-08-22").status_code == 200

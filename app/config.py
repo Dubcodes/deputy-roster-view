@@ -17,7 +17,6 @@ class Settings:
     deputy_login_email: str
     deputy_login_password: str
     deputy_display_name: str
-    deputy_api_token: str
     app_secret_key: str
     trusted_device_days: int
     signup_enabled: bool
@@ -60,10 +59,6 @@ class Settings:
         masked_name = name[:2] + "***" if len(name) > 2 else "***"
         return f"{masked_name}@{domain}"
 
-    @property
-    def deputy_api_configured(self) -> bool:
-        return bool(self.deputy_api_token.strip())
-
 
 def _int_env(name: str, default: int) -> int:
     value = os.getenv(name)
@@ -94,7 +89,6 @@ def get_settings() -> Settings:
         deputy_login_email=os.getenv("DEPUTY_LOGIN_EMAIL", "").strip(),
         deputy_login_password=os.getenv("DEPUTY_LOGIN_PASSWORD", ""),
         deputy_display_name=os.getenv("DEPUTY_DISPLAY_NAME", "").strip(),
-        deputy_api_token=os.getenv("DEPUTY_API_TOKEN", "").strip(),
         app_secret_key=os.getenv("APP_SECRET_KEY", ""),
         trusted_device_days=_int_env("TRUSTED_DEVICE_DAYS", 730),
         signup_enabled=_bool_env("SIGNUP_ENABLED", False),

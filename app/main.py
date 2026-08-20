@@ -159,7 +159,6 @@ from .database import (
     user_has_ical_url,
     visible_workday_ids_for_user,
 )
-from .deputy_api import test_deputy_roster_api
 from .deputy_web import capture_and_save_deputy_web, format_capture_payload
 from .love_racing import LOVE_RACING_URL
 from .planning_calendar import (
@@ -196,7 +195,7 @@ from .security import (
     verify_pin,
 )
 from .user_credentials import settings_for_user
-from .interpreted_workdays import interpret_deputy_workdays
+from .interpreted_workdays import interpret_deputy_workdays, interpret_deputy_workdays_for_people
 from .roster_note_interpretation import (
     VEHICLE_ALLOCATION_TOKEN_RE,
     VEHICLE_ALLOCATION_WORD_RE,
@@ -263,7 +262,7 @@ from .deputy_integration import (
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.21.1"
+APP_BUILD = "2026.08.21.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -1345,17 +1344,6 @@ def parse_roster_summary(lines: list[str]) -> dict[str, object]:
                 label = match.group(1).strip().title()
                 add_timing(label, match.group(2))
             consumed.add(index)
-
-    for index, line in enumerate(lines):
-        if index in consumed:
-            continue
-        crew_match = CREW_LINE_RE.match(line)
-        if crew_match:
-            vehicle = crew_match.group(1).strip()
-            lower_vehicle = vehicle.lower()
-            if lower_vehicle not in NON_CREW_LABELS:
-                crew_allocations.append({"vehicle": vehicle, "people": crew_match.group(2).strip()})
-                consumed.add(index)
 
     for index, line in enumerate(lines):
         if index not in consumed:
@@ -5191,9 +5179,9 @@ def admin_location_rows(
     return sorted(locations.values(), key=lambda item: str(item.get("display_name") or "").lower())
 
 
-def diagnostic_source_payloads(limit: int = 8) -> list[dict[str, object]]:
+def diagnostic_source_payloads(limit: int = 8, *, owner_user_id: int | None = None) -> list[dict[str, object]]:
     payloads = []
-    for row in get_recent_source_payloads(limit):
+    for row in get_recent_source_payloads(limit, owner_user_id=owner_user_id):
         item = dict(row)
         payloads.append(
             {
@@ -5214,7 +5202,8 @@ def diagnostic_source_payloads(limit: int = 8) -> list[dict[str, object]]:
 def build_error_report_diagnostics(request: Request, user: dict[str, object] | None) -> str:
     user_id = int(user["id"]) if user and user.get("id") is not None else None
     sync_state = get_user_sync_state(user_id) if user_id is not None else None
-    raw_web_capture = redact_secret_text(get_last_deputy_web_capture())
+    capture = get_latest_deputy_web_capture_for_user(user_id) if user_id is not None else None
+    raw_web_capture = redact_secret_text(str(capture["payload"] or "")) if capture else ""
     diagnostics = {
         "captured_at": datetime.now(get_settings().timezone).isoformat(timespec="seconds"),
         "request_path": str(request.url.path),
@@ -5226,8 +5215,10 @@ def build_error_report_diagnostics(request: Request, user: dict[str, object] | N
         "sync_status": get_manual_sync_status(user_id),
         "user_sync_state": dict(sync_state) if sync_state else {},
         "schedule_snapshot": get_deputy_schedule_snapshot(),
-        "recent_sync_logs": [dict(row) for row in get_recent_sync_logs(8)],
-        "recent_source_payloads": diagnostic_source_payloads(),
+        # sync_log predates per-user ownership; do not attach global rows to a
+        # normal user's report.
+        "recent_sync_logs": [],
+        "recent_source_payloads": diagnostic_source_payloads(owner_user_id=user_id),
         "last_deputy_web_capture": truncate_diagnostic_text(raw_web_capture),
     }
     return json.dumps(diagnostics, ensure_ascii=True, indent=2, sort_keys=True)
@@ -5399,39 +5390,6 @@ def contractor_home(request: Request, notice: str | None = None) -> object:
     if not user or user.get("account_type") != "contractor":
         raise HTTPException(status_code=403, detail="Contractor access required")
     return RedirectResponse(url=notice_url("/month", notice) if notice else "/month", status_code=303)
-
-
-@app.post("/contractor/workdays/{roster_day_id}/personal-time")
-async def contractor_personal_time(request: Request, roster_day_id: int) -> RedirectResponse:
-    user = current_user(request); require_same_origin(request)
-    if not user or user.get("account_type") != "contractor":
-        raise HTTPException(status_code=403, detail="Contractor access required")
-    workday = get_roster_day(roster_day_id)
-    if workday is None:
-        raise HTTPException(status_code=404, detail="Workday not found")
-    date_text = str(workday["roster_date"] or "")
-    if roster_day_id not in visible_workday_ids_for_user(date_text, date_text, int(user["id"])):
-        raise HTTPException(status_code=403, detail="This workday is not assigned to you")
-    form = await request.form(); person_id = get_user_canonical_person_id(int(user["id"]))
-    if person_id is None: raise HTTPException(status_code=403, detail="Contractor crew link unavailable")
-    set_user_event_personal_time(user_id=int(user["id"]), canonical_person_id=person_id, event_kind="manual_workday", event_id=str(roster_day_id), event_date=date_text,
-                                 personal_start_time=clean_time_value(str(form.get("personal_start_time") or "")), personal_finish_time=clean_time_value(str(form.get("personal_finish_time") or "")))
-    return RedirectResponse(url=notice_url("/contractor", "Personal time saved."), status_code=303)
-
-
-@app.post("/contractor/workdays/{roster_day_id}/self-travel")
-async def contractor_self_travel(request: Request, roster_day_id: int) -> RedirectResponse:
-    user = current_user(request); require_same_origin(request)
-    if not user or user.get("account_type") != "contractor": raise HTTPException(status_code=403, detail="Contractor access required")
-    workday = get_roster_day(roster_day_id)
-    if workday is None: raise HTTPException(status_code=404, detail="Workday not found")
-    date_text = str(workday["roster_date"] or "")
-    if roster_day_id not in visible_workday_ids_for_user(date_text, date_text, int(user["id"])): raise HTTPException(status_code=403, detail="This workday is not assigned to you")
-    form = await request.form(); person_id = get_user_canonical_person_id(int(user["id"]))
-    if person_id is None: raise HTTPException(status_code=403, detail="Contractor crew link unavailable")
-    set_user_event_self_travel(user_id=int(user["id"]), canonical_person_id=person_id, event_kind="manual_workday", event_id=str(roster_day_id), event_date=date_text,
-                               location_key=calendar_location_key(workday["track_label"] or ""), self_travel=str(form.get("self_travel") or "") == "1")
-    return RedirectResponse(url=notice_url("/contractor", "Travel preference saved."), status_code=303)
 
 
 @app.get("/help")
@@ -6952,26 +6910,9 @@ def day_view(
         ),
     )
     apply_schedule_role_context(shifts, deputy_schedule_rows)
-    apply_roster_note_vehicles(deputy_schedule_people, shifts)
     note_travel_cohort = False
     if travel_schedule_context:
-        note_people = travel_note_people(shifts, deputy_schedule_people)
-        if note_people:
-            for note_person in note_people:
-                person_id = int(note_person.get("canonical_person_id") or 0)
-                name_key = schedule_label_key(str(note_person.get("employee_name") or ""))
-                matches = [
-                    person for person in deputy_schedule_people
-                    if (person_id and int(person.get("canonical_person_id") or 0) == person_id)
-                    or (name_key and schedule_label_key(str(person.get("employee_name") or "")) == name_key)
-                ]
-                if len(matches) == 1:
-                    if str(note_person.get("vehicle_label") or "").strip():
-                        matches[0]["vehicle_label"] = canonical_vehicle_labels(note_person.get("vehicle_label"))
-                    matches[0]["provenance_label"] = "Roster note + Deputy schedule"
-                else:
-                    deputy_schedule_people.append(note_person)
-            note_travel_cohort = True
+        note_travel_cohort = True
     if travel_schedule_context:
         show_vehicle_assignment_as_travel(shifts)
     elif schedule_location_ids:
@@ -6980,13 +6921,6 @@ def day_view(
             previous_day_text,
             location_ids=schedule_location_ids,
         )
-        if schedule_rows_are_vehicle_travel_context(previous_day_rows):
-            previous_day_vehicle_people = schedule_people(
-                previous_day_rows,
-                include_vehicle_only=True,
-                include_placeholders=False,
-            )
-            apply_vehicle_carryover_from_people(deputy_schedule_people, previous_day_vehicle_people)
     deputy_event_changes = decorate_event_changes(
         fetch_deputy_event_changes_for_date(
             date_text,
@@ -7044,6 +6978,62 @@ def day_view(
         if workday:
             shift["header_vehicle_label"] = str(workday.get("vehicle") or "")
             shift["interpreted_workday"] = workday
+    canonical_people_workdays = interpret_deputy_workdays_for_people(
+        shifts,
+        structured_rows=deputy_schedule_rows,
+        identity_records=interpreter_identities,
+        preceding_rows=preceding_interpreter_rows,
+        preceding_structured_rows=preceding_interpreter_structured,
+    )
+    for person in deputy_schedule_people:
+        person_id = safe_int(person.get("canonical_person_id"))
+        workdays = canonical_people_workdays.get(person_id or -1, [])
+        workday = next((item for item in workdays if item.get("date") == date_text), None)
+        if not workday:
+            continue
+        vehicle = str(workday.get("vehicle") or "").strip()
+        if vehicle:
+            person["vehicle_label"] = vehicle
+            person["vehicle_provenance"] = str(workday.get("vehicle_provenance") or "structured_deputy")
+            person["structured_vehicle_label"] = str(workday.get("structured_vehicle") or "")
+            person["roster_note_vehicle_label"] = str(workday.get("roster_note_vehicle") or "")
+            person["roster_note_vehicle_evidence"] = list(workday.get("current_roster_note_evidence") or [])
+    if travel_schedule_context:
+        displayed_person_ids = {safe_int(person.get("canonical_person_id")) for person in deputy_schedule_people}
+        identities_by_id = {safe_int(identity.get("id")): identity for identity in interpreter_identities}
+        for person_id, workdays in canonical_people_workdays.items():
+            workday = next((item for item in workdays if item.get("date") == date_text), None)
+            if not workday or person_id in displayed_person_ids or not workday.get("roster_note_vehicle"):
+                continue
+            identity = identities_by_id.get(person_id) or {}
+            deputy_schedule_people.append({
+                "canonical_person_id": person_id,
+                "employee_name": str(identity.get("canonical_display_name") or identity.get("current_deputy_name") or "Crew member"),
+                "position_label": "Travel", "area_display": "Travel",
+                "vehicle_label": str(workday.get("vehicle") or ""),
+                "vehicle_provenance": str(workday.get("vehicle_provenance") or "current_roster_note"),
+                "roster_note_vehicle_label": str(workday.get("roster_note_vehicle") or ""),
+                "source": "Roster note + canonical workday",
+                "provenance_label": "Roster note + Deputy schedule",
+            })
+            displayed_person_ids.add(person_id)
+        displayed_names = {schedule_label_key(str(person.get("employee_name") or "")) for person in deputy_schedule_people}
+        note_only = next((item.get("vehicle_evidence", {}).get("note_only_people", [])
+                          for items in canonical_people_workdays.values() for item in items
+                          if item.get("date") == date_text), [])
+        for unresolved in note_only:
+            name = str(unresolved.get("name") or "").strip()
+            name_key = schedule_label_key(name)
+            if not name or not name_key or name_key in displayed_names:
+                continue
+            deputy_schedule_people.append({
+                "canonical_person_id": None, "employee_name": name,
+                "position_label": "Travel", "area_display": "Travel",
+                "vehicle_label": str(unresolved.get("vehicle") or ""),
+                "source": "Roster note + canonical workday",
+                "provenance_label": "Unresolved note-only person",
+            })
+            displayed_names.add(name_key)
     apply_shift_self_travel(shifts, date_text, date_text, owner_user_id)
     apply_schedule_self_travel(
         deputy_schedule_people,
@@ -7766,7 +7756,8 @@ def settings_view(request: Request, notice: str | None = None) -> object:
     if owner_user_id is not None:
         calendar_url_source = "This account" if user_calendar_url_configured else "Not saved for this account"
     contractor_account = bool(user and user.get("account_type") == "contractor")
-    deputy_web_capture = None if contractor_account else format_capture_payload(get_last_deputy_web_capture())
+    latest_capture = get_latest_deputy_web_capture_for_user(owner_user_id) if owner_user_id is not None else None
+    deputy_web_capture = None if contractor_account else format_capture_payload(str(latest_capture["payload"] or "")) if latest_capture else None
     schedule_snapshot = {} if contractor_account else get_deputy_schedule_snapshot()
     capture_stats = deputy_web_capture.get("stats", {}) if deputy_web_capture else {}
     roster_snapshot = {
@@ -7819,10 +7810,10 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "next_shift": next_shift_display,
             "pre_shift": pre_shift,
             "sync_status": get_manual_sync_status(owner_user_id),
-            "sync_logs": get_recent_sync_logs(),
+            "sync_logs": get_recent_sync_logs() if bool(user and user.get("is_admin")) else [],
             "source_payload_shifts": [
                 decorate_shift(row)
-                for row in get_recent_source_payloads()
+                for row in get_recent_source_payloads(owner_user_id=owner_user_id)
             ],
             "deputy_web_capture": deputy_web_capture,
             "deputy_schedule_snapshot": schedule_snapshot,
@@ -8421,28 +8412,6 @@ def clear_user_changed(request: Request) -> RedirectResponse:
         url=notice_url("/settings", f"Cleared changed flags on {changed} of your shifts."),
         status_code=303,
     )
-
-
-@app.post("/settings/deputy-api-test")
-def test_deputy_api(request: Request) -> RedirectResponse:
-    require_admin_user(request); require_same_origin(request)
-    result = test_deputy_roster_api(get_settings())
-    message = result.message
-    if result.sample:
-        fields = ", ".join(key for key, value in result.sample.items() if value not in (None, "", []))
-        message = f"{message} First record includes: {fields}."
-    return RedirectResponse(url=notice_url("/settings", message), status_code=303)
-
-
-@app.post("/settings/deputy-web-capture")
-async def capture_deputy_web(request: Request) -> RedirectResponse:
-    require_same_origin(request)
-    user = current_user(request)
-    user_id = int(user["id"]) if user and user.get("id") is not None else None
-    settings = get_settings()
-    runtime_settings = settings_for_user(user_id, settings) if user_id is not None else None
-    result = await capture_and_save_deputy_web(runtime_settings or settings, owner_user_id=user_id)
-    return RedirectResponse(url=notice_url("/settings", str(result["message"])), status_code=303)
 
 
 @app.post("/sync-now", response_model=None)
