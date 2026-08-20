@@ -419,6 +419,32 @@ def push_open_position_eligible(position: dict[str, object]) -> bool:
     return str(position.get("area_display") or "").strip().casefold() not in {"", "tbc"}
 
 
+def _canonical_integrity_snapshot(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Canonical persisted integrity state: stable formatting, distinct episodes."""
+    role_aliases = {"soundvt": ("sound", "vt"), "sound": ("sound",), "vt": ("vt",)}
+    snapshots = []
+    for row in rows:
+        reason = str(row.get("reason") or "Conflicting roster evidence").casefold()
+        compact = re.sub(r"[^a-z0-9]+", "", reason)
+        roles: set[str] = set()
+        for token in re.findall(r"[a-z]+\d*", reason):
+            roles.update(role_aliases.get(token, (token,) if token.startswith("ccu") else ()))
+        if "sound" in compact and "vt" in compact:
+            roles.update(("sound", "vt"))
+        condition = re.sub(r"\bsoundvt\b", "sound vt", reason)
+        condition = re.sub(r"\b(?:sound|vt|ccu\d*)\b", "role", condition)
+        condition = re.sub(r"[^a-z0-9]+", " ", condition).strip()
+        snapshots.append({
+            "date": str(row.get("date") or ""),
+            "location": str(row.get("area_location_id") or ""),
+            "event_start": str(row.get("event_start_at") or ""),
+            "condition": condition,
+            "roles": sorted(roles),
+            "conflict_count": int(row.get("conflict_count") or 0),
+        })
+    return sorted(snapshots, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
+
+
 def _queue_admin_operational_alerts(now: datetime) -> int:
     cutoff = (now - timedelta(days=7)).isoformat(timespec="seconds")
     stale_cutoff = (now - timedelta(hours=36)).isoformat(timespec="seconds")
@@ -527,12 +553,8 @@ def _queue_admin_operational_alerts(now: datetime) -> int:
         # period, send one deterministic aggregate for the committed state.
         if integrity_ready:
             dates = {str(row.get("date") or "") for row in integrity_rows}
-            reasons = []
-            for row in integrity_rows:
-                reason = str(row.get("reason") or "Conflicting roster evidence").casefold()
-                reason = re.sub(r"\b([a-z0-9]+)\s*,\s*([a-z0-9]+)\b", lambda match: ", ".join(sorted(match.groups())), reason)
-                reasons.append(re.sub(r"\s+", " ", reason).strip())
-            signature = hashlib.sha256(json.dumps(sorted(set(reasons)), separators=(",", ":")).encode()).hexdigest()[:20]
+            snapshot = _canonical_integrity_snapshot(integrity_rows)
+            signature = hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:20]
             created += int(queue_notification(
                 user_id=admin_id, event_type="admin_alert", workday_kind="roster_integrity",
                 workday_id="settled-integrity", event_date="", title="Re-Deputy · Roster integrity",

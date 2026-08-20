@@ -236,6 +236,7 @@ def _preceding_vehicle(
 def interpret_deputy_workdays(
     rows: Iterable[dict[str, object]], *, structured_rows: Iterable[dict[str, object]] = (),
     person_identity: dict[str, object] | None = None,
+    raw_evidence_owner_identity: dict[str, object] | None = None,
     identity_records: Iterable[dict[str, object]] = (),
     preceding_rows: Iterable[dict[str, object]] = (),
     preceding_structured_rows: Iterable[dict[str, object]] = (),
@@ -247,6 +248,7 @@ def interpret_deputy_workdays(
     preceding_structured = [dict(row) for row in preceding_structured_rows]
     identities = [dict(row) for row in identity_records]
     person = dict(person_identity or {})
+    raw_owner = dict(raw_evidence_owner_identity or {})
     employee_id = person.get("deputy_employee_id")
     aliases = {identity_key(value) for value in person.get("aliases", []) if identity_key(value)}
     for evidence in _cohorts([dict(row) for row in rows]):
@@ -276,12 +278,20 @@ def interpret_deputy_workdays(
             )
         ]
         target_structured = [row for row in connected_structured if _same_person(row, employee_id, aliases)]
-        structured_vehicle = next((_vehicle_from_row(row) for row in evidence if _vehicle_from_row(row)), "")
-        if not structured_vehicle:
-            structured_vehicle = next(
-                (_vehicle_from_row(row) for row in target_structured if _row_is_vehicle(row) and _vehicle_from_row(row)), "",
-            )
-        resolved_vehicle = next((str(row.get("resolved_vehicle") or "") for row in evidence if row.get("resolved_vehicle")), "")
+        # Raw rows may be enriched for the viewing account.  They are reusable
+        # as shared note evidence, but their resolved vehicle belongs only to
+        # that account and must not leak into another person's projection.
+        owns_raw_evidence = raw_evidence_owner_identity is None or bool(
+            raw_owner and _target_indexes([raw_owner], person)
+        )
+        structured_vehicle = next(
+            (_vehicle_from_row(row) for row in target_structured if _row_is_vehicle(row) and _vehicle_from_row(row)), "",
+        )
+        resolved_vehicle = next(
+            (str(row.get("resolved_vehicle") or "") for row in evidence if owns_raw_evidence and row.get("resolved_vehicle")), "",
+        )
+        if not structured_vehicle and owns_raw_evidence:
+            structured_vehicle = next((_vehicle_from_row(row) for row in evidence if _vehicle_from_row(row)), "")
         resolution_people = _cohort_people(connected_structured, identities, person)
         target_indexes = _target_indexes(resolution_people, person)
         note_resolution = resolve_note_allocations(allocations_from_shifts(evidence), resolution_people)
@@ -298,7 +308,8 @@ def interpret_deputy_workdays(
         )
         vehicle = canonical_vehicle_label(note_vehicle or resolved_vehicle or structured_vehicle or prior_vehicle)
         vehicle_source = "current_roster_note" if note_vehicle else next(
-            (str(row.get("resolved_vehicle_provenance") or "") for row in evidence if row.get("resolved_vehicle_provenance")),
+            (str(row.get("resolved_vehicle_provenance") or "") for row in evidence
+             if owns_raw_evidence and row.get("resolved_vehicle_provenance")),
             "structured_deputy" if structured_vehicle else prior_source,
         )
         source_ids = list(dict.fromkeys(
@@ -353,6 +364,7 @@ def interpret_deputy_workdays_for_people(
     identity_records: Iterable[dict[str, object]] = (),
     preceding_rows: Iterable[dict[str, object]] = (),
     preceding_structured_rows: Iterable[dict[str, object]] = (),
+    raw_evidence_owner_identity: dict[str, object] | None = None,
 ) -> dict[int, list[dict[str, object]]]:
     """Return the canonical workday projection for every known person in a cohort.
 
@@ -376,6 +388,7 @@ def interpret_deputy_workdays_for_people(
             raw_rows,
             structured_rows=structured,
             person_identity=identity,
+            raw_evidence_owner_identity=raw_evidence_owner_identity,
             identity_records=identities,
             preceding_rows=prior_rows,
             preceding_structured_rows=prior_structured,

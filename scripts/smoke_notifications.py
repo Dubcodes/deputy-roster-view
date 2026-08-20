@@ -32,6 +32,7 @@ def main() -> None:
     from app.database import create_app_user, get_connection, init_db, set_user_event_self_travel
     from app.main import app
     from app.notifications import (
+        _canonical_integrity_snapshot,
         compact_push_payload,
         deliver_due_notifications,
         generate_due_notifications,
@@ -484,6 +485,28 @@ def main() -> None:
         }
     if not {"sync_failure", "sync_stale", "roster_integrity", "deputy_write_unknown"}.issubset(serious_kinds):
         raise AssertionError(f"Serious Admin Alert sources were incomplete: {serious_kinds!r}")
+
+    # Settled integrity revisions are event snapshots, not presentation text:
+    # role formatting/order is equivalent, while a new date or conflict count
+    # is a distinct episode and therefore receives a fresh notification.
+    snapshot_a = _canonical_integrity_snapshot([{
+        "date": "2026-08-23", "area_location_id": 58, "event_start_at": "07:30",
+        "reason": "expected positions absent: ccu2, sound, vt", "conflict_count": 1,
+    }])
+    snapshot_reordered = _canonical_integrity_snapshot([{
+        "date": "2026-08-23", "area_location_id": 58, "event_start_at": "07:30",
+        "reason": "expected positions absent: vt, ccu2, sound", "conflict_count": 1,
+    }])
+    snapshot_new_date = _canonical_integrity_snapshot([{
+        "date": "2026-08-24", "area_location_id": 58, "event_start_at": "07:30",
+        "reason": "expected positions absent: soundvt, ccu2", "conflict_count": 1,
+    }])
+    snapshot_changed_conflict = _canonical_integrity_snapshot([{
+        "date": "2026-08-23", "area_location_id": 58, "event_start_at": "07:30",
+        "reason": "expected positions absent: sound, vt, ccu2", "conflict_count": 2,
+    }])
+    if snapshot_a != snapshot_reordered or snapshot_a == snapshot_new_date or snapshot_a == snapshot_changed_conflict:
+        raise AssertionError("Integrity snapshot equivalence or episode identity was not canonical.")
     with get_connection() as conn:
         healthy_stamp = (alert_now + timedelta(hours=1)).isoformat()
         conn.execute(

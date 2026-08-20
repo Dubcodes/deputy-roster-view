@@ -262,7 +262,7 @@ from .deputy_integration import (
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.21.2"
+APP_BUILD = "2026.08.21.3"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -6984,6 +6984,7 @@ def day_view(
         identity_records=interpreter_identities,
         preceding_rows=preceding_interpreter_rows,
         preceding_structured_rows=preceding_interpreter_structured,
+        raw_evidence_owner_identity=interpreter_person,
     )
     for person in deputy_schedule_people:
         person_id = safe_int(person.get("canonical_person_id"))

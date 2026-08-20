@@ -134,6 +134,24 @@ assert {key: travel_workdays[key][0]["vehicle"] for key in (7, 13, 20, 21, 22, 2
 }
 assert any(item["name"] == "Todd" for item in travel_workdays[20][0]["vehicle_evidence"]["unresolved_roster_note"])
 
+# A viewer-enriched raw row is personal evidence, not a shared vehicle default.
+# The shared projection must retain each person's structured vehicle.
+vehicle_identities = [
+    {"id": 101, "deputy_employee_id": 101, "canonical_display_name": "Jayden", "aliases": []},
+    {"id": 102, "deputy_employee_id": 102, "canonical_display_name": "Grant", "aliases": []},
+    {"id": 103, "deputy_employee_id": 103, "canonical_display_name": "Other", "aliases": []},
+]
+shared_vehicle_projection = interpret_deputy_workdays_for_people([
+    row("viewer-jayden", "2026-08-18T13:30:00+12:00", "2026-08-18T23:30:00+12:00", "VT",
+        title="[Rotorua] VT", location_name="Rotorua", resolved_vehicle="Rav91",
+        resolved_vehicle_provenance="structured_deputy"),
+], structured_rows=[
+    {"employee_id": 101, "employee_name": "Jayden", "area_name": "Rav91", "location_name": "Rotorua", "start_at": "2026-08-18T13:30:00+12:00", "end_at": "2026-08-18T23:30:00+12:00"},
+    {"employee_id": 102, "employee_name": "Grant", "area_name": "684", "location_name": "Rotorua", "start_at": "2026-08-18T13:30:00+12:00", "end_at": "2026-08-18T23:30:00+12:00"},
+    {"employee_id": 103, "employee_name": "Other", "area_name": "685", "location_name": "Rotorua", "start_at": "2026-08-18T13:30:00+12:00", "end_at": "2026-08-18T23:30:00+12:00"},
+], identity_records=vehicle_identities, raw_evidence_owner_identity=vehicle_identities[0])
+assert {person_id: days[0]["vehicle"] for person_id, days in shared_vehicle_projection.items()} == {101: "Rav91", 102: "684", 103: "685"}
+
 esq_resolution = resolve_note_allocations(
     note_vehicle_allocations_from_text("Trucks Esq"),
     [{"employee_id": 7, "employee_name": "Danny Hunter", "current_deputy_name": "Sir Daniel Hunter ESQ."}],
