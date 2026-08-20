@@ -139,10 +139,35 @@ def _portable_title(event_date: date) -> str:
     return f"Re-Deputy · {event_date.strftime('%A')} {event_date.day} {event_date.strftime('%B')}"
 
 
-def _group_deputy_notification_workdays(shifts: list[dict[str, object]]) -> list[dict[str, object]]:
-    """Collapse source rows into one stable personal workday per date/location."""
+def _group_deputy_notification_workdays(
+    shifts: list[dict[str, object]], user_id: int | None = None,
+) -> list[dict[str, object]]:
+    """Consume the same structured/note-aware final interpretation as the day page."""
+    structured_rows: list[dict[str, object]] = []
+    identity: dict[str, object] = {}
+    dates = sorted({str(row.get("date") or "") for row in shifts if row.get("date")})
+    if user_id is not None and dates:
+        with get_connection() as conn:
+            structured_rows = [dict(row) for row in conn.execute(
+                "SELECT * FROM deputy_schedule_shifts WHERE date BETWEEN ? AND ? ORDER BY start_at,source_shift_id",
+                (dates[0], dates[-1]),
+            ).fetchall()]
+            person = conn.execute(
+                "SELECT id,deputy_employee_id,canonical_display_name FROM crew_people WHERE app_user_id=? AND is_active=1",
+                (user_id,),
+            ).fetchone()
+            if person:
+                alias_rows = conn.execute(
+                    "SELECT alias FROM crew_aliases WHERE person_id=?", (person["id"],),
+                ).fetchall()
+                identity = {
+                    "deputy_employee_id": person["deputy_employee_id"],
+                    "aliases": [person["canonical_display_name"], *(row["alias"] for row in alias_rows)],
+                }
     result = []
-    for workday in interpret_deputy_workdays(shifts):
+    for workday in interpret_deputy_workdays(
+        shifts, structured_rows=structured_rows, person_identity=identity,
+    ):
         evidence = list(workday.get("structured_deputy_evidence") or [])
         item = dict(evidence[0]) if evidence else {}
         item.update({
@@ -387,6 +412,7 @@ def push_open_position_eligible(position: dict[str, object]) -> bool:
 
 def _queue_admin_operational_alerts(now: datetime) -> int:
     cutoff = (now - timedelta(days=7)).isoformat(timespec="seconds")
+    stale_cutoff = (now - timedelta(hours=36)).isoformat(timespec="seconds")
     with get_connection() as conn:
         admin_ids = [int(row["id"]) for row in conn.execute(
             """SELECT u.id FROM app_users u JOIN notification_preferences p ON p.app_user_id=u.id
@@ -409,6 +435,18 @@ def _queue_admin_operational_alerts(now: datetime) -> int:
                WHERE u.is_active=1 AND s.last_status='error' AND s.updated_at>=?""",
             (cutoff,),
         ).fetchall()]
+        stale_sync_rows = [dict(row) for row in conn.execute(
+            """SELECT s.user_id,s.last_sync_at,s.updated_at,u.display_name
+               FROM user_sync_state s
+               JOIN app_users u ON u.id=s.user_id
+               JOIN deputy_user_secrets secret ON secret.user_id=u.id
+               WHERE u.is_active=1 AND COALESCE(u.account_type,'user')!='contractor'
+                 AND TRIM(COALESCE(secret.encrypted_email,''))!=''
+                 AND TRIM(COALESCE(secret.encrypted_password,''))!=''
+                 AND COALESCE(s.sync_in_progress,0)=0
+                 AND (TRIM(COALESCE(s.last_sync_at,''))='' OR s.last_sync_at<?)""",
+            (stale_cutoff,),
+        ).fetchall()]
         integrity_rows = [dict(row) for row in conn.execute(
             """SELECT date,area_location_id,event_start_at,reason,conflict_count,last_capture_at
                FROM deputy_event_coverage
@@ -417,8 +455,8 @@ def _queue_admin_operational_alerts(now: datetime) -> int:
             (cutoff,),
         ).fetchall()]
         write_rows = [dict(row) for row in conn.execute(
-            """SELECT operation_uuid,operation_type,stable_assignment_key,error_class,updated_at
-               FROM deputy_write_operations WHERE status='unknown' AND updated_at>=?""",
+            """SELECT operation_uuid,operation_type,stable_assignment_key,status,error_class,updated_at
+               FROM deputy_write_operations WHERE status IN ('unknown','ambiguous') AND updated_at>=?""",
             (cutoff,),
         ).fetchall()]
     created = 0
@@ -451,6 +489,14 @@ def _queue_admin_operational_alerts(now: datetime) -> int:
                 target_url="/admin#sync-status", scheduled_at=now,
                 revision=f"sync-error:{row['user_id']}:{row.get('updated_at')}",
             ))
+        for row in stale_sync_rows:
+            created += int(queue_notification(
+                user_id=admin_id, event_type="admin_alert", workday_kind="sync_stale",
+                workday_id=str(row["user_id"]), event_date="", title="Re-Deputy · Sync seriously stale",
+                body=f"{row.get('display_name') or 'Crew member'} · primary Deputy roster has not synced for over 36 hours",
+                target_url="/admin#sync-status", scheduled_at=now,
+                revision=f"sync-stale:{row['user_id']}:{row.get('last_sync_at') or row.get('updated_at')}",
+            ))
         for row in integrity_rows:
             created += int(queue_notification(
                 user_id=admin_id, event_type="admin_alert", workday_kind="roster_integrity",
@@ -466,7 +512,7 @@ def _queue_admin_operational_alerts(now: datetime) -> int:
                 workday_id=str(row["operation_uuid"]), event_date="", title="Re-Deputy · Deputy write unresolved",
                 body=f"{row.get('operation_type') or 'Write'} · {row.get('stable_assignment_key') or 'assignment'} · inspect before retry",
                 target_url="/admin#deputy-write-audit", scheduled_at=now,
-                revision=f"write-unknown:{row['operation_uuid']}:{row.get('updated_at')}",
+                revision=f"write-unresolved:{row['operation_uuid']}:{row.get('status')}:{row.get('error_class')}",
             ))
     return created
 
@@ -491,7 +537,7 @@ def generate_due_notifications(now: datetime | None = None) -> dict[str, int]:
                    AND (s.deleted_from_source=0 OR s.changed_since_viewed=1) ORDER BY s.start_at,s.id""",
                 (user_id, (now.date() - timedelta(days=1)).isoformat(), (now.date() + timedelta(days=31)).isoformat()),
             ).fetchall()]
-        for shift in _group_deputy_notification_workdays(shifts):
+        for shift in _group_deputy_notification_workdays(shifts, user_id):
             event_date = date.fromisoformat(str(shift["date"]))
             location = str(shift.get("notification_location") or "Work day")
             role = str(shift.get("notification_role") or "Shift")

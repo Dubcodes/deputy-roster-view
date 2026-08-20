@@ -175,6 +175,38 @@ def main() -> None:
         ).fetchone()["app_origin"]
     if retained_origin != app_origin:
         raise AssertionError("Plain HTTP replaced a subscription's HTTPS app origin.")
+    origin_cases = {
+        "https://DEPUTYREVIEWER.EXAMPLE:443": 303,
+        "https://deputyreviewer.example:444": 403,
+        "http://deputyreviewer.example": 403,
+        "https://deputyreviewer.example:bad": 403,
+        "https://attacker.example": 403,
+    }
+    for supplied_origin, expected in origin_cases.items():
+        response = client.post(
+            "/settings/notifications/test", headers={"Origin": supplied_origin}, follow_redirects=False,
+        )
+        if response.status_code != expected:
+            raise AssertionError(f"Origin {supplied_origin!r} returned {response.status_code}, expected {expected}.")
+    if client.post(
+        "/settings/notifications/test",
+        headers={"Origin": app_origin, "Sec-Fetch-Site": "cross-site"}, follow_redirects=False,
+    ).status_code != 403:
+        raise AssertionError("Cross-site Fetch Metadata was accepted despite a matching Origin header.")
+    explicit_default_client = TestClient(app, base_url="https://deputyreviewer.example:443")
+    for cookie_name, cookie_value in client.cookies.items():
+        explicit_default_client.cookies.set(cookie_name, cookie_value)
+    if explicit_default_client.post(
+        "/settings/notifications/test", headers={"Origin": app_origin}, follow_redirects=False,
+    ).status_code != 303:
+        raise AssertionError("An omitted HTTPS default port did not match an explicit request port 443.")
+    lan_client = TestClient(app, base_url="http://192.168.0.10")
+    for cookie_name, cookie_value in client.cookies.items():
+        lan_client.cookies.set(cookie_name, cookie_value)
+    if lan_client.post(
+        "/settings/notifications/test", headers={"Origin": "http://192.168.0.10"}, follow_redirects=False,
+    ).status_code != 303:
+        raise AssertionError("A same-origin LAN HTTP mutation was rejected.")
     captured_send: dict[str, object] = {}
     original_pywebpush = sys.modules.get("pywebpush")
     sys.modules["pywebpush"] = types.SimpleNamespace(
@@ -370,6 +402,10 @@ def main() -> None:
     # and target only active Admins who opted into Admin Alerts.
     alert_now = datetime.now(get_settings().timezone).replace(microsecond=0)
     with get_connection() as conn:
+        conn.execute(
+            "UPDATE user_sync_state SET last_sync_at=?,last_status='success',sync_in_progress=0,updated_at=? WHERE user_id=?",
+            (alert_now.isoformat(), alert_now.isoformat(), owner_id),
+        )
         person_id = int(conn.execute(
             "INSERT INTO crew_people(canonical_display_name,app_user_id,is_active,created_at,updated_at) VALUES('Alert Owner',?,1,?,?)",
             (owner_id, alert_now.isoformat(), alert_now.isoformat()),
@@ -395,9 +431,11 @@ def main() -> None:
 
     with get_connection() as conn:
         stamp = alert_now.isoformat()
+        stale_stamp = (alert_now - timedelta(hours=40)).isoformat()
         conn.execute(
-            "INSERT OR REPLACE INTO user_sync_state(user_id,last_status,last_message,updated_at) VALUES(?,?,?,?)",
-            (owner_id, "error", "Primary Deputy web coverage failed", stamp),
+            """INSERT OR REPLACE INTO user_sync_state(user_id,last_sync_at,last_status,last_message,sync_in_progress,updated_at)
+               VALUES(?,?,?,?,0,?)""",
+            (owner_id, stale_stamp, "error", "Primary Deputy web coverage failed", stamp),
         )
         conn.execute(
             "INSERT INTO deputy_event_coverage(date,area_location_id,event_start_at,status,conflict_count,reason,last_capture_at) VALUES(?,?,?,?,?,?,?)",
@@ -411,8 +449,16 @@ def main() -> None:
                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             ("unknown-fixture", owner_id, "fixture.au.deputy.com", 1, 2, "hash", "{}", "fixture-assignment", "create", "{}", "unknown", stamp, stamp),
         )
+        conn.execute(
+            """INSERT INTO deputy_write_operations(
+                   operation_uuid,app_user_id,tenant_host,deputy_user_id,deputy_employee_id,
+                   permission_hash,permission_snapshot,stable_assignment_key,operation_type,
+                   desired_state,status,error_class,created_at,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ("ambiguous-fixture", owner_id, "fixture.au.deputy.com", 1, 2, "hash", "{}", "fixture-ambiguous", "update", "{}", "ambiguous", "readback_ambiguous", stamp, stamp),
+        )
     serious_alerts = generate_due_notifications(alert_now)
-    if serious_alerts["admin_alerts"] != 3 or generate_due_notifications(alert_now)["admin_alerts"]:
+    if serious_alerts["admin_alerts"] != 5 or generate_due_notifications(alert_now)["admin_alerts"]:
         raise AssertionError(f"Serious Admin Alerts were not queued and deduped once: {serious_alerts!r}")
     with get_connection() as conn:
         serious_kinds = {
@@ -420,8 +466,17 @@ def main() -> None:
                 "SELECT workday_kind FROM notification_events WHERE event_type='admin_alert'"
             ).fetchall()
         }
-    if not {"sync_failure", "roster_integrity", "deputy_write_unknown"}.issubset(serious_kinds):
+    if not {"sync_failure", "sync_stale", "roster_integrity", "deputy_write_unknown"}.issubset(serious_kinds):
         raise AssertionError(f"Serious Admin Alert sources were incomplete: {serious_kinds!r}")
+    with get_connection() as conn:
+        healthy_stamp = (alert_now + timedelta(hours=1)).isoformat()
+        conn.execute(
+            "UPDATE user_sync_state SET last_sync_at=?,last_status='success',last_message='',updated_at=? WHERE user_id=?",
+            (healthy_stamp, healthy_stamp, owner_id),
+        )
+    future = alert_now + timedelta(hours=38)
+    if generate_due_notifications(future)["admin_alerts"] != 1:
+        raise AssertionError("A healthy sync did not reset the stale-sync alert episode.")
 
     service_worker = (ROOT_DIR / "app" / "static" / "service-worker.js").read_text(encoding="utf-8")
     if "value.startsWith('//')" not in service_worker or "parsed.origin === self.location.origin" not in service_worker:

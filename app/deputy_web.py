@@ -300,6 +300,23 @@ def _top_level_shape(value: Any) -> dict[str, Any]:
     return {"kind": type(value).__name__}
 
 
+def _schedule_state_fields(item: dict[str, Any]) -> dict[str, Any]:
+    """Retain operational schedule evidence used for safe later interpretation."""
+    keys = (
+        "canEdit", "timesheet", "approvalRequired", "approvalStatus",
+        "confirmationStatus", "confirmationNote", "mealbreakDuration",
+        "mealbreakSlots", "warning", "warningOverrideComment", "isOpen",
+        "isPublished", "isUnpublished", "publicationStatus", "openStatus",
+    )
+    return {
+        key: _safe_json_sample(
+            item.get(key), max_depth=SCHEDULE_SAMPLE_DEPTH,
+            max_list_items=SCHEDULE_SAMPLE_LIST_ITEMS, max_text=SCHEDULE_SAMPLE_TEXT,
+        )
+        for key in keys if key in item
+    }
+
+
 def _extract_management_shifts(data: Any) -> list[dict[str, Any]]:
     if not isinstance(data, dict) or not isinstance(data.get("data"), list):
         return []
@@ -334,6 +351,7 @@ def _extract_management_shifts(data: Any) -> list[dict[str, Any]]:
                 "mealbreakDuration": item.get("mealbreakDuration"),
                 "confirmationStatus": item.get("confirmationStatus"),
                 "note": _safe_json_sample(item.get("note") or ""),
+                **_schedule_state_fields(item),
             }
         )
     return shifts
@@ -536,6 +554,7 @@ def _extract_schedule_shifts(data: Any) -> list[dict[str, Any]]:
                     max_list_items=SCHEDULE_SAMPLE_LIST_ITEMS,
                     max_text=SCHEDULE_SAMPLE_TEXT,
                 ),
+                **_schedule_state_fields(item),
             }
         )
     return shifts

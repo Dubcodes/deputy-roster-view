@@ -20,12 +20,15 @@ route family, including parameterized instances.
 | `/sync-status` | GET | No | Own status | Own status | Own status | No | Progress polling |
 | `/contractor` | GET | No | Denied | Denied | Redirect `/month` | No | Compatibility redirect |
 | `/contractor/workdays/*` | POST | No | Denied | Denied | Own assigned workday | Local preference | Legacy mini-app action compatibility |
+| `/shift/{id}`, `/shift/{id}/marks`, `/shift/{id}/mark-viewed` | GET, POST | No | Own shift only | Own shift only | Own shift only | Marks/view state only | All lookups include authenticated `owner_user_id`; guessed cross-user IDs return 404 |
 | `/admin`, `/admin/*` | GET, POST, DELETE | No | Denied centrally | Allowed | Denied centrally | Route-dependent | Admin templates/forms/fetch; endpoint guards remain defense in depth |
 | `/admin/roster-days/conflicts` | GET | No | Denied | Allowed | Denied | No | Builder same-date warning fetch |
 | `/admin/roster-days/*/deputy-trial*` | GET, POST | No | Denied | Allowed with own OAuth + Deputy permission | Denied | Confirmed POST may write Deputy | Existing explicit controlled workflow only |
-| `/track-map/{key}` | GET | No | Yes | Yes | Yes for own-linked days | No | Day view image |
+| `/track-map/{key}` | GET | No | Yes | Yes | Yes | No | Authenticated day-view image; no global/Admin data is exposed by this file route |
 
 All authenticated POST/PUT/PATCH/DELETE requests are rejected when browser
-origin evidence is cross-site. Missing `Origin` remains accepted for compatible
+origin evidence is cross-site or its normalized scheme, lower-case host, and
+effective port differ from the request origin. Default ports are 80/443; an
+explicit default port is equivalent to an omitted default port. Missing `Origin` remains accepted for compatible
 non-browser clients; endpoint-level checks remain on sensitive forms. OAuth and
 public invite protocol paths are explicit exceptions through public routing.

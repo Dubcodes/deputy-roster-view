@@ -166,22 +166,42 @@ ordinary_client = client_for(int(ordinary["id"]), "ordinary-session")
 assert ordinary_client.get("/admin").status_code == 403
 assert ordinary_client.post(f"/admin/roster-days/1/deputy-trial/execute", data={"confirm": "CONFIRM"}).status_code == 403
 assert ordinary_client.post("/settings/deputy-api-test", headers={"origin": "http://testserver"}).status_code == 403
+for method, path in (("get", "/settings/deputy-api/callback"), ("post", "/settings/deputy-api/connect"),
+                     ("post", "/settings/deputy-api/recheck"), ("post", "/settings/deputy-api/disconnect")):
+    assert getattr(ordinary_client, method)(path, headers={"origin": "http://testserver"}).status_code == 403
 contractor_client = client_for(int(contractor["id"]), "contractor-session")
 contractor_month = contractor_client.get("/month")
 assert contractor_month.status_code == 200 and "Global crew calendar" not in contractor_month.text
 assert contractor_client.get("/month?scope=global").status_code == 403 and contractor_client.get("/admin").status_code == 403
 assert contractor_client.get("/settings").status_code == 200 and contractor_client.get("/help").status_code == 200
 assert contractor_client.get("/sync-now").status_code == 405
-assert contractor_client.get("/settings/deputy-api/callback").status_code in {303, 403}
-assert contractor_client.post("/settings/deputy-api/recheck", headers={"origin": "http://testserver"}).status_code in {303, 403}
-assert contractor_client.post("/settings/deputy-api/connect", data={"tenant": "trial.example.deputy.com"}, headers={"origin": "http://testserver"}).status_code in {303, 403}
-assert contractor_client.post("/settings/deputy-api-test", headers={"origin": "http://testserver"}).status_code in {303, 403}
+assert contractor_client.get("/settings/deputy-api/callback").status_code == 403
+assert contractor_client.post("/settings/deputy-api/recheck", headers={"origin": "http://testserver"}).status_code == 403
+assert contractor_client.post("/settings/deputy-api/connect", data={"tenant": "trial.example.deputy.com"}, headers={"origin": "http://testserver"}).status_code == 403
+assert contractor_client.post("/settings/deputy-api/disconnect", headers={"origin": "http://testserver"}).status_code == 403
 contractor_home = contractor_client.get("/contractor")
 assert contractor_home.status_code == 303 and contractor_home.headers["location"] == "/month"
 with get_connection() as conn:
     own_day = int(conn.execute("INSERT INTO roster_days(roster_date,track_key,track_label,status,created_at,updated_at) VALUES('2026-08-22','own','Own Day','published',?,?)", (now, now)).lastrowid)
     other_day = int(conn.execute("INSERT INTO roster_days(roster_date,track_key,track_label,status,created_at,updated_at) VALUES('2026-08-23','other','Other Day','published',?,?)", (now, now)).lastrowid)
     conn.execute("INSERT INTO workday_user_visibility(roster_day_id,user_id,canonical_person_id,created_at,updated_at) VALUES(?,?,?,?,?)", (own_day, int(contractor["id"]), person_id, now, now))
+    own_shift = int(conn.execute("""INSERT INTO shifts(source_uid,title,start_at,end_at,date,raw_hours,paid_hours,break_minutes,owner_user_id,source_payload)
+        VALUES('contractor-own','[T-Test] Camera','2026-08-22T09:00:00+12:00','2026-08-22T17:00:00+12:00','2026-08-22',8,8,0,?,'{}')""", (int(contractor["id"]),)).lastrowid)
+    other_shift = int(conn.execute("""INSERT INTO shifts(source_uid,title,start_at,end_at,date,raw_hours,paid_hours,break_minutes,owner_user_id,source_payload)
+        VALUES('contractor-other','[T-Test] Camera','2026-08-22T09:00:00+12:00','2026-08-22T17:00:00+12:00','2026-08-22',8,8,0,?,'{}')""", (admin_id,)).lastrowid)
+    conn.execute("""INSERT INTO track_maps(track_key,track_label,course_label,file_name,content_type,status,checked_at,updated_at)
+        VALUES('taupo','Taupo','Taupo','taupo-fixture.gif','image/gif','ok',?,?)""", (now, now))
+(tmp / "track_maps").mkdir(exist_ok=True)
+(tmp / "track_maps" / "taupo-fixture.gif").write_bytes(
+    bytes.fromhex("47494638396101000100800000000000ffffff21f90401000000002c00000000010001000002024401003b")
+)
+assert contractor_client.get(f"/shift/{own_shift}").status_code == 303
+assert contractor_client.post(f"/shift/{own_shift}/marks", data={"checked": "1"}, headers={"origin": "http://testserver"}).status_code == 303
+assert contractor_client.get(f"/shift/{other_shift}").status_code == 404
+assert contractor_client.post(f"/shift/{other_shift}/marks", data={"checked": "1"}, headers={"origin": "http://testserver"}).status_code == 404
+track_map_response = contractor_client.get("/track-map/taupo")
+assert track_map_response.status_code == 200 and track_map_response.headers["content-type"] == "image/gif"
+assert TestClient(app, follow_redirects=False).get("/track-map/taupo").status_code in {303, 307}
 assert contractor_client.post(f"/contractor/workdays/{other_day}/personal-time", data={"personal_start_time": "08:00"}, headers={"origin": "http://testserver"}).status_code == 403
 assert contractor_client.post(f"/contractor/workdays/{own_day}/personal-time", data={"personal_start_time": "08:00"}, headers={"origin": "http://testserver"}).status_code == 303
 assert contractor_client.post(f"/contractor/workdays/{other_day}/self-travel", data={"self_travel": "1"}, headers={"origin": "http://testserver"}).status_code == 403
@@ -196,6 +216,10 @@ with get_connection() as conn: assert not int(conn.execute("SELECT is_active FRO
 host = "trial-safe.au.deputy.com"
 save_config(client_id="client", client_secret="OAUTH-SECRET", callback_origin="https://redeputy.example", write_mode="trial", allowed_hosts=host, actor_user_id=admin_id)
 admin_client = client_for(admin_id, "admin-session")
+assert admin_client.get("/settings/deputy-api/callback").status_code == 303
+assert admin_client.post("/settings/deputy-api/connect", headers={"origin": "http://testserver"}).status_code == 303
+assert admin_client.post("/settings/deputy-api/recheck", headers={"origin": "http://testserver"}).status_code == 303
+assert admin_client.post("/settings/deputy-api/disconnect", headers={"origin": "http://testserver"}).status_code == 303
 with get_connection() as conn:
     alias_people = conn.execute("SELECT id FROM crew_people WHERE app_user_id IN (?,?) ORDER BY id", (admin_id, int(ordinary["id"]))).fetchall()
     assert len(alias_people) == 2

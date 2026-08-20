@@ -12,6 +12,7 @@ OFFLINE_SMOKES = (
     "smoke_render_templates.py",
     "smoke_deputy_release_gate.py",
     "smoke_security_closure.py",
+    "smoke_closure_20260820_2.py",
     "smoke_auth_basics.py",
     "smoke_release_integration.py",
     "smoke_deployment_continuity.py",

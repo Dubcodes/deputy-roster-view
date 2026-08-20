@@ -4,6 +4,41 @@ Purpose: maintain a durable record of significant pre-deployment defects, invest
 
 Do not delete old entries when an issue is fixed. Update its status and add the release/commit that resolved it.
 
+## 2026.08.20.2 deployment-closure correction
+
+Starting source: clean `main`/`origin/main` at `96432aa88247f86a3b2d63510960ac82ab56029b`.
+
+The `2026.08.20.1` audit overstated several boundaries. Review found that the
+four Settings OAuth handlers denied contractors but did not require Admin on
+the server, contractor middleware blocked owner-scoped shift/map routes, the
+workday notification projection grouped only by date/location, origin checks
+did not consistently compare scheme and effective port, unresolved-write
+alerts omitted `ambiguous`, and schedule extraction discarded useful state.
+
+Root causes were duplicated presentation/server assumptions, an overly broad
+contractor prefix gate, a lossy grouping key, duplicated hostname-only origin
+checks, narrow alert SQL, and explicit extraction allowlists that had not kept
+pace with the richer Deputy response shape.
+
+Fixes in build `2026.08.20.2`:
+
+* connect/callback/recheck/disconnect now call the server-side Admin guard while retaining initiating-user OAuth state ownership;
+* contractors may reach authenticated track-map files and owner-scoped shift detail/mark routes, while cross-user IDs remain 404 and global/Admin/OAuth routes remain 403;
+* day-header and notification workdays share the same overlap-cohort interpreter, current-note vehicle allocation overrides structured vehicle only on an exact person match, and rostered notification timing ignores personal time overrides;
+* unsafe mutations compare normalized scheme, lower-case hostname and effective port (80/443), without trusting arbitrary forwarding headers;
+* Admin Alerts include deduplicated `ambiguous` writes and credentialed, active, non-contractor primary syncs stale beyond the existing 36-hour threshold; a subsequent healthy sync creates a new stale episode boundary;
+* management/shared schedule extraction retains editability, timesheet, approval/confirmation, meal-break, warning, open and publication evidence in stored raw payloads;
+* identity matching remains exact/conservative; no broad fuzzy fallback was added.
+
+Regression evidence is deterministic and production-shaped: two non-overlapping
+same-place duties, overlapping production/vehicle rows, per-person roster-note
+override, rostered-versus-personal reminder time, all four OAuth role matrices,
+contractor ownership guessing, strict origin/port/scheme cases including LAN
+HTTP, stale-reset and unresolved-write alert episodes, and rich field survival.
+No live Deputy tenant was contacted or mutated and no deployment was performed.
+
+Final status: FIXED in build `2026.08.20.2`; commit/CI evidence to be added after the release gate passes.
+
 ## Release history relevant to this gate
 
 ### 2026.08.13.2

@@ -17,7 +17,11 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 
-from .auth import clear_login_failures, clear_trusted_device, current_user, login_is_throttled, record_login_failure, require_admin_user, trusted_device_middleware
+from .auth import (
+    clear_login_failures, clear_trusted_device, current_user, is_same_origin,
+    login_is_throttled, normalized_origin, record_login_failure,
+    require_admin_user, trusted_device_middleware,
+)
 from .config import get_settings
 from .database import (
     calendar_location_key,
@@ -192,6 +196,7 @@ from .security import (
     verify_pin,
 )
 from .user_credentials import settings_for_user
+from .interpreted_workdays import interpret_deputy_workdays
 from .url_safety import normalize_deputy_web_url, validate_public_https_url
 from .track_maps import (
     MAX_MANUAL_MAP_BYTES,
@@ -248,7 +253,7 @@ from .deputy_integration import (
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.20.1"
+APP_BUILD = "2026.08.20.2"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -690,45 +695,22 @@ def require_same_origin(request: Request) -> None:
     if request.headers.get("sec-fetch-site", "same-origin") == "cross-site":
         raise HTTPException(status_code=403, detail="Cross-site request rejected")
     origin = request.headers.get("origin", "").strip()
-    parsed = urlsplit(origin)
-    try:
-        origin_port = parsed.port
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail="Cross-site request rejected") from exc
-    if origin and (
-        not parsed.hostname
-        or parsed.hostname.lower() != str(request.url.hostname or "").lower()
-        or (origin_port is not None and request.url.port is not None and origin_port != request.url.port)
-    ):
+    if origin and not is_same_origin(request, origin):
         raise HTTPException(status_code=403, detail="Cross-site request rejected")
 
 
 def authenticated_https_origin(request: Request) -> str:
     origin = request.headers.get("origin", "").strip()
-    parsed = urlsplit(origin)
-    try:
-        port = parsed.port
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Notifications require a valid HTTPS origin") from exc
-    if (
-        parsed.scheme.lower() != "https"
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or parsed.hostname.lower() != str(request.url.hostname or "").lower()
-        or (port is not None and request.url.port is not None and port != request.url.port)
-        or parsed.path not in ("", "/")
-        or parsed.query
-        or parsed.fragment
-    ):
+    parsed_origin = normalized_origin(origin)
+    if not parsed_origin or parsed_origin[0] != "https" or not is_same_origin(request, origin):
         raise HTTPException(
             status_code=400,
             detail="Notifications are not available from this connection. Open Re-Deputy using its secure HTTPS address.",
         )
-    host = parsed.hostname
+    _, host, port = parsed_origin
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
-    return f"https://{host}{f':{port}' if port is not None else ''}"
+    return f"https://{host}{f':{port}' if port != 443 else ''}"
 
 
 def parse_iso_datetime(value: str | None) -> datetime | None:
@@ -7119,9 +7101,19 @@ def day_view(
     if deputy_schedule_rows:
         apply_event_changes_to_schedule_people(deputy_schedule_people, deputy_event_change_groups)
     for shift in shifts:
-        if str(shift.get("header_vehicle_label") or "").strip():
-            continue
-        shift["header_vehicle_label"] = vehicle_for_user_from_schedule(deputy_schedule_people, user, shift)
+        if not str(shift.get("header_vehicle_label") or "").strip():
+            shift["resolved_vehicle"] = vehicle_for_user_from_schedule(deputy_schedule_people, user, shift)
+    interpreted_by_shift_id = {
+        int(source_id): workday
+        for workday in interpret_deputy_workdays(shifts)
+        for source_id in workday.get("raw_source_shift_ids", [])
+        if str(source_id).isdigit()
+    }
+    for shift in shifts:
+        workday = interpreted_by_shift_id.get(int(shift["id"]))
+        if workday:
+            shift["header_vehicle_label"] = str(workday.get("vehicle") or "")
+            shift["interpreted_workday"] = workday
     apply_shift_self_travel(shifts, date_text, date_text, owner_user_id)
     apply_schedule_self_travel(
         deputy_schedule_people,
@@ -7922,9 +7914,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
 @app.post("/settings/deputy-api/connect")
 async def settings_deputy_api_connect(request: Request) -> RedirectResponse:
     require_same_origin(request)
-    user = current_user(request)
-    if not user or user.get("account_type") == "contractor":
-        raise HTTPException(status_code=403, detail="Deputy connection is unavailable")
+    user = require_admin_user(request)
     form = await request.form()
     try:
         url = begin_oauth(app_user_id=int(user["id"]))
@@ -7935,9 +7925,7 @@ async def settings_deputy_api_connect(request: Request) -> RedirectResponse:
 
 @app.get("/settings/deputy-api/callback")
 def settings_deputy_api_callback(request: Request, state: str = "", code: str = "") -> RedirectResponse:
-    user = current_user(request)
-    if not user or user.get("account_type") == "contractor":
-        raise HTTPException(status_code=403, detail="Login required")
+    user = require_admin_user(request)
     try:
         complete_oauth(state=state, code=code, current_user_id=int(user["id"]))
     except (ValueError, PermissionError) as exc:
@@ -7948,9 +7936,7 @@ def settings_deputy_api_callback(request: Request, state: str = "", code: str = 
 @app.post("/settings/deputy-api/recheck")
 def settings_deputy_api_recheck(request: Request) -> RedirectResponse:
     require_same_origin(request)
-    user = current_user(request)
-    if not user or user.get("account_type") == "contractor":
-        raise HTTPException(status_code=403, detail="Login required")
+    user = require_admin_user(request)
     try:
         refreshed = refresh_references(int(user["id"]))
         errors = dict(refreshed.get("errors") or {})
@@ -7974,9 +7960,7 @@ def settings_deputy_api_recheck(request: Request) -> RedirectResponse:
 @app.post("/settings/deputy-api/disconnect")
 def settings_deputy_api_disconnect(request: Request) -> RedirectResponse:
     require_same_origin(request)
-    user = current_user(request)
-    if not user or user.get("account_type") == "contractor":
-        raise HTTPException(status_code=403, detail="Login required")
+    user = require_admin_user(request)
     disconnect_deputy_api(int(user["id"]))
     return RedirectResponse(url=notice_url("/settings", "Deputy API disconnected."), status_code=303)
 

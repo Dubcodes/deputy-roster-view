@@ -38,6 +38,8 @@ CONTRACTOR_ALLOWED_PREFIXES = (
     "/month",
     "/day/",
     "/timesheet/",
+    "/shift/",
+    "/track-map/",
     "/settings",
     "/help",
     "/sync-now",
@@ -47,6 +49,43 @@ CONTRACTOR_ALLOWED_PREFIXES = (
     "/manifest.webmanifest",
     "/service-worker.js",
 )
+
+
+def normalized_origin(value: str) -> tuple[str, str, int] | None:
+    """Return a strict browser origin (scheme, host, effective port)."""
+    try:
+        parsed = urlsplit(value.strip())
+        port = parsed.port
+    except (TypeError, ValueError):
+        return None
+    scheme = parsed.scheme.lower()
+    if (
+        scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    return scheme, parsed.hostname.lower(), port or (443 if scheme == "https" else 80)
+
+
+def request_origin(request: Request) -> tuple[str, str, int] | None:
+    scheme = str(request.url.scheme or "").lower()
+    host = str(request.url.hostname or "").lower()
+    if scheme not in {"http", "https"} or not host:
+        return None
+    try:
+        port = request.url.port
+    except ValueError:
+        return None
+    return scheme, host, port or (443 if scheme == "https" else 80)
+
+
+def is_same_origin(request: Request, value: str) -> bool:
+    return normalized_origin(value) == request_origin(request)
 
 LOGIN_FAILURE_LIMIT = 5
 LOGIN_WINDOW = timedelta(minutes=15)
@@ -152,18 +191,8 @@ async def trusted_device_middleware(
                 if request.headers.get("sec-fetch-site", "same-origin") == "cross-site":
                     return Response("Cross-site request rejected", status_code=403)
                 origin = request.headers.get("origin", "").strip()
-                if origin:
-                    parsed = urlsplit(origin)
-                    try:
-                        origin_port = parsed.port
-                    except ValueError:
-                        return Response("Cross-site request rejected", status_code=403)
-                    if (
-                        not parsed.hostname
-                        or parsed.hostname.lower() != str(request.url.hostname or "").lower()
-                        or (origin_port is not None and request.url.port is not None and origin_port != request.url.port)
-                    ):
-                        return Response("Cross-site request rejected", status_code=403)
+                if origin and not is_same_origin(request, origin):
+                    return Response("Cross-site request rejected", status_code=403)
             response = await call_next(request)
             response.set_cookie(
                 SESSION_COOKIE_NAME,
