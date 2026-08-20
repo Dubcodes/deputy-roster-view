@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 import sys
 import tempfile
 from datetime import datetime
@@ -18,6 +19,7 @@ from app.deputy_integration import (
     prepare_operation, save_config, state_hash,
 )
 from app.security import encrypt_text, hash_pin
+from app.deputy_web import _paginate_schedule_search
 
 
 class Response:
@@ -178,9 +180,9 @@ lost_day = day("2026-08-20", "lost", "08:00", "17:00", assignments=[(people[0], 
 lost_preview = build_trial_preview(admin_id, lost_day, session=fixture)
 fixture.lose_after_create_number = fixture.create_count + 1
 lost_results, lost_blockers = execute_trial_batch(lost_preview, app_user_id=admin_id, session=fixture)
-assert not lost_blockers and lost_results[0]["status"] == "verified" and lost_results[0].get("reconciled") is True
+assert not lost_blockers and lost_results[0]["status"] == "unknown" and lost_results[0].get("reconciled") is True
 with get_connection() as conn:
-    assert conn.execute("SELECT ownership FROM deputy_roster_links WHERE workday_id=?", (lost_day,)).fetchone()["ownership"] == "re_deputy_created_trial"
+    assert conn.execute("SELECT ownership FROM deputy_roster_links WHERE workday_id=?", (lost_day,)).fetchone()["ownership"] == "ownership_unconfirmed"
 fixture.lose_after_create_number = None
 
 # One exact existing roster is adopted without POST; update then uses v2 PUT + GET verification.
@@ -257,6 +259,29 @@ key_day_two = save_key_day("2026-08-25", "key-two")
 with get_connection() as conn:
     saved_keys = [row["assignment_key"] for row in conn.execute("SELECT assignment_key FROM workday_assignments WHERE roster_day_id IN (?,?) ORDER BY roster_day_id", (key_day_one, key_day_two))]
 assert len(saved_keys) == 2 and len(set(saved_keys)) == 2 and saved_keys[0] == "submitted-shared-key"
+
+# Cursor pagination keeps all successful pages, deduplicates later at the
+# capture boundary, and marks a window partial if a later request fails.
+async def pagination_fixture() -> None:
+    calls: list[dict[str, object]] = []
+    async def complete_fetch(body: dict[str, object]) -> dict[str, object]:
+        calls.append(body)
+        cursor = body.get("cursor")
+        if not cursor:
+            return {"ok": True, "status": 200, "body": {"data": {"shifts": [{"id": 1}]}, "nextCursor": "page-2"}}
+        assert cursor == "page-2"
+        return {"ok": True, "status": 200, "body": {"data": {"shifts": [{"id": 2}, {"id": 1}]}}}
+    complete = await _paginate_schedule_search(complete_fetch, {"locationMode": "ALL"})
+    assert complete["complete"] and len(complete["pages"]) == 2 and calls[1]["cursor"] == "page-2"
+
+    async def later_failure(body: dict[str, object]) -> dict[str, object]:
+        if body.get("cursor"):
+            return {"ok": False, "status": 503, "body": None}
+        return {"ok": True, "status": 200, "body": {"data": {"shifts": [{"id": 3}]}, "nextCursor": "again"}}
+    partial = await _paginate_schedule_search(later_failure, {"locationMode": "SELECTED"})
+    assert not partial["complete"] and len(partial["pages"]) == 1 and partial["error"] == "HTTP 503"
+
+asyncio.run(pagination_fixture())
 
 with get_connection() as conn:
     before = {table: int(conn.execute(f"SELECT COUNT(*) n FROM {table}").fetchone()["n"]) for table in ("app_users", "crew_people", "roster_days", "workday_assignments")}

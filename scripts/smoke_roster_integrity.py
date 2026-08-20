@@ -49,6 +49,13 @@ def main() -> None:
             (now.isoformat(), now.isoformat()),
         )
         conn.execute(
+            """INSERT INTO app_users
+               (id, deputy_email, display_name, pin_hash, deputy_web_url, is_admin,
+                is_active, created_at, updated_at)
+               VALUES (2, 'observer@example.test', 'Second observer', 'x', 'https://example.test', 0, 1, ?, ?)""",
+            (now.isoformat(), now.isoformat()),
+        )
+        conn.execute(
             """INSERT INTO crew_people
                (deputy_employee_id, canonical_display_name, current_deputy_name,
                 app_user_id, is_active, created_at, updated_at)
@@ -124,6 +131,68 @@ def main() -> None:
     assert ccu1["employee_name"] == "TBC"
     assert ccu2["employee_name"] == "Jayden-lee" and ccu2["personal_evidence"]
     assert ccu2["provenance_label"] == "Confirmed from personal roster"
+
+    # A role merely existing in the venue Area catalogue is not evidence that
+    # this particular event should contain it.
+    catalogue_date = (now + timedelta(days=12)).date().isoformat()
+    catalogue_payload = {
+        **payload,
+        "captured_at": (now + timedelta(seconds=30)).isoformat(),
+        "extracted_shifts": [],
+        "own_roster_coverage": [],
+        "extracted_schedule_shifts": shared_rows(catalogue_date),
+        "schedule_coverage": [{"start_date": catalogue_date, "end_date": catalogue_date, "mode": "all", "location_ids": []}],
+        "event_retry_coverage": [],
+    }
+    catalogue_result = save_deputy_web_schedule(catalogue_payload, owner_user_id=1)
+    assert catalogue_result["partial_events"] == 0, catalogue_result
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT status, placeholder_positions FROM deputy_event_coverage WHERE date=? AND area_location_id=64",
+            (catalogue_date,),
+        ).fetchone() == ("complete", 0)
+
+    # Shared rows retain per-account provenance. Account 1 not seeing a row
+    # must not erase the copy still actively observed by account 2. Deputy can
+    # also set isOpen=true on an assigned shift; that row is not a vacancy.
+    observer_date = (now + timedelta(days=18)).date().isoformat()
+    observer_area = {"id": 900, "name": "Office Day", "locationId": 900, "rosterSortOrder": 1}
+    assigned_open = {
+        "id": 33635, "area": 900, "areaName": "Office Day", "areaLocationId": 900,
+        "employee": 685, "employeeName": "Alf", "isOpen": True, "isPublished": True,
+        "start": f"{observer_date}T07:30:00+12:00", "end": f"{observer_date}T16:00:00+12:00",
+    }
+    observer_payload = {
+        "captured_at": now.isoformat(), "areas": [observer_area],
+        "locations": [{"id": 900, "name": "Taupo"}],
+        "extracted_shifts": [], "own_roster_coverage": [],
+        "extracted_schedule_shifts": [assigned_open],
+        "schedule_coverage": [{"start_date": observer_date, "end_date": observer_date, "mode": "selected", "location_ids": [900]}],
+    }
+    save_deputy_web_schedule(observer_payload, owner_user_id=1)
+    save_deputy_web_schedule({**observer_payload, "captured_at": (now + timedelta(seconds=1)).isoformat()}, owner_user_id=2)
+    with sqlite3.connect(db_path) as conn:
+        events_before_personalized_absence = conn.execute(
+            "SELECT COUNT(*) FROM deputy_schedule_event_changes WHERE date=?", (observer_date,)
+        ).fetchone()[0]
+    account_one_absence = {**observer_payload, "captured_at": (now + timedelta(seconds=2)).isoformat(), "extracted_schedule_shifts": []}
+    save_deputy_web_schedule(account_one_absence, owner_user_id=1)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT employee_name FROM deputy_schedule_shifts WHERE source_shift_id=33635").fetchone() == ("Alf",)
+        assert conn.execute("SELECT active FROM deputy_schedule_observations WHERE source_shift_id=33635 AND observer_key='user:1'").fetchone() == (0,)
+        assert conn.execute("SELECT active FROM deputy_schedule_observations WHERE source_shift_id=33635 AND observer_key='user:2'").fetchone() == (1,)
+        assert conn.execute("SELECT COUNT(*) FROM deputy_schedule_event_changes WHERE date=?", (observer_date,)).fetchone()[0] == events_before_personalized_absence
+    from app.database import fetch_open_deputy_schedule_between
+    assert all(int(row["source_shift_id"]) != 33635 for row in fetch_open_deputy_schedule_between(observer_date, observer_date))
+    alf_refresh_at = (now + timedelta(seconds=3)).isoformat()
+    save_deputy_web_schedule({**observer_payload, "captured_at": alf_refresh_at}, owner_user_id=2)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT last_seen_at FROM deputy_schedule_observations WHERE source_shift_id=33635 AND observer_key='user:2'"
+        ).fetchone() == (alf_refresh_at,)
+    save_deputy_web_schedule({**account_one_absence, "captured_at": (now + timedelta(seconds=4)).isoformat()}, owner_user_id=2)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT 1 FROM deputy_schedule_shifts WHERE source_shift_id=33635").fetchone() is None
 
     conflict_people = [{
         "position_label": "CCU2", "employee_name": "Other Crew", "employee_id": 88,

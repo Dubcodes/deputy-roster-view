@@ -297,6 +297,55 @@ Regression evidence:
 
 Final status: FIXED in `2026.08.13.5`.
 
+---
+
+## 2026.08.20.1 correctness-release audit
+
+Audit date: 2026-08-20 (Pacific/Auckland)
+
+Starting source: `main` at `ab2725322c6f1c76f3454051f1691e9547b85466`, initially clean and aligned with the locally recorded `origin/main`.
+
+This pass was performed without a live Deputy write and without changing the production data volume, application secret, accounts, credentials, OAuth records, trusted devices, maps, routes, Portainer stack, or tunnel configuration.
+
+### Closed correctness and safety issues
+
+* Shared Deputy schedule evidence is now observer-aware. A complete-looking personalized capture can retire only that observer's evidence and cannot delete a row still actively supported by another account. Legacy rows without observer evidence are preserved rather than guessed away.
+* Availability now requires a raw Open flag and no assigned employee identity. Assigned rows that also carry `isOpen=true` remain assigned evidence and cannot become apply-able vacancies.
+* Shared and extended-personal JSON ingestion follows bounded cursors, deduplicates by stable Deputy shift ID, detects repeated cursors, preserves successful early pages, and marks incomplete pagination non-authoritative.
+* Overall sync health no longer lets a successful iCal fallback conceal failed or missing authoritative shared Deputy web coverage.
+* Notification reminders operate on interpreted workdays, use rostered rather than personal timekeeping values, emit location/role/vehicle/start in that order, and support an exact one-hour reminder.
+* Existing notification-enabled Admins receive a one-time default for the separately opt-out-able Admin Alerts preference. New error reports and both Making My Own Way audit transitions are deduplicated Admin-only alert sources.
+* Lost/ambiguous CREATE reconciliation may establish equivalent business state but cannot fabricate Re-Deputy ownership or later DELETE authority.
+* The obsolete trial-host allowlist was removed while retaining initiating-Admin, initiating-user OAuth identity, Deputy identity/permission, supported-operation, mapping, overlap, drift, Timesheet, read-back, and audit gates. Write mode remains off by default.
+* Contractor accounts use the normal personal calendar/day/timesheet/settings/help flows while server-side enforcement denies shared/global and Admin access. Authenticated browser mutations are same-origin checked and `/sync-now` is POST-only.
+* Settings no longer computes or presents Shared Crew Stats. Builder same-date conflict markers use canonical identity and refresh when the date changes.
+* Guarded employee-name history and alias backfills preserve Deputy employee identity for the reviewed #7/#13/#14 evidence without guessing across IDs.
+
+### Additive migrations
+
+* `deputy_schedule_observations` stores first/last-seen and absence/active state per stable source shift and observer.
+* `deputy_employee_name_history` stores observed Deputy names against immutable employee IDs.
+* Notification preferences add `one_hour_before` and `admin_alerts`; the Admin default migration is guarded by an idempotent application setting.
+
+Migration rehearsal ran twice against a disposable copy of the prior SQLite schema. Pre-existing user, trusted-device, personal-shift, shared-schedule, and capture row counts were preserved; `PRAGMA integrity_check` returned `ok` and `PRAGMA foreign_key_check` returned no rows.
+
+### Validation evidence
+
+* Canonical deterministic offline release gate: PASS.
+* Focused Deputy write/pagination, roster-integrity, notification, route/integration, and note-interpretation regressions: PASS.
+* Local Playwright responsive gate: PASS at 320px and 375px with the retained compact single-row mobile header.
+* Python compilation and `git diff --check`: PASS.
+* Host `pip check`: ENVIRONMENT FAILURE only — unrelated global `gradio-client 0.15.1` requires `websockets<12` while the host has `websockets 16.0`.
+* `pip-audit`: NOT AVAILABLE in the host environment.
+* Existing isolated project audit environment: `pip check` PASS and `pip-audit -r requirements.txt` PASS with no known vulnerabilities.
+* Local Docker image/container gate: BLOCKED before build because the Docker Desktop Linux engine pipe is unavailable. This must be repeated on the production Docker/Portainer host before deployment sign-off.
+
+### Remaining release gates and deliberate boundaries
+
+Deployment is not recorded as complete until the release commit is pushed, the existing Portainer stack is redeployed without recreating its data/configuration, container build/start/restart succeed, authenticated role checks are performed, and one read-only Deputy sync succeeds. No live Deputy mutation is permitted as a smoke test.
+
+Browser-based Deputy writes remain intentionally unimplemented. Deputy custom fields `f01` and `f02` remain read/raw evidence only because their native write contract is unverified. Conservative travel/name interpretation still refuses ambiguous global fuzzy matching; unresolved names remain unresolved rather than receiving a guessed employee ID.
+
 ### RD-SEC-002 — FIXED
 
 Root cause confirmed: URL validation and the hostname-based HTTP connection performed separate DNS decisions.

@@ -22,10 +22,10 @@
             <button type="button" role="option" class="search-picker-option is-open-position" data-picker-option data-value="" data-label="Open position" data-search="open position" data-state="open"><strong>Open position</strong><small>Available for eligible crew to apply</small></button>
             <button type="button" role="option" class="search-picker-option" data-picker-option data-value="" data-label="TBC / not offered" data-search="tbc not offered unfilled" data-state="tbc"><strong>TBC / not offered</strong><small>Unfilled but not available for applications</small></button>
             <div class="search-picker-group" data-team-group><span data-team-group-label>{{ selected_team_label or 'Selected team' }}</span>
-              {% for person in crew_options if person.selected_team_member %}<button type="button" role="option" class="search-picker-option" data-picker-option data-value="person:{{ person.id }}" data-person-id="{{ person.id }}" data-team-ids="{{ person.team_ids|join(',') }}" data-label="{{ person.canonical_display_name }}" data-search="{{ person.search_text }}"><strong>{{ person.canonical_display_name }}</strong><small>{{ person.team_names|join(', ') }}</small></button>{% endfor %}
+              {% for person in crew_options if person.selected_team_member %}<button type="button" role="option" class="search-picker-option" data-picker-option data-value="person:{{ person.id }}" data-person-id="{{ person.id }}" data-team-ids="{{ person.team_ids|join(',') }}" data-label="{{ person.canonical_display_name }}" data-search="{{ person.search_text }}"><strong>{{ person.canonical_display_name }} <span class="same-date-roster-warning" title="Already rostered on this date" aria-label="Already rostered on this date" hidden data-rostered-warning>!</span></strong><small>{{ person.team_names|join(', ') }}</small></button>{% endfor %}
             </div>
             <div class="search-picker-group" data-other-group><span>Other crew</span>
-              {% for person in crew_options if not person.selected_team_member %}<button type="button" role="option" class="search-picker-option" data-picker-option data-value="person:{{ person.id }}" data-person-id="{{ person.id }}" data-team-ids="{{ person.team_ids|join(',') }}" data-label="{{ person.canonical_display_name }}" data-search="{{ person.search_text }}"><strong>{{ person.canonical_display_name }}</strong>{% if person.team_names %}<small>{{ person.team_names|join(', ') }}</small>{% endif %}</button>{% endfor %}
+              {% for person in crew_options if not person.selected_team_member %}<button type="button" role="option" class="search-picker-option" data-picker-option data-value="person:{{ person.id }}" data-person-id="{{ person.id }}" data-team-ids="{{ person.team_ids|join(',') }}" data-label="{{ person.canonical_display_name }}" data-search="{{ person.search_text }}"><strong>{{ person.canonical_display_name }} <span class="same-date-roster-warning" title="Already rostered on this date" aria-label="Already rostered on this date" hidden data-rostered-warning>!</span></strong>{% if person.team_names %}<small>{{ person.team_names|join(', ') }}</small>{% endif %}</button>{% endfor %}
             </div>
             <p class="search-picker-empty" hidden data-picker-empty>No matching crew</p>
           </div>
@@ -276,11 +276,11 @@
   <details class="table-panel role-catalogue-panel">
     <summary>Reusable roles <span>{{ role_catalogue|length }} roles</span></summary>
     <p class="muted">Add, rename, reorder, disable, or add aliases. Disabling a role only removes it from future selection.</p>
-    <form class="role-catalogue-add" action="/admin/workday-roles/save" method="post">
+    <form class="role-catalogue-add" action="/admin/workday-roles/save" method="post" data-role-catalogue-form>
       <input type="text" name="display_label" placeholder="New role" required><input type="text" name="aliases" placeholder="Aliases, comma separated"><input type="number" name="display_order" value="1000" aria-label="Order"><button class="button button-secondary" type="submit">Add role</button>
     </form>
     <div class="role-catalogue-list">
-      {% for role in role_catalogue %}<form class="role-catalogue-row" action="/admin/workday-roles/save" method="post"><input type="hidden" name="role_key" value="{{ role.role_key }}"><input type="text" name="display_label" value="{{ role.display_label }}" aria-label="Role label"><input type="text" name="aliases" value="{{ role.aliases|replace('[', '')|replace(']', '')|replace('"', '') }}" aria-label="Aliases"><input type="number" name="display_order" value="{{ role.display_order }}" aria-label="Order"><label class="compact-check"><input type="checkbox" name="is_active" value="1"{% if role.is_active %} checked{% endif %}> Active</label><button class="button button-secondary button-compact" type="submit">Save</button></form>{% endfor %}
+      {% for role in role_catalogue %}<form class="role-catalogue-row" action="/admin/workday-roles/save" method="post" data-role-catalogue-form><input type="hidden" name="role_key" value="{{ role.role_key }}"><input type="text" name="display_label" value="{{ role.display_label }}" aria-label="Role label"><input type="text" name="aliases" value="{{ role.aliases|replace('[', '')|replace(']', '')|replace('"', '') }}" aria-label="Aliases"><input type="number" name="display_order" value="{{ role.display_order }}" aria-label="Order"><label class="compact-check"><input type="checkbox" name="is_active" value="1"{% if role.is_active %} checked{% endif %}> Active</label><button class="button button-secondary button-compact" type="submit">Save</button></form>{% endfor %}
     </div>
   </details>
   {% endif %}
@@ -291,6 +291,34 @@
     (() => {
       const form = document.querySelector('[data-workday-form]');
       if (!form) return;
+      document.querySelectorAll('[data-role-catalogue-form]').forEach((roleForm) => {
+        roleForm.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const button = roleForm.querySelector('button[type="submit"]');
+          const oldLabel = button?.textContent || '';
+          if (button) { button.disabled = true; button.textContent = 'Saving…'; }
+          try {
+            const response = await fetch(roleForm.action, {
+              method: 'POST', body: new FormData(roleForm), credentials: 'same-origin',
+              headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' }
+            });
+            const result = await response.json();
+            if (!response.ok || !result.ok) throw new Error(result.message || 'Role could not be saved.');
+            const activeRoles = result.roles.filter((role) => Number(role.is_active));
+            document.querySelectorAll('#workday-role-options').forEach((options) => {
+              options.replaceChildren(...activeRoles.map((role) => {
+                const option = document.createElement('option'); option.value = role.display_label; return option;
+              }));
+            });
+            if (!roleForm.querySelector('[name="role_key"]')) roleForm.reset();
+            if (button) button.textContent = 'Saved';
+            setTimeout(() => { if (button) button.textContent = oldLabel; }, 900);
+          } catch (error) {
+            if (button) button.textContent = 'Try again';
+            alert(error.message || 'Role could not be saved.');
+          } finally { if (button) button.disabled = false; }
+        });
+      });
       const dayType = form.querySelector('[data-day-type]');
       const refreshType = () => {
         const race = dayType.value === 'race_day';
@@ -304,6 +332,23 @@
       const template = form.querySelector('[data-assignment-template]');
       let rowIndex = list.querySelectorAll('[data-assignment-row]').length;
       const normalise = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const refreshSameDateWarnings = async () => {
+        const dateValue = form.querySelector('[name="roster_date"]')?.value || '';
+        if (!dateValue) return;
+        const currentId = form.querySelector('[name="roster_day_id"]')?.value || '';
+        const response = await fetch(`/admin/roster-days/conflicts?date_text=${encodeURIComponent(dateValue)}&exclude_id=${encodeURIComponent(currentId)}`, {
+          headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' },
+          credentials: 'same-origin'
+        });
+        if (!response.ok) return;
+        const rostered = new Set((await response.json()).person_ids.map(String));
+        form.querySelectorAll('[data-picker-option][data-person-id]').forEach((option) => {
+          const warning = option.querySelector('[data-rostered-warning]');
+          if (warning) warning.hidden = !rostered.has(option.dataset.personId || '');
+        });
+      };
+      form.querySelector('[name="roster_date"]')?.addEventListener('change', () => { void refreshSameDateWarnings(); });
+      void refreshSameDateWarnings();
       let duplicateChoice = null;
       const duplicateDialog = form.querySelector('[data-duplicate-dialog]');
       const closeDuplicate = (choice) => { duplicateChoice?.(choice); duplicateChoice = null; duplicateDialog?.close(); };

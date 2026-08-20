@@ -10,6 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .config import Settings, get_settings
 from .url_safety import normalize_deputy_web_url
+from .interpreted_workdays import deputy_shift_is_available
 from .database import (
     DEPUTY_LOCATION_CODES,
     get_current_or_next_shift,
@@ -540,6 +541,50 @@ def _extract_schedule_shifts(data: Any) -> list[dict[str, Any]]:
     return shifts
 
 
+async def _paginate_schedule_search(
+    fetch_page: Any,
+    body_data: dict[str, Any],
+    *,
+    max_pages: int = 100,
+) -> dict[str, Any]:
+    """Follow Deputy v2 cursors without treating an early page as authoritative.
+
+    Successfully returned pages are always retained. A failed/repeated/ludicrous
+    later cursor makes the window partial, which deliberately prevents pruning.
+    """
+    pages: list[Any] = []
+    cursor = ""
+    seen_cursors: set[str] = set()
+    status = 0
+    error = ""
+    for _ in range(max_pages):
+        request_body = dict(body_data)
+        if cursor:
+            request_body["cursor"] = cursor
+        try:
+            result = await fetch_page(request_body)
+        except Exception as exc:
+            error = redacted_text(str(exc))[:180] or "request failed"
+            break
+        status = int(result.get("status") or 0) if isinstance(result, dict) else 0
+        if not isinstance(result, dict) or not result.get("ok"):
+            error = f"HTTP {status or 'unknown'}"
+            break
+        body = result.get("body")
+        pages.append(body)
+        next_cursor = str(body.get("nextCursor") or "").strip() if isinstance(body, dict) else ""
+        if not next_cursor:
+            return {"pages": pages, "complete": True, "status": status, "error": ""}
+        if next_cursor == cursor or next_cursor in seen_cursors:
+            error = "Deputy repeated a pagination cursor"
+            break
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+    else:
+        error = f"pagination exceeded {max_pages} pages"
+    return {"pages": pages, "complete": False, "status": status, "error": error}
+
+
 async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     if not settings.deputy_login_configured:
         return DeputyWebCaptureResult(
@@ -894,15 +939,20 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         events.append("Could not identify the Deputy employee id for extended own-roster capture.")
                         return
 
-                    async def fetch_shift_window(window_start: datetime, window_end: datetime) -> dict[str, Any]:
-                        query = urlencode(
-                            {
-                                "start": window_start.isoformat(),
-                                "end": window_end.isoformat(),
-                                "employee": employee_id,
-                                "published": "TRUE",
-                            }
-                        )
+                    async def fetch_shift_window(
+                        window_start: datetime,
+                        window_end: datetime,
+                        page_data: dict[str, Any],
+                    ) -> dict[str, Any]:
+                        query_data = {
+                            "start": window_start.isoformat(),
+                            "end": window_end.isoformat(),
+                            "employee": employee_id,
+                            "published": "TRUE",
+                        }
+                        if page_data.get("cursor"):
+                            query_data["cursor"] = str(page_data["cursor"])
+                        query = urlencode(query_data)
                         path = f"/api/management/v2/shifts?{query}"
                         return await page.evaluate(
                             """
@@ -937,7 +987,10 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             end_at,
                         )
                         try:
-                            result = await fetch_shift_window(window_start, window_end)
+                            pagination = await _paginate_schedule_search(
+                                lambda page_data: fetch_shift_window(window_start, window_end, page_data),
+                                {},
+                            )
                         except Exception as exc:
                             failed_requests += 1
                             own_roster_coverage.append({
@@ -962,10 +1015,11 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             )
                             continue
 
-                        request_count += 1
-                        body = result.get("body") if isinstance(result, dict) else None
-                        status = int(result.get("status") or 0) if isinstance(result, dict) else 0
-                        if not isinstance(result, dict) or not result.get("ok"):
+                        pages = pagination.get("pages") or []
+                        request_count += max(1, len(pages))
+                        status = int(pagination.get("status") or 0)
+                        complete = bool(pagination.get("complete"))
+                        if not pages and not complete:
                             failed_requests += 1
                             own_roster_coverage.append({
                                 "start_date": window_start.date().isoformat(),
@@ -974,7 +1028,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 "records_returned": 0,
                                 "pagination_complete": False,
                                 "known_shift_ids_checked": False,
-                                "note": f"HTTP {status or 'unknown'}.",
+                                "note": str(pagination.get("error") or f"HTTP {status or 'unknown'}.")[:200],
                             })
                             events.append(
                                 "Extended own-roster capture returned "
@@ -989,19 +1043,24 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             )
                             continue
 
-                        shifts = _extract_management_shifts(body)
+                        shifts: list[dict[str, Any]] = []
+                        for body in pages:
+                            shifts.extend(_extract_management_shifts(body))
                         rows_seen += len(shifts)
-                        has_cursor = bool(isinstance(body, dict) and body.get("nextCursor"))
-                        if has_cursor:
+                        if len(pages) > 1:
                             paged_windows += 1
                         own_roster_coverage.append({
                             "start_date": window_start.date().isoformat(),
                             "end_date": window_end.date().isoformat(),
-                            "status": "partial" if has_cursor else "complete",
+                            "status": "complete" if complete else "partial",
                             "records_returned": len(shifts),
-                            "pagination_complete": not has_cursor,
-                            "known_shift_ids_checked": not has_cursor,
-                            "note": "Pagination cursor returned." if has_cursor else "Weekly request completed.",
+                            "pagination_complete": complete,
+                            "known_shift_ids_checked": complete,
+                            "note": (
+                                f"Completed {len(pages)} page(s)."
+                                if complete
+                                else f"Retained {len(pages)} page(s); {pagination.get('error') or 'pagination incomplete'}."
+                            ),
                         })
                         for shift in shifts:
                             shift_id = str(shift.get("id") or "")
@@ -1083,11 +1142,6 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             extracted_schedule_shifts_by_id[shift_id] = shift
                             remember_employee_id(shift.get("employee"))
                     return len(shifts)
-
-                def schedule_search_body_is_complete(body: Any) -> bool:
-                    if not isinstance(body, dict):
-                        return True
-                    return not str(body.get("nextCursor") or "").strip()
 
                 async def capture_expanded_area_refs() -> None:
                     paths = [
@@ -1174,23 +1228,15 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             "locationMode": "ALL",
                             "locationIds": [],
                         }
-                        try:
-                            result = await fetch_schedule_search(body_data)
-                        except Exception as exc:
-                            result = {"ok": False, "status": 0, "body": None}
-                            events.append(
-                                "Direct all-locations schedule search failed for "
-                                f"{window_start.date().isoformat()} to {window_end.date().isoformat()}: "
-                                f"{redacted_text(str(exc))[:180]}."
-                            )
-
-                        request_count += 1
-                        all_request_count += 1
-                        body = result.get("body") if isinstance(result, dict) else None
-                        status = int(result.get("status") or 0) if isinstance(result, dict) else 0
-                        if isinstance(result, dict) and result.get("ok"):
+                        page_result = await _paginate_schedule_search(fetch_schedule_search, body_data)
+                        page_count = len(page_result["pages"])
+                        request_count += max(1, page_count)
+                        all_request_count += max(1, page_count)
+                        status = int(page_result.get("status") or 0)
+                        for body in page_result["pages"]:
                             rows_seen += store_schedule_search_body(body)
-                            if schedule_search_body_is_complete(body):
+                        if page_result["pages"]:
+                            if page_result["complete"]:
                                 schedule_coverage.append(
                                     {
                                         "start_date": window_start.date().isoformat(),
@@ -1201,9 +1247,9 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 )
                             else:
                                 events.append(
-                                    "Direct all-locations schedule search returned a pagination cursor for "
+                                    "Direct all-locations schedule pagination was partial for "
                                     f"{window_start.date().isoformat()} to {window_end.date().isoformat()}; "
-                                    "saved rows were retained outside the returned page."
+                                    f"{page_result.get('error') or 'later page failed'}; saved pages were retained without pruning."
                                 )
                         elif location_ids:
                             failed_requests += 1
@@ -1221,25 +1267,10 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                     "locationMode": "SELECTED",
                                     "locationIds": batch_location_ids,
                                 }
-                                try:
-                                    fallback_result = await fetch_schedule_search(fallback_body)
-                                except Exception as exc:
-                                    failed_requests += 1
-                                    events.append(
-                                        "Selected-location schedule search failed for "
-                                        f"{window_start.date().isoformat()} to {window_end.date().isoformat()}: "
-                                        f"{redacted_text(str(exc))[:180]}."
-                                    )
-                                    continue
-
-                                request_count += 1
-                                fallback_payload = (
-                                    fallback_result.get("body") if isinstance(fallback_result, dict) else None
-                                )
-                                fallback_status = (
-                                    int(fallback_result.get("status") or 0) if isinstance(fallback_result, dict) else 0
-                                )
-                                if not isinstance(fallback_result, dict) or not fallback_result.get("ok"):
+                                fallback_result = await _paginate_schedule_search(fetch_schedule_search, fallback_body)
+                                request_count += max(1, len(fallback_result["pages"]))
+                                fallback_status = int(fallback_result.get("status") or 0)
+                                if not fallback_result["pages"]:
                                     failed_requests += 1
                                     events.append(
                                         "Selected-location schedule search returned "
@@ -1247,8 +1278,9 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                         f"{window_start.date().isoformat()} to {window_end.date().isoformat()}."
                                     )
                                     continue
-                                rows_seen += store_schedule_search_body(fallback_payload)
-                                if schedule_search_body_is_complete(fallback_payload):
+                                for fallback_payload in fallback_result["pages"]:
+                                    rows_seen += store_schedule_search_body(fallback_payload)
+                                if fallback_result["complete"]:
                                     schedule_coverage.append(
                                         {
                                             "start_date": window_start.date().isoformat(),
@@ -1259,9 +1291,9 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                     )
                                 else:
                                     events.append(
-                                        "Selected-location schedule search returned a pagination cursor for "
+                                        "Selected-location schedule pagination was partial for "
                                         f"{window_start.date().isoformat()} to {window_end.date().isoformat()}; "
-                                        "saved rows were retained outside the returned page."
+                                        f"{fallback_result.get('error') or 'later page failed'}; saved pages were retained without pruning."
                                     )
                         else:
                             failed_requests += 1
@@ -1360,23 +1392,14 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             "locationMode": "SELECTED",
                             "locationIds": [location_id],
                         }
-                        try:
-                            result = await fetch_schedule_search(body_data)
-                        except Exception as exc:
-                            event_retry_coverage.append({
-                                "date": date_text, "location_id": location_id,
-                                "status": "failed", "missing_positions": missing,
-                                "note": redacted_text(str(exc))[:180],
-                            })
-                            continue
-                        body = result.get("body") if isinstance(result, dict) else None
-                        complete = bool(isinstance(result, dict) and result.get("ok") and schedule_search_body_is_complete(body))
-                        recovered_count = store_schedule_search_body(body) if isinstance(result, dict) and result.get("ok") else 0
+                        result = await _paginate_schedule_search(fetch_schedule_search, body_data)
+                        complete = bool(result["complete"])
+                        recovered_count = sum(store_schedule_search_body(body) for body in result["pages"])
                         event_retry_coverage.append({
                             "date": date_text, "location_id": location_id,
                             "status": "complete" if complete else "partial",
                             "missing_positions": missing, "rows_returned": recovered_count,
-                            "note": "Selected-location retry completed." if complete else "Selected-location retry was incomplete.",
+                            "note": "Selected-location retry completed." if complete else f"Selected-location retry was incomplete: {result.get('error') or 'unknown error'}.",
                         })
                         if complete:
                             schedule_coverage.append({
@@ -1802,7 +1825,7 @@ def _capture_stats(payload: dict[str, Any]) -> dict[str, Any]:
     row_open_records = sum(
         1
         for row in schedule_rows
-        if isinstance(row, dict) and (row.get("isOpen") or not str(row.get("employeeName") or "").strip())
+        if isinstance(row, dict) and deputy_shift_is_available(row)
     )
     row_published_records = sum(1 for row in schedule_rows if isinstance(row, dict) and row.get("isPublished"))
     page_counts = _schedule_page_counts(payload)

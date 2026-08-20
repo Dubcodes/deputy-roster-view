@@ -127,7 +127,7 @@ save_notification_preferences(admin_id, {"enabled": True, "night_before": True, 
 generate_due_notifications(datetime.fromisoformat("2026-08-19T19:01:00+12:00"))
 with get_connection() as conn:
     reminder = conn.execute("SELECT body FROM notification_events WHERE app_user_id=? AND event_type='night_before'", (admin_id,)).fetchone()
-assert reminder is not None and "08:45" in str(reminder["body"])
+assert reminder is not None and "09:30" in str(reminder["body"]) and "08:45" not in str(reminder["body"])
 
 with get_connection() as conn:
     person_id = int(conn.execute("INSERT INTO crew_people(canonical_display_name,is_active,created_at,updated_at) VALUES('Restricted Contractor',1,?,?)", (datetime.now().isoformat(), datetime.now().isoformat())).lastrowid)
@@ -167,13 +167,17 @@ assert ordinary_client.get("/admin").status_code == 403
 assert ordinary_client.post(f"/admin/roster-days/1/deputy-trial/execute", data={"confirm": "CONFIRM"}).status_code == 403
 assert ordinary_client.post("/settings/deputy-api-test", headers={"origin": "http://testserver"}).status_code == 403
 contractor_client = client_for(int(contractor["id"]), "contractor-session")
-assert contractor_client.get("/month").status_code == 303 and contractor_client.get("/admin").status_code == 303
+contractor_month = contractor_client.get("/month")
+assert contractor_month.status_code == 200 and "Global crew calendar" not in contractor_month.text
+assert contractor_client.get("/month?scope=global").status_code == 403 and contractor_client.get("/admin").status_code == 403
+assert contractor_client.get("/settings").status_code == 200 and contractor_client.get("/help").status_code == 200
+assert contractor_client.get("/sync-now").status_code == 405
 assert contractor_client.get("/settings/deputy-api/callback").status_code in {303, 403}
 assert contractor_client.post("/settings/deputy-api/recheck", headers={"origin": "http://testserver"}).status_code in {303, 403}
 assert contractor_client.post("/settings/deputy-api/connect", data={"tenant": "trial.example.deputy.com"}, headers={"origin": "http://testserver"}).status_code in {303, 403}
 assert contractor_client.post("/settings/deputy-api-test", headers={"origin": "http://testserver"}).status_code in {303, 403}
 contractor_home = contractor_client.get("/contractor")
-assert contractor_home.status_code == 200 and "My work" in contractor_home.text and "Crew directory" not in contractor_home.text
+assert contractor_home.status_code == 303 and contractor_home.headers["location"] == "/month"
 with get_connection() as conn:
     own_day = int(conn.execute("INSERT INTO roster_days(roster_date,track_key,track_label,status,created_at,updated_at) VALUES('2026-08-22','own','Own Day','published',?,?)", (now, now)).lastrowid)
     other_day = int(conn.execute("INSERT INTO roster_days(roster_date,track_key,track_label,status,created_at,updated_at) VALUES('2026-08-23','other','Other Day','published',?,?)", (now, now)).lastrowid)
@@ -181,6 +185,9 @@ with get_connection() as conn:
 assert contractor_client.post(f"/contractor/workdays/{other_day}/personal-time", data={"personal_start_time": "08:00"}, headers={"origin": "http://testserver"}).status_code == 403
 assert contractor_client.post(f"/contractor/workdays/{own_day}/personal-time", data={"personal_start_time": "08:00"}, headers={"origin": "http://testserver"}).status_code == 303
 assert contractor_client.post(f"/contractor/workdays/{other_day}/self-travel", data={"self_travel": "1"}, headers={"origin": "http://testserver"}).status_code == 403
+assert contractor_client.get("/day/2026-08-22").status_code == 200
+assert contractor_client.get("/day/2026-08-22?scope=global").status_code == 403
+assert contractor_client.get("/timesheet/2026-08-22").status_code == 200
 with get_connection() as conn:
     conn.execute("UPDATE app_users SET last_activity_at=? WHERE id=?", ((datetime.now().astimezone() - timedelta(days=181)).isoformat(), int(contractor["id"])))
 assert deactivate_inactive_contractors() == 1
@@ -189,8 +196,22 @@ with get_connection() as conn: assert not int(conn.execute("SELECT is_active FRO
 host = "trial-safe.au.deputy.com"
 save_config(client_id="client", client_secret="OAUTH-SECRET", callback_origin="https://redeputy.example", write_mode="trial", allowed_hosts=host, actor_user_id=admin_id)
 admin_client = client_for(admin_id, "admin-session")
+with get_connection() as conn:
+    alias_people = conn.execute("SELECT id FROM crew_people WHERE app_user_id IN (?,?) ORDER BY id", (admin_id, int(ordinary["id"]))).fetchall()
+    assert len(alias_people) == 2
+    first_alias_id, second_alias_id = (int(row["id"]) for row in alias_people)
+    now_alias = datetime.now().astimezone().isoformat()
+    conn.execute("INSERT INTO crew_aliases(person_id,alias,normalized_alias,created_at,updated_at) VALUES(?,?,?,?,?)", (first_alias_id, "Only Alpha", "onlyalpha", now_alias, now_alias))
+    conn.execute("INSERT INTO crew_aliases(person_id,alias,normalized_alias,created_at,updated_at) VALUES(?,?,?,?,?)", (second_alias_id, "Only Beta", "onlybeta", now_alias, now_alias))
 admin_page = admin_client.get("/admin")
 assert admin_page.status_code == 200 and "OAUTH-SECRET" not in admin_page.text and "Deputy API" in admin_page.text
+assert f'id="crew-aliases-{first_alias_id}" name="aliases"' in admin_page.text
+assert f'id="crew-aliases-{second_alias_id}" name="aliases"' in admin_page.text
+first_alias_markup = admin_page.text.split(f'id="crew-aliases-{first_alias_id}"', 1)[1].split("</textarea>", 1)[0]
+second_alias_markup = admin_page.text.split(f'id="crew-aliases-{second_alias_id}"', 1)[1].split("</textarea>", 1)[0]
+assert "Only Alpha" in first_alias_markup and "Only Beta" not in first_alias_markup
+assert "Only Beta" in second_alias_markup and "Only Alpha" not in second_alias_markup
+assert 'autocomplete="off"' in first_alias_markup and 'spellcheck="false"' in first_alias_markup
 assert admin_client.post(f"/admin/users/{int(contractor['id'])}/role", data={"is_admin": "1"}, headers={"origin": "http://testserver"}).status_code == 303
 with get_connection() as conn: assert not int(conn.execute("SELECT is_admin FROM app_users WHERE id=?", (int(contractor["id"]),)).fetchone()["is_admin"])
 assert admin_client.post(f"/admin/users/{int(ordinary['id'])}/role", data={"is_admin": "1"}, headers={"origin": "http://testserver"}).status_code == 303
@@ -262,11 +283,9 @@ assert verify_read_access(admin_id, session=fake)["read_ready"]
 try: verify_write_readiness(admin_id, session=fake)
 except PermissionError as exc: assert "trial writes are currently disabled" in str(exc)
 else: raise AssertionError("Writes were ready while trial mode was off")
+# Tenant host allowlists were removed: the initiating user's exact OAuth
+# identity, Deputy permission, Admin gate and controlled mode are authoritative.
 save_config(client_id="client", client_secret="", write_mode="trial", allowed_hosts="other.au.deputy.com", actor_user_id=admin_id)
-try: verify_write_readiness(admin_id, session=fake)
-except PermissionError as exc: assert "not approved" in str(exc)
-else: raise AssertionError("Non-allow-listed tenant became write ready")
-save_config(client_id="client", client_secret="", write_mode="trial", allowed_hosts=host, actor_user_id=admin_id)
 assert verify_write_readiness(admin_id, session=fake)["write_ready"]
 
 mismatch_fake = FakeDeputy(71, 19, token="ORDINARY-TOKEN", permissions=[])
@@ -382,9 +401,9 @@ unknown_desired = {"employee": 22, "area": 10, "start": "2026-08-21T09:00:00+12:
 unknown_fake = UnknownCreate()
 unknown_prepared = prepare_operation(app_user_id=admin_id, workday_id=workday_id, assignment_key="reconcile", operation_type="create", desired=unknown_desired, session=unknown_fake)
 unknown_result = execute_operation(str(unknown_prepared["operation_uuid"]), admin_id, session=unknown_fake)
-assert unknown_result["status"] == "verified" and unknown_result["roster_id"] == 88 and unknown_result["reconciled"]
+assert unknown_result["status"] == "unknown" and unknown_result["roster_id"] == 88 and unknown_result["reconciled"]
 with get_connection() as conn:
-    assert conn.execute("SELECT ownership FROM deputy_roster_links WHERE stable_assignment_key='reconcile'").fetchone()["ownership"] == "re_deputy_created_trial"
+    assert conn.execute("SELECT ownership FROM deputy_roster_links WHERE stable_assignment_key='reconcile'").fetchone()["ownership"] == "ownership_unconfirmed"
 
 # A timeout before POST transmission never claims an arbitrary exact roster.
 preflight_fake = PreflightTimeout()

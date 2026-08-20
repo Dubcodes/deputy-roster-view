@@ -26,7 +26,7 @@
           <label class="form-row"><span>Canonical crew name</span><input name="canonical_display_name" value="{{ person.canonical_display_name }}" required></label>
           <label class="form-row"><span>App login</span><select name="app_user_id"><option value="">Not linked</option>{% for app_user in app_users %}<option value="{{ app_user.id }}"{% if person.app_user_id == app_user.id %} selected{% endif %}>{{ app_user.display_name or app_user.deputy_email }}</option>{% endfor %}</select></label>
         </div>
-        <label class="form-row"><span>Aliases</span><textarea name="aliases" rows="2">{{ person.aliases_text }}</textarea></label>
+        <label class="form-row" for="crew-aliases-{{ person.id }}"><span>Aliases</span><textarea id="crew-aliases-{{ person.id }}" name="aliases" rows="2" autocomplete="off" autocapitalize="off" spellcheck="false" data-aliases-for="{{ person.id }}">{{ person.aliases_text }}</textarea></label>
         <label class="form-row"><span>Admin note</span><textarea name="admin_note" rows="2">{{ person.admin_note or '' }}</textarea></label>
         <label class="builder-travel-toggle"><input type="checkbox" name="is_active" value="1"{% if person.is_active %} checked{% endif %}><span>Active crew identity</span></label>
         {% if person.observed_positions or person.observed_vehicles %}<p class="muted">Observed: {{ person.observed_positions|join(", ") or "no positions" }}{% if person.observed_vehicles %} · Vehicles {{ person.observed_vehicles|join(", ") }}{% endif %}</p>{% endif %}
@@ -56,11 +56,10 @@
         <label class="form-row"><span>OAuth client ID</span><input name="client_id" value="{{ deputy_api_config.client_id or '' }}"></label>
         <label class="form-row"><span>OAuth client secret</span><input type="password" name="client_secret" placeholder="{{ 'Configured — leave blank to keep' if deputy_api_config.client_secret_configured else 'Required to connect' }}"></label>
         <label class="form-row"><span>OAuth callback origin</span><input type="url" name="callback_origin" value="{{ deputy_api_config.callback_origin or '' }}" placeholder="https://redeputy.example" required></label>
-        <label class="form-row"><span>Deputy writes</span><select name="write_mode"><option value="off">Off</option><option value="trial"{% if deputy_api_config.write_mode == 'trial' %} selected{% endif %}>Trial tenant only</option></select></label>
-        <label class="form-row"><span>Exact allowed trial hostnames</span><textarea name="allowed_hosts" rows="3">{{ deputy_api_config.allowed_trial_hosts|join('\n') }}</textarea></label>
+        <label class="form-row"><span>Deputy writes</span><select name="write_mode"><option value="off">Off</option><option value="trial"{% if deputy_api_config.write_mode == 'trial' %} selected{% endif %}>Controlled OAuth writes</option></select></label>
         <button class="button" type="submit">Save Deputy API configuration</button>
       </form>
-      <p class="muted">Every action uses the initiating user's own encrypted OAuth connection. Re-Deputy Admin status does not grant Deputy authority.</p>
+      <p class="muted">Every action uses the initiating user's own encrypted OAuth connection and Deputy permissions. Re-Deputy Admin status does not grant Deputy authority; writes remain off by default and limited to assigned production shifts.</p>
       {% if deputy_mappings.host %}
       <details><summary>Employee and Operational Unit mappings</summary>
         <p class="muted">Mappings persist immutable Deputy IDs for {{ deputy_mappings.host }}. Refresh references from your Settings connection first.</p>

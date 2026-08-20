@@ -18,6 +18,7 @@ from .admin_overrides import (
     validate_override_date,
 )
 from .workday_builder import BUILT_IN_ROLES, canonical_role_key, legacy_transport_mode
+from .interpreted_workdays import deputy_shift_is_available
 
 
 DEFAULT_CREW_POOL_NAME = "Northern Crew"
@@ -619,6 +620,29 @@ def init_db(settings: Settings | None = None) -> None:
                 raw_payload TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS deputy_schedule_observations (
+                source_shift_id INTEGER NOT NULL,
+                observer_key TEXT NOT NULL,
+                observer_user_id INTEGER,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                last_absent_at TEXT,
+                PRIMARY KEY (source_shift_id, observer_key),
+                FOREIGN KEY (source_shift_id) REFERENCES deputy_schedule_shifts(source_shift_id) ON DELETE CASCADE,
+                FOREIGN KEY (observer_user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS deputy_employee_name_history (
+                deputy_employee_id INTEGER NOT NULL,
+                observed_name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                observation_count INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (deputy_employee_id, normalized_name)
+            );
+
             CREATE TABLE IF NOT EXISTS deputy_schedule_assignment_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source_shift_id INTEGER,
@@ -1085,6 +1109,8 @@ def init_db(settings: Settings | None = None) -> None:
                 changes_within_24h INTEGER NOT NULL DEFAULT 1,
                 night_before INTEGER NOT NULL DEFAULT 1,
                 two_days_before INTEGER NOT NULL DEFAULT 0,
+                one_hour_before INTEGER NOT NULL DEFAULT 1,
+                admin_alerts INTEGER NOT NULL DEFAULT 0,
                 weekly_digest INTEGER NOT NULL DEFAULT 0,
                 open_positions_month INTEGER NOT NULL DEFAULT 0,
                 reminder_time TEXT NOT NULL DEFAULT '19:00',
@@ -1233,6 +1259,19 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "deputy_schedule_shifts", "changed_since_viewed", "INTEGER DEFAULT 0")
         _ensure_column(conn, "deputy_schedule_shifts", "last_changed_at", "TEXT")
         _ensure_column(conn, "deputy_schedule_shifts", "change_summary", "TEXT")
+        _ensure_column(conn, "notification_preferences", "one_hour_before", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "notification_preferences", "admin_alerts", "INTEGER NOT NULL DEFAULT 0")
+        if conn.execute("SELECT value FROM app_settings WHERE key='admin_alert_defaults_v1'").fetchone() is None:
+            conn.execute(
+                """UPDATE notification_preferences SET admin_alerts=1
+                   WHERE enabled=1 AND app_user_id IN (
+                       SELECT id FROM app_users WHERE is_admin=1 AND is_active=1
+                   )"""
+            )
+            conn.execute(
+                "INSERT INTO app_settings(key,value,updated_at) VALUES('admin_alert_defaults_v1','1',?)",
+                (datetime.now(get_settings().timezone).isoformat(timespec="seconds"),),
+            )
         _ensure_column(conn, "app_users", "deputy_web_url", "TEXT")
         _ensure_column(conn, "app_users", "display_theme", "TEXT DEFAULT 'jade'")
         _ensure_column(conn, "deputy_user_secrets", "encrypted_ical_url", "TEXT")
@@ -1310,6 +1349,9 @@ def init_db(settings: Settings | None = None) -> None:
             "CREATE INDEX IF NOT EXISTS idx_schedule_event_changes_day ON deputy_schedule_event_changes(date, area_location_id, changed_at DESC)"
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_personal_evidence_event ON deputy_personal_assignment_evidence(date, area_location_id, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_schedule_observations_active ON deputy_schedule_observations(observer_key, active, source_shift_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_employee_name_history_name ON deputy_employee_name_history(normalized_name, deputy_employee_id)")
+        _backfill_guarded_identity_aliases(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_personal_coverage_user ON deputy_personal_capture_coverage(owner_user_id, captured_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_event_coverage_status ON deputy_event_coverage(status, date)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_event_locks_date ON deputy_event_locks(date, area_location_id)")
@@ -1371,6 +1413,41 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
     }
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _backfill_guarded_identity_aliases(conn: sqlite3.Connection) -> None:
+    """Add production-known aliases only when immutable Deputy ID and name agree."""
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    rules = {
+        7: (("danny", "hunter"), ("Esq",)),
+        13: (("gary", "mcclure"), ("Jr", "Jnr", "Junior")),
+        14: (("gary", "russo"), ("Gaz", "Gazz")),
+    }
+    for employee_id, (required_parts, aliases) in rules.items():
+        person = conn.execute(
+            "SELECT id,canonical_display_name,current_deputy_name FROM crew_people WHERE deputy_employee_id=?",
+            (employee_id,),
+        ).fetchone()
+        if person is None:
+            continue
+        combined = normalise_person_identity(
+            f"{person['canonical_display_name'] or ''} {person['current_deputy_name'] or ''}"
+        )
+        if not all(part in combined for part in required_parts):
+            continue
+        for alias in aliases:
+            normalized = normalise_person_identity(alias)
+            conflict = conn.execute(
+                "SELECT person_id FROM crew_aliases WHERE normalized_alias=?",
+                (normalized,),
+            ).fetchone()
+            if conflict is not None and int(conflict["person_id"]) != int(person["id"]):
+                continue
+            conn.execute(
+                """INSERT OR IGNORE INTO crew_aliases(person_id,alias,normalized_alias,created_at,updated_at)
+                   VALUES(?,?,?,?,?)""",
+                (int(person["id"]), alias, normalized, now, now),
+            )
 
 
 def _seed_workday_role_catalogue(conn: sqlite3.Connection) -> None:
@@ -6370,7 +6447,7 @@ def get_deputy_schedule_snapshot() -> dict[str, object]:
             SELECT
                 COUNT(*) AS total_rows,
                 SUM(CASE WHEN is_published = 1 THEN 1 ELSE 0 END) AS published_rows,
-                SUM(CASE WHEN is_open = 1 OR TRIM(COALESCE(employee_name, '')) = '' THEN 1 ELSE 0 END) AS open_rows,
+                SUM(CASE WHEN is_open = 1 AND employee_id IS NULL AND TRIM(COALESCE(employee_name, '')) = '' THEN 1 ELSE 0 END) AS open_rows,
                 SUM(CASE WHEN is_published = 0 THEN 1 ELSE 0 END) AS unpublished_rows,
                 SUM(CASE WHEN changed_since_viewed = 1 THEN 1 ELSE 0 END) AS changed_rows,
                 MIN(date) AS first_date,
@@ -6403,7 +6480,8 @@ def fetch_open_deputy_schedule_shifts(limit: int = 8) -> list[sqlite3.Row]:
             LEFT JOIN deputy_schedule_areas a ON a.area_id=s.area_id
             LEFT JOIN deputy_schedule_locations l ON l.location_id=COALESCE(s.area_location_id,a.location_id)
             WHERE s.is_open = 1
-               OR TRIM(COALESCE(s.employee_name, '')) = ''
+              AND s.employee_id IS NULL
+              AND TRIM(COALESCE(s.employee_name, '')) = ''
             ORDER BY
                 s.date ASC,
                 s.start_at ASC,
@@ -6426,10 +6504,9 @@ def fetch_open_deputy_schedule_between(start_date: str, end_date: str) -> list[s
             LEFT JOIN deputy_schedule_areas a ON a.area_id=s.area_id
             LEFT JOIN deputy_schedule_locations l ON l.location_id=COALESCE(s.area_location_id,a.location_id)
             WHERE s.date BETWEEN ? AND ?
-              AND (
-                s.is_open = 1
-                OR TRIM(COALESCE(s.employee_name, '')) = ''
-              )
+              AND s.is_open = 1
+              AND s.employee_id IS NULL
+              AND TRIM(COALESCE(s.employee_name, '')) = ''
             ORDER BY
                 s.date ASC,
                 s.start_at ASC,
@@ -7019,7 +7096,7 @@ def _effective_event_snapshots(
             "identity": identity,
             "employee_id": employee_id,
             "employee_name": employee_name,
-            "is_open": bool(int(row.get("is_open") or 0)) or not employee_name,
+            "is_open": bool(int(row.get("is_open") or 0)) and employee_id is None and not employee_name,
             "start_at": str(row.get("start_at") or ""),
             "end_at": str(row.get("end_at") or ""),
             "captured_at": str(row.get("captured_at") or ""),
@@ -7331,7 +7408,7 @@ def _evaluate_event_coverage(
             "position_label": position[1],
             "employee_id": _optional_int(row.get("employee")),
             "employee_name": str(row.get("employeeName") or "").strip(),
-            "is_open": bool(row.get("isOpen")),
+            "is_open": deputy_shift_is_available(row),
             "start_at": str(row.get("start") or ""),
             "end_at": str(row.get("end") or ""),
         })
@@ -7370,19 +7447,19 @@ def _evaluate_event_coverage(
             key for key, item in captured_by_position.items()
             if str(item.get("employee_name") or "").strip()
         }
-        expected_positions = set()
-        for area in conn.execute(
-            "SELECT name FROM deputy_schedule_areas WHERE location_id = ?",
-            (location_id,),
-        ).fetchall():
-            position = _event_position(area["name"])
-            if position and position[0] in CORE_EVENT_POSITION_KEYS:
-                expected_positions.add(position[0])
         personal_positions = {str(row["position_key"]) for row in evidence_rows}
         previous_named = {
             str(item["position_key"]) for item in before_snapshots.get((date_text, location_id), [])
             if item.get("identity") != "open"
         }
+        # A venue's Area catalogue is not an event roster: roles vary by event
+        # and using every known Area creates false gaps. Current event rows and
+        # personal evidence establish expectations; prior same-event rows are
+        # checked separately below so an exact complete retry can prove removal.
+        expected_positions = {
+            str(item["position_key"]) for item in incoming
+            if str(item["position_key"]) in CORE_EVENT_POSITION_KEYS
+        } | personal_positions
         missing_expected = expected_positions - set(captured_by_position)
         missing_personal = personal_positions - named_positions
         missing_previous = previous_named - named_positions
@@ -7460,6 +7537,7 @@ def _prune_missing_deputy_schedule_rows(
     conn: sqlite3.Connection,
     payload: dict[str, object],
     captured_shift_ids: set[int],
+    owner_user_id: int | None,
     partial_scopes: set[tuple[str, int]] | None = None,
 ) -> int:
     coverage_rows = payload.get("schedule_coverage")
@@ -7467,6 +7545,7 @@ def _prune_missing_deputy_schedule_rows(
         return 0
 
     remove_ids: set[int] = set()
+    observer_key = f"user:{owner_user_id}" if owner_user_id is not None else "system"
     partial_scopes = partial_scopes or set()
     for coverage in coverage_rows:
         if not isinstance(coverage, dict):
@@ -7506,7 +7585,28 @@ def _prune_missing_deputy_schedule_rows(
                 continue
             if mode == "selected" and _optional_int(row["schedule_location_id"]) not in location_ids:
                 continue
-            remove_ids.add(source_shift_id)
+            # Absence is evidence only for the account that made this capture. A
+            # different account may legitimately see a different slice of the
+            # shared schedule, so it must never retire somebody else's evidence.
+            observed_here = conn.execute(
+                "SELECT 1 FROM deputy_schedule_observations WHERE source_shift_id=? AND observer_key=?",
+                (source_shift_id, observer_key),
+            ).fetchone()
+            if observed_here is None:
+                continue
+            conn.execute(
+                """
+                UPDATE deputy_schedule_observations
+                SET active=0,last_absent_at=?
+                WHERE source_shift_id=? AND observer_key=?
+                """,
+                (str(payload.get("captured_at") or datetime.utcnow().isoformat()), source_shift_id, observer_key),
+            )
+            if conn.execute(
+                "SELECT 1 FROM deputy_schedule_observations WHERE source_shift_id=? AND active=1 LIMIT 1",
+                (source_shift_id,),
+            ).fetchone() is None:
+                remove_ids.add(source_shift_id)
 
     if remove_ids:
         conn.executemany(
@@ -7818,6 +7918,36 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                     change_summary,
                 ),
             )
+            observer_key = f"user:{owner_user_id}" if owner_user_id is not None else "system"
+            conn.execute(
+                """
+                INSERT INTO deputy_schedule_observations (
+                    source_shift_id,observer_key,observer_user_id,first_seen_at,last_seen_at,active,last_absent_at
+                ) VALUES (?,?,?,?,?,1,NULL)
+                ON CONFLICT(source_shift_id,observer_key) DO UPDATE SET
+                    observer_user_id=excluded.observer_user_id,
+                    last_seen_at=excluded.last_seen_at,
+                    active=1,
+                    last_absent_at=NULL
+                """,
+                (source_shift_id, observer_key, owner_user_id, captured_at, captured_at),
+            )
+            employee_id = _optional_int(shift.get("employee"))
+            employee_name = str(shift.get("employeeName") or "").strip()
+            if employee_id is not None and employee_name:
+                normalized_name = normalise_person_identity(employee_name)
+                conn.execute(
+                    """
+                    INSERT INTO deputy_employee_name_history (
+                        deputy_employee_id,observed_name,normalized_name,first_seen_at,last_seen_at,observation_count
+                    ) VALUES (?,?,?,?,?,1)
+                    ON CONFLICT(deputy_employee_id,normalized_name) DO UPDATE SET
+                        observed_name=excluded.observed_name,
+                        last_seen_at=excluded.last_seen_at,
+                        observation_count=deputy_employee_name_history.observation_count+1
+                    """,
+                    (employee_id, employee_name, normalized_name, captured_at, captured_at),
+                )
             saved += 1
         partial_scopes = _evaluate_event_coverage(
             conn, payload, authoritative_coverage, before_event_snapshots,
@@ -7831,6 +7961,7 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                 for shift_id in schedule_shift_lookup
                 if str(shift_id).isdigit()
             },
+            owner_user_id,
             partial_scopes,
         )
         event_changes_saved = _record_authoritative_event_changes(
@@ -9043,7 +9174,11 @@ def _deputy_web_shift_values(
     source_status = "published" if shift.get("isPublished") else "unpublished"
     if is_cancelled:
         source_status = "cancelled"
-    elif shift.get("isOpen"):
+    elif (
+        shift.get("isOpen")
+        and _optional_int(shift.get("employee")) is None
+        and not str(shift.get("employeeName") or "").strip()
+    ):
         source_status = "open"
     source_uid = f"deputy-web:{owner_user_id if owner_user_id is not None else 'env'}:{shift.get('id')}"
     normalised = {

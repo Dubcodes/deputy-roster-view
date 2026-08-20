@@ -29,7 +29,7 @@ def main() -> None:
     from fastapi.testclient import TestClient
 
     from app.config import get_settings
-    from app.database import create_app_user, get_connection, init_db
+    from app.database import create_app_user, get_connection, init_db, set_user_event_self_travel
     from app.main import app
     from app.notifications import (
         compact_push_payload,
@@ -209,7 +209,7 @@ def main() -> None:
     title, body = compact_push_payload(
         event_date="2026-08-15", location="Ruakaka", role="Head On", start="09:30", transport="685",
     )
-    if title != "Re-Deputy · Saturday 15 August" or body != "Ruakaka · Head On · 09:30 · 685":
+    if title != "Re-Deputy · Saturday 15 August" or body != "Ruakaka · Head On · 685 · 09:30":
         raise AssertionError(f"Compact reminder payload changed: {title!r}, {body!r}")
     _, changed = compact_push_payload(
         event_date="2026-08-15", location="Ruakaka", role="Head On", start="08:15", transport="Own way", change=True,
@@ -217,12 +217,12 @@ def main() -> None:
     _, cancelled = compact_push_payload(
         event_date="2026-08-15", location="Ruakaka", role="Head On", start="", change=True, cancelled=True,
     )
-    if changed != "Ruakaka · Head On · 08:15 · Own way · Change" or cancelled != "Ruakaka · Head On · Cancelled · Change":
+    if changed != "Ruakaka · Head On · Own way · 08:15 · Change" or cancelled != "Ruakaka · Head On · Cancelled · Change":
         raise AssertionError("Change, own-way, truck-time, or cancellation payload is not compact.")
 
     save_notification_preferences(owner_id, {
         "enabled": True, "changes_enabled": True, "changes_within_24h": True,
-        "night_before": True, "two_days_before": True, "weekly_digest": True,
+        "night_before": True, "two_days_before": True, "one_hour_before": True, "admin_alerts": True, "weekly_digest": True,
         "open_positions_month": False, "reminder_time": "19:00",
     })
     with get_connection() as conn:
@@ -233,6 +233,14 @@ def main() -> None:
                VALUES ('notify-deputy','[T-Te Rapa] DIR','2026-08-14T09:30:00+12:00',
                        '2026-08-14T18:00:00+12:00','2026-08-14',1,0,?,
                        '2026-08-12T18:00:00+12:00','2026-08-12T18:00:00+12:00','{}')""",
+            (owner_id,),
+        )
+        conn.execute(
+            """INSERT INTO shifts(source_uid,title,start_at,end_at,date,changed_since_viewed,
+                                  deleted_from_source,owner_user_id,first_seen_at,last_synced_at,source_payload)
+               VALUES ('notify-taupo-one-hour','[Taupo] Sound/VT','2026-08-16T07:30:00+12:00',
+                       '2026-08-16T18:00:00+12:00','2026-08-16',0,0,?,
+                       '2026-08-12T18:15:00+12:00','2026-08-12T18:15:00+12:00','{"vehicle_label":"Rav91"}')""",
             (owner_id,),
         )
         conn.execute(
@@ -295,12 +303,22 @@ def main() -> None:
     with get_connection() as conn:
         rows = [dict(row) for row in conn.execute("SELECT * FROM notification_events ORDER BY id").fetchall()]
     bodies = [str(row["body"]) for row in rows]
-    if not any("Ruakaka · Head On · 08:15 · Tender" in value for value in bodies):
+    if not any("Ruakaka · Head On · Tender · 08:15" in value for value in bodies):
         raise AssertionError("Manual truck assignment reminder did not use the effective 08:15 start.")
     if not any("Te Aroha · Head On · Cancelled · Change" in value for value in bodies):
         raise AssertionError("Published manual assignment removal did not generate a cancellation.")
     if any("Draft" in value for value in bodies):
         raise AssertionError("A draft manual workday generated a push event.")
+
+    one_hour = generate_due_notifications(datetime.fromisoformat("2026-08-16T06:31:00+12:00"))
+    if one_hour["reminders"] < 1:
+        raise AssertionError(f"One-hour workday reminder was not generated: {one_hour!r}")
+    with get_connection() as conn:
+        exact = [tuple(row) for row in conn.execute(
+            "SELECT title,body FROM notification_events WHERE event_type='one_hour_before' AND event_date='2026-08-16'"
+        ).fetchall()]
+    if exact != [("Re-Deputy · Sunday 16 August", "Taupo · Sound/VT · Rav91 · 07:30")]:
+        raise AssertionError(f"One-hour payload did not use interpreted workday order: {exact!r}")
 
     digest = generate_due_notifications(datetime.fromisoformat("2026-08-10T19:01:00+12:00"))
     if digest["digests"] != 1:
@@ -347,6 +365,63 @@ def main() -> None:
     )
     if (first_queue, second_queue, changed_queue) != (True, False, True):
         raise AssertionError("Stable revisions did not dedupe while changed revisions remained eligible.")
+
+    # Both Making My Own Way transitions are sourced from the append-only audit
+    # and target only active Admins who opted into Admin Alerts.
+    alert_now = datetime.now(get_settings().timezone).replace(microsecond=0)
+    with get_connection() as conn:
+        person_id = int(conn.execute(
+            "INSERT INTO crew_people(canonical_display_name,app_user_id,is_active,created_at,updated_at) VALUES('Alert Owner',?,1,?,?)",
+            (owner_id, alert_now.isoformat(), alert_now.isoformat()),
+        ).lastrowid)
+    for state in (True, False):
+        if not set_user_event_self_travel(
+            user_id=owner_id, canonical_person_id=person_id, event_kind="manual_workday",
+            event_id="alert-workday", event_date=(alert_now.date() + timedelta(days=1)).isoformat(),
+            location_key="taupo", self_travel=state,
+        ):
+            raise AssertionError("Self-travel audit transition was not accepted.")
+    alerts = generate_due_notifications(alert_now)
+    if alerts["admin_alerts"] != 2 or generate_due_notifications(alert_now)["admin_alerts"]:
+        raise AssertionError(f"Admin self-travel transitions were not deduped: {alerts!r}")
+    with get_connection() as conn:
+        alert_rows = [dict(row) for row in conn.execute(
+            "SELECT app_user_id,body FROM notification_events WHERE event_type='admin_alert' AND workday_kind='self_travel' ORDER BY id"
+        ).fetchall()]
+    if len(alert_rows) != 2 or {row["app_user_id"] for row in alert_rows} != {owner_id}:
+        raise AssertionError(f"Admin Alerts leaked to a non-Admin: {alert_rows!r}")
+    if not any("enabled" in row["body"] for row in alert_rows) or not any("reversed" in row["body"] for row in alert_rows):
+        raise AssertionError(f"Both self-travel transitions were not represented: {alert_rows!r}")
+
+    with get_connection() as conn:
+        stamp = alert_now.isoformat()
+        conn.execute(
+            "INSERT OR REPLACE INTO user_sync_state(user_id,last_status,last_message,updated_at) VALUES(?,?,?,?)",
+            (owner_id, "error", "Primary Deputy web coverage failed", stamp),
+        )
+        conn.execute(
+            "INSERT INTO deputy_event_coverage(date,area_location_id,event_start_at,status,conflict_count,reason,last_capture_at) VALUES(?,?,?,?,?,?,?)",
+            ((alert_now.date() + timedelta(days=2)).isoformat(), 58, "07:30", "partial", 1, "personal/shared assignment conflict", stamp),
+        )
+        conn.execute(
+            """INSERT INTO deputy_write_operations(
+                   operation_uuid,app_user_id,tenant_host,deputy_user_id,deputy_employee_id,
+                   permission_hash,permission_snapshot,stable_assignment_key,operation_type,
+                   desired_state,status,created_at,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ("unknown-fixture", owner_id, "fixture.au.deputy.com", 1, 2, "hash", "{}", "fixture-assignment", "create", "{}", "unknown", stamp, stamp),
+        )
+    serious_alerts = generate_due_notifications(alert_now)
+    if serious_alerts["admin_alerts"] != 3 or generate_due_notifications(alert_now)["admin_alerts"]:
+        raise AssertionError(f"Serious Admin Alerts were not queued and deduped once: {serious_alerts!r}")
+    with get_connection() as conn:
+        serious_kinds = {
+            row["workday_kind"] for row in conn.execute(
+                "SELECT workday_kind FROM notification_events WHERE event_type='admin_alert'"
+            ).fetchall()
+        }
+    if not {"sync_failure", "roster_integrity", "deputy_write_unknown"}.issubset(serious_kinds):
+        raise AssertionError(f"Serious Admin Alert sources were incomplete: {serious_kinds!r}")
 
     service_worker = (ROOT_DIR / "app" / "static" / "service-worker.js").read_text(encoding="utf-8")
     if "value.startsWith('//')" not in service_worker or "parsed.origin === self.location.origin" not in service_worker:

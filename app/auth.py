@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 import hashlib
 import hmac
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from datetime import datetime, timedelta
 
 from fastapi import HTTPException, Request, status
@@ -35,6 +35,13 @@ PUBLIC_PREFIXES = (
 
 CONTRACTOR_ALLOWED_PREFIXES = (
     "/contractor",
+    "/month",
+    "/day/",
+    "/timesheet/",
+    "/settings",
+    "/help",
+    "/sync-now",
+    "/sync-status",
     "/logout",
     "/static/",
     "/manifest.webmanifest",
@@ -137,8 +144,26 @@ async def trusted_device_middleware(
             _add_sync_notice(request.state.current_user)
             update_trusted_device_seen(int(device["id"]), expires_at)
             update_app_user_seen(int(device["user_id"]))
+            if path.startswith("/admin") and not int(device["is_admin"] or 0):
+                return Response("Admin access required", status_code=403)
             if str(device["account_type"] or "user") == "contractor" and not any(path.startswith(prefix) for prefix in CONTRACTOR_ALLOWED_PREFIXES):
                 return RedirectResponse(url="/contractor", status_code=303)
+            if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+                if request.headers.get("sec-fetch-site", "same-origin") == "cross-site":
+                    return Response("Cross-site request rejected", status_code=403)
+                origin = request.headers.get("origin", "").strip()
+                if origin:
+                    parsed = urlsplit(origin)
+                    try:
+                        origin_port = parsed.port
+                    except ValueError:
+                        return Response("Cross-site request rejected", status_code=403)
+                    if (
+                        not parsed.hostname
+                        or parsed.hostname.lower() != str(request.url.hostname or "").lower()
+                        or (origin_port is not None and request.url.port is not None and origin_port != request.url.port)
+                    ):
+                        return Response("Cross-site request rejected", status_code=403)
             response = await call_next(request)
             response.set_cookie(
                 SESSION_COOKIE_NAME,

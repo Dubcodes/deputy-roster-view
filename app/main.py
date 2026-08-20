@@ -248,7 +248,7 @@ from .deputy_integration import (
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.13.5"
+APP_BUILD = "2026.08.20.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -3374,23 +3374,21 @@ def apply_roster_note_vehicles(people: list[dict[str, object]], shifts: list[dic
         if len(matched_indexes) != 1:
             continue
         person = people[matched_indexes.pop()]
-        current_vehicle = canonical_vehicle_labels(person.get("vehicle_label"))
-        current_vehicle = ", ".join(
-            part.strip()
-            for part in current_vehicle.split(",")
-            if schedule_label_key(part) not in {"vehicle", "vehicles", "travel"}
-        )
         vehicle = canonical_vehicle_labels(allocation.get("vehicle"))
-        if current_vehicle and current_vehicle != "-":
-            vehicle_parts = [part.strip() for part in current_vehicle.split(",") if part.strip()]
-            if vehicle not in vehicle_parts:
-                vehicle_parts.append(vehicle)
-            person["vehicle_label"] = canonical_vehicle_labels(", ".join(vehicle_parts))
-        else:
-            person["vehicle_label"] = vehicle
+        # Explicit roster-note allocation is the highest-authority source. It
+        # replaces structured/travel/history guesses instead of producing an
+        # impossible comma-joined pair of vehicles.
+        structured_vehicle = canonical_vehicle_labels(person.get("vehicle_label"))
+        if structured_vehicle and structured_vehicle != vehicle:
+            person["structured_vehicle_label"] = structured_vehicle
+        person["vehicle_label"] = vehicle
+        person["vehicle_provenance"] = "roster_note_override"
 
 
-def travel_note_people(shifts: list[dict[str, object]]) -> list[dict[str, object]]:
+def travel_note_people(
+    shifts: list[dict[str, object]],
+    structured_people: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
     """Resolve only unambiguous names explicitly grouped in the signed-in user's note."""
     identities = crew_identity_records()
     name_map: dict[str, list[dict[str, object]]] = {}
@@ -3401,6 +3399,11 @@ def travel_note_people(shifts: list[dict[str, object]]) -> list[dict[str, object
             key = role_display_key(str(name or ""))
             if key:
                 name_map.setdefault(key, []).append(identity)
+    cohort_person_ids = {
+        int(item.get("canonical_person_id") or 0)
+        for item in (structured_people or [])
+        if int(item.get("canonical_person_id") or 0)
+    }
     candidates: list[tuple[str, str]] = []
     for allocation in roster_note_vehicle_allocations(shifts):
         candidates.append((str(allocation.get("name") or ""), str(allocation.get("vehicle") or "")))
@@ -3415,8 +3418,22 @@ def travel_note_people(shifts: list[dict[str, object]]) -> list[dict[str, object
     seen: set[int] = set()
     for raw_name, vehicle in candidates:
         matches = name_map.get(role_display_key(raw_name), [])
+        cohort_matches = [item for item in matches if int(item.get("id") or 0) in cohort_person_ids]
+        if cohort_matches:
+            matches = cohort_matches
         unique = {int(item["id"]): item for item in matches if item.get("id") is not None}
         if len(unique) != 1:
+            raw_key = role_display_key(raw_name)
+            if raw_key and raw_key not in {role_display_key(item.get("employee_name")) for item in people}:
+                people.append({
+                    "canonical_person_id": None,
+                    "employee_name": raw_name.strip(),
+                    "position_label": "Travel",
+                    "area_display": "Travel",
+                    "vehicle_label": canonical_vehicle_labels(vehicle),
+                    "source": "roster note",
+                    "provenance_label": "Unresolved note-only person",
+                })
             continue
         identity = next(iter(unique.values()))
         person_id = int(identity["id"])
@@ -4593,12 +4610,6 @@ def build_roster_insights(owner_user_id: int | None, today: date) -> dict[str, o
         for row in fetch_shifts_between(start_date, end_date, owner_user_id=owner_user_id)
         if not int(row["deleted_from_source"] or 0)
     ])
-    shared_shifts = [
-        decorate_shift(row)
-        for row in fetch_shifts_between(start_date, end_date, owner_user_id=None)
-        if not int(row["deleted_from_source"] or 0)
-    ]
-    tbc_end_day = today + timedelta(days=90)
     past_30_start = today - timedelta(days=30)
     past_90_start = today - timedelta(days=90)
     completed_through = today - timedelta(days=1)
@@ -4612,10 +4623,6 @@ def build_roster_insights(owner_user_id: int | None, today: date) -> dict[str, o
     ]
     upcoming = [
         shift for shift in shifts
-        if str(shift.get("date") or "") >= today.isoformat()
-    ]
-    shared_upcoming = [
-        shift for shift in shared_shifts
         if str(shift.get("date") or "") >= today.isoformat()
     ]
     track_counts: Counter[str] = Counter()
@@ -4636,29 +4643,6 @@ def build_roster_insights(owner_user_id: int | None, today: date) -> dict[str, o
             weekday_hours[weekday_label] += float(shift_hours_value(shift) or 0)
         except ValueError:
             pass
-    shared_track_counts: Counter[str] = Counter()
-    shared_role_counts: Counter[str] = Counter()
-    shared_track_hours: Counter[str] = Counter()
-    shared_owner_ids: set[int] = set()
-    for shift in shared_shifts:
-        track = str(shift.get("track_label") or "Unknown").strip() or "Unknown"
-        role = str(shift.get("role_chain_label") or shift.get("role_full_label") or shift.get("role_label") or "Shift").strip()
-        shared_track_counts[track] += 1
-        shared_role_counts[role] += 1
-        shared_track_hours[track] += float(shift_hours_value(shift) or 0)
-        try:
-            owner_id = int(shift.get("owner_user_id") or 0)
-        except (TypeError, ValueError):
-            owner_id = 0
-        if owner_id:
-            shared_owner_ids.add(owner_id)
-
-    tbc_rows = inferred_tbc_schedule(today, tbc_end_day)
-    tbc_position_counts: Counter[str] = Counter()
-    tbc_location_counts: Counter[str] = Counter()
-    for item in tbc_rows:
-        tbc_position_counts[str(item["position_label"])] += 1
-        tbc_location_counts[item["location_label"]] += 1
 
     recent_days = []
     for shift in sorted(past_90, key=lambda item: (str(item.get("date") or ""), str(item.get("start_at") or "")), reverse=True)[:12]:
@@ -4685,7 +4669,6 @@ def build_roster_insights(owner_user_id: int | None, today: date) -> dict[str, o
         "past_30_label": date_range_label(past_30_start, completed_through),
         "past_90_label": date_range_label(past_90_start, completed_through),
         "upcoming_label": date_range_label(today, end_day),
-        "tbc_label": date_range_label(today, tbc_end_day),
         "shift_count": len(shifts),
         "past_30_count": len(past_30),
         "past_30_days": past_30_days,
@@ -4705,19 +4688,6 @@ def build_roster_insights(owner_user_id: int | None, today: date) -> dict[str, o
         "location_hours_mix": distribution_chart(track_hours, limit=6),
         "weekday_chart": weekday_chart_items(weekday_hours, weekday_counts),
         "recent_days": recent_days,
-        "shared_position_mix": distribution_chart(shared_role_counts, limit=7),
-        "shared_location_hours_mix": distribution_chart(shared_track_hours, limit=7),
-        "shared_shift_count": len(shared_shifts),
-        "shared_upcoming_count": len(shared_upcoming),
-        "shared_people_count": len(shared_owner_ids),
-        "shared_hours": sum(float(shift_hours_value(shift) or 0) for shift in shared_shifts),
-        "shared_top_tracks": bar_items(shared_track_counts, limit=10),
-        "shared_top_roles": bar_items(shared_role_counts, limit=10),
-        "shared_track_hours": bar_items(Counter({label: round(value, 2) for label, value in shared_track_hours.items()}), limit=10),
-        "tbc_count": len(tbc_rows),
-        "tbc_rows": tbc_rows[:16],
-        "tbc_positions": bar_items(tbc_position_counts, limit=8),
-        "tbc_locations": bar_items(tbc_location_counts, limit=8),
     }
 
 
@@ -5540,10 +5510,7 @@ def contractor_home(request: Request, notice: str | None = None) -> object:
     user = current_user(request)
     if not user or user.get("account_type") != "contractor":
         raise HTTPException(status_code=403, detail="Contractor access required")
-    today = datetime.now(get_settings().timezone).date()
-    by_date = published_rosters_by_date(today.isoformat(), (today + timedelta(days=180)).isoformat(), int(user["id"]))
-    rows = [{"date": key, "assignments": value} for key, value in sorted(by_date.items()) if value]
-    return templates.TemplateResponse("contractor_home.html", {"request": request, "notice": notice, "current_user": user, "header_mode": "contractor", "workdays": rows})
+    return RedirectResponse(url=notice_url("/month", notice) if notice else "/month", status_code=303)
 
 
 @app.post("/contractor/workdays/{roster_day_id}/personal-time")
@@ -6167,7 +6134,7 @@ async def admin_save_deputy_api(request: Request) -> RedirectResponse:
     try:
         save_deputy_api_config(client_id=str(form.get("client_id") or ""), client_secret=str(form.get("client_secret") or ""),
                                callback_origin=str(form.get("callback_origin") or ""), write_mode=str(form.get("write_mode") or "off"),
-                               allowed_hosts=str(form.get("allowed_hosts") or ""), actor_user_id=int(actor["id"]))
+                               actor_user_id=int(actor["id"]))
     except ValueError as exc:
         return RedirectResponse(url=notice_url("/admin", str(exc)), status_code=303)
     return RedirectResponse(url=notice_url("/admin", "Deputy API configuration saved."), status_code=303)
@@ -6579,6 +6546,8 @@ def month_view(
     today = datetime.now(settings.timezone).date()
     view = "list" if view == "list" else "month"
     global_view = scope == "global"
+    if global_view and user and user.get("account_type") == "contractor":
+        raise HTTPException(status_code=403, detail="Global crew view is not available to contractor accounts")
     year = year or today.year
     month = month or today.month
     if month < 1 or month > 12:
@@ -6938,6 +6907,8 @@ def day_view(
     user = current_user(request)
     owner_user_id = int(user["id"]) if user and user.get("id") is not None else None
     global_view = scope == "global"
+    if global_view and user and user.get("account_type") == "contractor":
+        raise HTTPException(status_code=403, detail="Global crew view is not available to contractor accounts")
     if global_view:
         global_manual_rosters = published_rosters_by_date(date_text, date_text, None).get(date_text, [])
         selected_manual_rosters = [item for item in global_manual_rosters if manual_id is not None and int(item.get("id") or 0) == manual_id]
@@ -7063,6 +7034,23 @@ def day_view(
         date_text,
         location_ids=schedule_location_ids or None,
     )
+    if travel_schedule_context:
+        timed_shifts = [
+            (parse_iso_datetime(str(item.get("start_at") or "")), parse_iso_datetime(str(item.get("end_at") or "")))
+            for item in shifts
+        ]
+        timed_shifts = [(start, end) for start, end in timed_shifts if start and end]
+        if timed_shifts:
+            cohort_rows = []
+            for row in deputy_schedule_rows:
+                row_start = parse_iso_datetime(str(row["start_at"] or ""))
+                row_end = parse_iso_datetime(str(row["end_at"] or ""))
+                if row_start and row_end and any(
+                    row_start < shift_end and shift_start < row_end
+                    for shift_start, shift_end in timed_shifts
+                ):
+                    cohort_rows.append(row)
+            deputy_schedule_rows = cohort_rows
     deputy_schedule_people = schedule_people(
         deputy_schedule_rows,
         expected_areas=schedule_expected_areas,
@@ -7079,7 +7067,7 @@ def day_view(
     apply_roster_note_vehicles(deputy_schedule_people, shifts)
     note_travel_cohort = False
     if travel_schedule_context:
-        note_people = travel_note_people(shifts)
+        note_people = travel_note_people(shifts, deputy_schedule_people)
         if note_people:
             for note_person in note_people:
                 person_id = int(note_person.get("canonical_person_id") or 0)
@@ -7090,10 +7078,11 @@ def day_view(
                     or (name_key and schedule_label_key(str(person.get("employee_name") or "")) == name_key)
                 ]
                 if len(matches) == 1:
-                    if not str(note_person.get("vehicle_label") or "").strip():
-                        note_person["vehicle_label"] = canonical_vehicle_labels(matches[0].get("vehicle_label"))
-                    note_person["provenance_label"] = "Roster note + Deputy schedule"
-            deputy_schedule_people = note_people
+                    if str(note_person.get("vehicle_label") or "").strip():
+                        matches[0]["vehicle_label"] = canonical_vehicle_labels(note_person.get("vehicle_label"))
+                    matches[0]["provenance_label"] = "Roster note + Deputy schedule"
+                else:
+                    deputy_schedule_people.append(note_person)
             note_travel_cohort = True
     if travel_schedule_context:
         show_vehicle_assignment_as_travel(shifts)
@@ -7290,6 +7279,31 @@ async def update_day_self_travel(request: Request, date_text: str) -> RedirectRe
     return RedirectResponse(url=notice_url(f"/day/{date_text}", message), status_code=303)
 
 
+@app.get("/admin/roster-days/conflicts")
+def roster_day_same_date_conflicts(request: Request, date_text: str, exclude_id: int = 0) -> JSONResponse:
+    require_admin_user(request)
+    try:
+        date.fromisoformat(date_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid date") from exc
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT a.person_id
+            FROM workday_assignments a JOIN roster_days d ON d.id=a.roster_day_id
+            WHERE d.roster_date=? AND d.id!=? AND a.person_id IS NOT NULL AND a.assignment_state='assigned'
+            UNION
+            SELECT DISTINCT p.id FROM crew_people p JOIN shifts s ON s.owner_user_id=p.app_user_id
+            WHERE s.date=? AND s.deleted_from_source=0
+            UNION
+            SELECT DISTINCT p.id FROM crew_people p JOIN deputy_schedule_shifts s ON s.employee_id=p.deputy_employee_id
+            WHERE s.date=? AND s.employee_id IS NOT NULL
+            """,
+            (date_text, exclude_id, date_text, date_text),
+        ).fetchall()
+    return JSONResponse({"person_ids": sorted(int(row[0]) for row in rows if row[0] is not None)})
+
+
 @app.get("/admin/roster-days/new")
 def admin_new_roster_day(request: Request, notice: str | None = None) -> object:
     return roster_day_builder_response(request, None, notice)
@@ -7301,7 +7315,7 @@ def admin_edit_roster_day(request: Request, roster_day_id: int, notice: str | No
 
 
 @app.post("/admin/workday-roles/save")
-async def admin_save_workday_role(request: Request) -> RedirectResponse:
+async def admin_save_workday_role(request: Request) -> object:
     require_admin_user(request)
     form = await request.form()
     display_label = str(form.get("display_label") or "").strip()
@@ -7309,7 +7323,7 @@ async def admin_save_workday_role(request: Request) -> RedirectResponse:
     aliases = [value.strip() for value in str(form.get("aliases") or "").split(",") if value.strip()]
     order_text = str(form.get("display_order") or "999999").strip()
     try:
-        save_workday_role(
+        saved_key = save_workday_role(
             role_key=role_key,
             display_label=display_label,
             aliases=aliases,
@@ -7319,6 +7333,13 @@ async def admin_save_workday_role(request: Request) -> RedirectResponse:
         message = "Reusable role saved."
     except ValueError as exc:
         message = str(exc)
+        saved_key = ""
+    if request.headers.get("x-requested-with") == "fetch":
+        roles = [dict(item) for item in list_workday_roles(include_disabled=True)]
+        return JSONResponse(
+            {"ok": bool(saved_key), "message": message, "saved_role_key": saved_key, "roles": roles},
+            status_code=200 if saved_key else 400,
+        )
     referer = str(request.headers.get("referer") or "")
     referer_path = urlsplit(referer).path
     return_path = referer_path if referer_path.startswith("/admin/roster-days/") else "/admin/roster-days/new"
@@ -7823,8 +7844,9 @@ def settings_view(request: Request, notice: str | None = None) -> object:
     calendar_url_source = get_calendar_url_source(settings)
     if owner_user_id is not None:
         calendar_url_source = "This account" if user_calendar_url_configured else "Not saved for this account"
-    deputy_web_capture = format_capture_payload(get_last_deputy_web_capture())
-    schedule_snapshot = get_deputy_schedule_snapshot()
+    contractor_account = bool(user and user.get("account_type") == "contractor")
+    deputy_web_capture = None if contractor_account else format_capture_payload(get_last_deputy_web_capture())
+    schedule_snapshot = {} if contractor_account else get_deputy_schedule_snapshot()
     capture_stats = deputy_web_capture.get("stats", {}) if deputy_web_capture else {}
     roster_snapshot = {
         "status_label": "Ready" if (settings.deputy_login_configured or user_can_sync) else "Deputy login needed",
@@ -7966,13 +7988,15 @@ async def update_notification_settings(request: Request) -> RedirectResponse:
     if not user or user.get("id") is None:
         raise HTTPException(status_code=403, detail="Login required")
     form = await request.form()
-    save_notification_preferences(int(user["id"]), {
+    notification_values = {
         key: str(form.get(key) or "") == "1"
         for key in (
             "enabled", "changes_enabled", "changes_within_24h", "night_before",
-            "two_days_before", "weekly_digest", "open_positions_month",
+            "two_days_before", "one_hour_before", "admin_alerts", "weekly_digest", "open_positions_month",
         )
-    } | {"reminder_time": str(form.get("reminder_time") or "19:00")})
+    } | {"reminder_time": str(form.get("reminder_time") or "19:00")}
+    notification_values["admin_alerts"] = bool(user.get("is_admin")) and bool(notification_values["admin_alerts"])
+    save_notification_preferences(int(user["id"]), notification_values)
     return RedirectResponse(url=notice_url("/settings", "Notification preferences saved."), status_code=303)
 
 
@@ -8499,6 +8523,7 @@ def test_deputy_api(request: Request) -> RedirectResponse:
 
 @app.post("/settings/deputy-web-capture")
 async def capture_deputy_web(request: Request) -> RedirectResponse:
+    require_same_origin(request)
     user = current_user(request)
     user_id = int(user["id"]) if user and user.get("id") is not None else None
     settings = get_settings()
@@ -8507,8 +8532,9 @@ async def capture_deputy_web(request: Request) -> RedirectResponse:
     return RedirectResponse(url=notice_url("/settings", str(result["message"])), status_code=303)
 
 
-@app.api_route("/sync-now", methods=["GET", "POST"], response_model=None)
+@app.post("/sync-now", response_model=None)
 def sync_now(request: Request, background_tasks: BackgroundTasks, next: str | None = None) -> object:
+    require_same_origin(request)
     user = current_user(request)
     user_id = int(user["id"]) if user and user.get("id") is not None else None
     started = queue_manual_sync(background_tasks, user_id=user_id)

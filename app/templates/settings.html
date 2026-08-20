@@ -38,6 +38,8 @@
               <label class="compact-check"><input type="checkbox" name="changes_within_24h" value="1"{% if notification_status.preferences.changes_within_24h %} checked{% endif %}> Changes within 24 hours</label>
               <label class="compact-check"><input type="checkbox" name="night_before" value="1"{% if notification_status.preferences.night_before %} checked{% endif %}> Night-before reminder</label>
               <label class="compact-check"><input type="checkbox" name="two_days_before" value="1"{% if notification_status.preferences.two_days_before %} checked{% endif %}> Two-days-before reminder</label>
+              <label class="compact-check"><input type="checkbox" name="one_hour_before" value="1"{% if notification_status.preferences.one_hour_before %} checked{% endif %}> One hour before work starts</label>
+              {% if current_user and current_user.is_admin %}<label class="compact-check"><input type="checkbox" name="admin_alerts" value="1"{% if notification_status.preferences.admin_alerts %} checked{% endif %}> Admin operational alerts</label>{% endif %}
               <label class="compact-check"><input type="checkbox" name="weekly_digest" value="1"{% if notification_status.preferences.weekly_digest %} checked{% endif %}> Changes this coming week</label>
               <label class="compact-check"><input type="checkbox" name="open_positions_month" value="1"{% if notification_status.preferences.open_positions_month %} checked{% endif %}> Open positions this month</label>
               <label class="form-row"><span>Reminder time</span><input type="time" name="reminder_time" value="{{ notification_status.preferences.reminder_time or '19:00' }}"></label>
@@ -288,115 +290,6 @@
         </section>
       </div>
 
-    </div>
-  </details>
-
-  <details class="table-panel shared-stats-panel">
-    <summary>
-      Shared Crew Stats
-      <span>{{ roster_insights.shared_people_count }} people · {{ roster_insights.shared_upcoming_count }} upcoming</span>
-    </summary>
-    <div class="diagnostics-content">
-      <div class="section-heading">
-        <h2>Shared Crew</h2>
-        <span>{{ roster_insights.range_label }}</span>
-      </div>
-      <div class="stats-card-grid">
-        <div class="stat-card">
-          <span>Captured shifts</span>
-          <strong>{{ roster_insights.shared_shift_count }}</strong>
-          <small>{{ roster_insights.range_label }}</small>
-        </div>
-        <div class="stat-card">
-          <span>Upcoming</span>
-          <strong>{{ roster_insights.shared_upcoming_count }}</strong>
-          <small>{{ roster_insights.upcoming_label }}</small>
-        </div>
-        <div class="stat-card">
-          <span>Crew</span>
-          <strong>{{ roster_insights.shared_people_count }}</strong>
-          <small>accounts with roster data</small>
-        </div>
-        <div class="stat-card">
-          <span>Hours</span>
-          <strong>{{ roster_insights.shared_hours|hours }}</strong>
-          <small>{{ roster_insights.range_label }}</small>
-        </div>
-        {% if roster_insights.tbc_count %}
-          <div class="stat-card">
-            <span>TBC positions</span>
-            <strong>{{ roster_insights.tbc_count }}</strong>
-            <small>{{ roster_insights.tbc_label }}</small>
-          </div>
-        {% endif %}
-      </div>
-
-      <div class="stats-visual-grid">
-        <section class="stats-chart">
-          <h3>Busiest Locations</h3>
-          {% for item in roster_insights.shared_top_tracks %}
-            <div class="stat-bar-row">
-              <span>{{ item.label }}</span>
-              <div class="stat-bar"><i style="width: {{ item.percent }}%;"></i></div>
-              <strong>{{ item.value }}</strong>
-            </div>
-          {% else %}
-            <p class="muted">No shared location data yet.</p>
-          {% endfor %}
-        </section>
-
-        <section class="stats-chart donut-panel">
-          <h3>Position Mix</h3>
-          {% if roster_insights.shared_position_mix['items'] %}
-            <div class="donut-layout">
-              <div class="donut-chart" style="--donut-gradient: {{ roster_insights.shared_position_mix.gradient }};">
-                <div><strong>{{ roster_insights.shared_shift_count }}</strong><span>shifts</span></div>
-              </div>
-              <div class="chart-legend">
-                {% for item in roster_insights.shared_position_mix['items'] %}
-                  <div><i style="{{ item.colour_style }}"></i><span>{{ item.label }}</span><strong>{{ item.value|int }}</strong></div>
-                {% endfor %}
-              </div>
-            </div>
-          {% else %}
-            <p class="muted">No shared position data yet.</p>
-          {% endif %}
-        </section>
-
-        <section class="stats-chart stats-chart-wide">
-          <h3>Hours By Location</h3>
-          {% if roster_insights.shared_location_hours_mix['items'] %}
-            <div class="segment-chart">
-              {% for item in roster_insights.shared_location_hours_mix['items'] %}
-                <i style="{{ item.colour_style }}" title="{{ item.label }}: {{ item.value|hours }}"></i>
-              {% endfor %}
-            </div>
-            <div class="segment-legend">
-              {% for item in roster_insights.shared_location_hours_mix['items'] %}
-                <div><i style="{{ item.colour_style }}"></i><span>{{ item.label }}</span><strong>{{ item.value|hours }}</strong></div>
-              {% endfor %}
-            </div>
-          {% else %}
-            <p class="muted">No shared hours yet.</p>
-          {% endif %}
-        </section>
-      </div>
-
-      {% if roster_insights.tbc_rows %}
-        <div class="section-heading section-heading-tight">
-          <h3>TBC Positions</h3>
-          <span>{{ roster_insights.tbc_label }}</span>
-        </div>
-        <div class="tbc-slot-list">
-          {% for slot in roster_insights.tbc_rows %}
-            <div class="tbc-slot-row">
-              <span>{{ slot.date_label }}</span>
-              <strong>{{ slot.location_label }}</strong>
-              <span>{{ slot.position_label }}</span>
-            </div>
-          {% endfor %}
-        </div>
-      {% endif %}
     </div>
   </details>
 

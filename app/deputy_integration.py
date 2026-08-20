@@ -73,14 +73,8 @@ def load_config(*, include_secret: bool = False) -> dict[str, object]:
     return item
 
 
-def save_config(*, client_id: str, client_secret: str, write_mode: str, allowed_hosts: str, actor_user_id: int, callback_origin: str = "") -> None:
+def save_config(*, client_id: str, client_secret: str, write_mode: str, actor_user_id: int, callback_origin: str = "", allowed_hosts: str = "") -> None:
     mode = "trial" if write_mode == "trial" else "off"
-    hosts = []
-    for value in str(allowed_hosts or "").replace(",", "\n").splitlines():
-        if value.strip():
-            host = normalize_tenant_host(value)
-            if host not in hosts:
-                hosts.append(host)
     existing = load_config(include_secret=True)
     secret = client_secret or str(existing.get("client_secret") or "")
     callback = normalize_callback_origin(callback_origin) if callback_origin.strip() else str(existing.get("callback_origin") or "")
@@ -91,13 +85,16 @@ def save_config(*, client_id: str, client_secret: str, write_mode: str, allowed_
                ON CONFLICT(id) DO UPDATE SET client_id=excluded.client_id,
                encrypted_client_secret=excluded.encrypted_client_secret,write_mode=excluded.write_mode,
                callback_origin=excluded.callback_origin,allowed_trial_hosts=excluded.allowed_trial_hosts,updated_by_user_id=excluded.updated_by_user_id,updated_at=excluded.updated_at""",
-            (client_id.strip(), encrypt_text(secret), callback, mode, json.dumps(hosts), actor_user_id, now_iso()),
+            (client_id.strip(), encrypt_text(secret), callback, mode, "[]", actor_user_id, now_iso()),
         )
 
 
 def trial_host_allowed(host: str) -> bool:
-    config = load_config()
-    return config.get("write_mode") == "trial" and normalize_tenant_host(host) in set(config.get("allowed_trial_hosts") or [])
+    # Kept as a compatibility helper for callers from older releases. Tenant
+    # identity still has to be a valid Deputy hostname and OAuth is per-user,
+    # but there is no second Admin-maintained hostname allowlist.
+    normalize_tenant_host(host)
+    return load_config().get("write_mode") == "trial"
 
 
 def begin_oauth(*, app_user_id: int, tenant: str = "", origin: str = "") -> str:
@@ -221,7 +218,6 @@ def connection_status(app_user_id: int) -> dict[str, object]:
     read_ready = connection_state == "connected" and bool(item.get("last_verified_at"))
     config = load_config()
     roster_manage = WRITE_PERMISSION in permissions
-    allowed_hosts = set(str(value) for value in config.get("allowed_trial_hosts") or [])
     if not read_ready:
         write_reason = {
             "identity_mismatch": "Deputy identity mismatch. Reconnect and review this connection.",
@@ -232,8 +228,6 @@ def connection_status(app_user_id: int) -> dict[str, object]:
         write_reason = "Your Deputy account does not have roster-management permission."
     elif config.get("write_mode") != "trial":
         write_reason = "Available, but trial writes are currently disabled."
-    elif str(item["tenant_host"]) not in allowed_hosts:
-        write_reason = "This tenant is not approved for trial writes."
     else:
         write_reason = "Trial ready"
     read_reason = {
@@ -244,7 +238,7 @@ def connection_status(app_user_id: int) -> dict[str, object]:
     return {
         "connected": True,
         "read_ready": read_ready,
-        "write_ready": read_ready and roster_manage and config.get("write_mode") == "trial" and str(item["tenant_host"]) in allowed_hosts,
+        "write_ready": read_ready and roster_manage and config.get("write_mode") == "trial",
         "write_label": "Trial ready" if write_reason == "Trial ready" else (write_reason if write_reason.startswith("Available,") else "Not available"),
         "connection_state": connection_state,
         "read_reason": read_reason,
@@ -324,8 +318,6 @@ def verify_write_readiness(app_user_id: int, *, session: object = requests) -> d
     config = load_config()
     if config.get("write_mode") != "trial":
         raise PermissionError("Deputy roster writes are available, but trial writes are currently disabled.")
-    if verified["tenant_host"] not in set(str(value) for value in config.get("allowed_trial_hosts") or []):
-        raise PermissionError("This Deputy tenant is not approved for trial writes.")
     return {**verified, "write_ready": True}
 
 
@@ -639,8 +631,12 @@ def _reconcile_after_network_error(client: DeputyClient, operation: dict[str, ob
                 status, body = client.request("GET", f"/api/management/v2/shifts/{adopted}")
                 if status == 200 and _business_equal(normalize_v2_response(body), desired):
                     _save_roster_link(operation, desired, adopted, extract_v2_shift(body),
-                                      ownership="re_deputy_created_trial", replace_ownership=True)
-                    return _finish_operation(str(operation["operation_uuid"]), "verified", adopted, {"reconciled": True}, True)
+                                      ownership="ownership_unconfirmed", replace_ownership=True)
+                    return _finish_operation(
+                        str(operation["operation_uuid"]), "unknown", adopted,
+                        {"reconciled": True, "message": "An equivalent Deputy roster exists, but the lost create response means ownership is unconfirmed. It cannot be deleted by Re-Deputy."},
+                        False, "UNKNOWN_NETWORK_RESULT",
+                    )
         if len(exact) > 1:
             return _finish_operation(str(operation["operation_uuid"]), "ambiguous", None, {"message": "Multiple exact Deputy candidates require manual reconciliation."}, False, "AMBIGUOUS")
         return _finish_operation(str(operation["operation_uuid"]), "unknown", None, {"message": "No exact Deputy candidate found; controlled retry requires review."}, False, "UNKNOWN_NETWORK_RESULT")

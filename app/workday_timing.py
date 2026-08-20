@@ -13,6 +13,16 @@ def effective_personal_start(
     if explicit:
         return explicit
 
+    return effective_rostered_start(workday, assignment)
+
+
+def effective_rostered_start(
+    workday: dict[str, object],
+    assignment: dict[str, object] | None = None,
+) -> str:
+    """Return the published roster-rule start, ignoring personal timekeeping."""
+    assignment = assignment or {}
+
     start = str(workday.get("office_start") or "").strip()
     if not start or str(workday.get("day_type") or "race_day") != "race_day":
         return start

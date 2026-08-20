@@ -10,7 +10,8 @@ from typing import Callable
 from .config import Settings, get_settings
 from .database import get_connection, list_open_workday_positions, resolve_workday_snapshot_assignments
 from .push_identity import ensure_push_identity
-from .workday_timing import effective_personal_start
+from .interpreted_workdays import interpret_deputy_workdays
+from .workday_timing import effective_rostered_start
 
 
 DEFAULT_PREFERENCES = {
@@ -19,6 +20,8 @@ DEFAULT_PREFERENCES = {
     "changes_within_24h": 1,
     "night_before": 1,
     "two_days_before": 0,
+    "one_hour_before": 1,
+    "admin_alerts": 0,
     "weekly_digest": 0,
     "open_positions_month": 0,
     "reminder_time": "19:00",
@@ -43,16 +46,18 @@ def save_notification_preferences(user_id: int, values: dict[str, object]) -> No
             """
             INSERT INTO notification_preferences(
                 app_user_id,enabled,changes_enabled,changes_within_24h,night_before,
-                two_days_before,weekly_digest,open_positions_month,reminder_time,updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                two_days_before,one_hour_before,admin_alerts,weekly_digest,open_positions_month,reminder_time,updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(app_user_id) DO UPDATE SET enabled=excluded.enabled,
                 changes_enabled=excluded.changes_enabled,changes_within_24h=excluded.changes_within_24h,
                 night_before=excluded.night_before,two_days_before=excluded.two_days_before,
+                one_hour_before=excluded.one_hour_before,admin_alerts=excluded.admin_alerts,
                 weekly_digest=excluded.weekly_digest,open_positions_month=excluded.open_positions_month,
                 reminder_time=excluded.reminder_time,updated_at=excluded.updated_at
             """,
             (user_id, fields["enabled"], fields["changes_enabled"], fields["changes_within_24h"],
-             fields["night_before"], fields["two_days_before"], fields["weekly_digest"],
+             fields["night_before"], fields["two_days_before"], fields["one_hour_before"],
+             fields["admin_alerts"], fields["weekly_digest"],
              fields["open_positions_month"], reminder, now),
         )
 
@@ -121,10 +126,10 @@ def compact_push_payload(*, event_date: date | str | None, location: str, role: 
     parts = [location or "Work day", role or "Shift"]
     if cancelled:
         parts.append("Cancelled")
-    elif start:
-        parts.append(start)
     if transport and not cancelled:
         parts.append(transport)
+    if start and not cancelled:
+        parts.append(start)
     if change:
         parts.append("Change")
     return title, " · ".join(parts)
@@ -132,6 +137,28 @@ def compact_push_payload(*, event_date: date | str | None, location: str, role: 
 
 def _portable_title(event_date: date) -> str:
     return f"Re-Deputy · {event_date.strftime('%A')} {event_date.day} {event_date.strftime('%B')}"
+
+
+def _group_deputy_notification_workdays(shifts: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Collapse source rows into one stable personal workday per date/location."""
+    result = []
+    for workday in interpret_deputy_workdays(shifts):
+        evidence = list(workday.get("structured_deputy_evidence") or [])
+        item = dict(evidence[0]) if evidence else {}
+        item.update({
+            "date": workday["date"],
+            "notification_location": workday["location"],
+            "notification_role": workday["production_position"],
+            "notification_transport": workday["vehicle"],
+            "notification_rostered_start": workday["rostered_start"],
+            "notification_workday_id": workday["logical_workday_id"],
+            "changed_since_viewed": max((int(row.get("changed_since_viewed") or 0) for row in evidence), default=0),
+            "deleted_from_source": int(bool(evidence) and all(int(row.get("deleted_from_source") or 0) for row in evidence)),
+        })
+        for field in ("first_seen_at", "last_changed_at", "last_synced_at"):
+            item[field] = max((str(row.get(field) or "") for row in evidence), default="")
+        result.append(item)
+    return result
 
 
 def queue_notification(*, user_id: int, event_type: str, workday_kind: str = "",
@@ -247,7 +274,7 @@ def _manual_effective_values(
 ) -> tuple[str, str, str, str]:
     location = _manual_location(snapshot)
     role = str(assignment.get("role_label") or assignment.get("position_label") or "Shift").strip()
-    start = effective_personal_start(snapshot, assignment)
+    start = effective_rostered_start(snapshot, assignment)
     return location, role, start, _manual_transport(assignment, own_way)
 
 
@@ -315,6 +342,15 @@ def _queue_manual_notifications(
                         target_url=f"/day/{event_date.isoformat()}", scheduled_at=due,
                         revision=f"{kind}:{event_date.isoformat()}",
                     ))
+            if pref.get("one_hour_before") and start:
+                due = datetime.combine(event_date, time.fromisoformat(start), settings.timezone) - timedelta(hours=1)
+                if due <= now < due + timedelta(minutes=15):
+                    created["reminders"] += int(queue_notification(
+                        user_id=user_id, event_type="one_hour_before", workday_kind="manual", workday_id=event_id,
+                        event_date=event_date.isoformat(), title=title, body=body,
+                        target_url=f"/day/{event_date.isoformat()}", scheduled_at=due,
+                        revision=f"one_hour_before:{event_date.isoformat()}:{start}",
+                    ))
         published_at = _local_datetime(row.get("published_at"), settings)
         if not pref.get("changes_enabled") or not published_at or not preferences_updated or published_at < preferences_updated:
             continue
@@ -349,10 +385,97 @@ def push_open_position_eligible(position: dict[str, object]) -> bool:
     return str(position.get("area_display") or "").strip().casefold() not in {"", "tbc"}
 
 
+def _queue_admin_operational_alerts(now: datetime) -> int:
+    cutoff = (now - timedelta(days=7)).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        admin_ids = [int(row["id"]) for row in conn.execute(
+            """SELECT u.id FROM app_users u JOIN notification_preferences p ON p.app_user_id=u.id
+               WHERE u.is_admin=1 AND u.is_active=1 AND p.enabled=1 AND p.admin_alerts=1"""
+        ).fetchall()]
+        travel_rows = [dict(row) for row in conn.execute(
+            """SELECT a.*,u.display_name FROM user_event_transport_preference_audit a
+               LEFT JOIN app_users u ON u.id=a.user_id WHERE a.changed_at>=? ORDER BY a.id DESC LIMIT 100""",
+            (cutoff,),
+        ).fetchall()]
+        report_rows = [dict(row) for row in conn.execute(
+            """SELECT r.id,r.created_at,r.report_text,COALESCE(u.display_name,'Unknown user') display_name
+               FROM error_reports r LEFT JOIN app_users u ON u.id=r.user_id
+               WHERE r.created_at>=? ORDER BY r.id DESC LIMIT 100""",
+            (cutoff,),
+        ).fetchall()]
+        sync_rows = [dict(row) for row in conn.execute(
+            """SELECT s.user_id,s.last_status,s.last_message,s.updated_at,u.display_name
+               FROM user_sync_state s JOIN app_users u ON u.id=s.user_id
+               WHERE u.is_active=1 AND s.last_status='error' AND s.updated_at>=?""",
+            (cutoff,),
+        ).fetchall()]
+        integrity_rows = [dict(row) for row in conn.execute(
+            """SELECT date,area_location_id,event_start_at,reason,conflict_count,last_capture_at
+               FROM deputy_event_coverage
+               WHERE status='partial' AND (conflict_count>0 OR TRIM(COALESCE(reason,''))!='')
+                 AND last_capture_at>=?""",
+            (cutoff,),
+        ).fetchall()]
+        write_rows = [dict(row) for row in conn.execute(
+            """SELECT operation_uuid,operation_type,stable_assignment_key,error_class,updated_at
+               FROM deputy_write_operations WHERE status='unknown' AND updated_at>=?""",
+            (cutoff,),
+        ).fetchall()]
+    created = 0
+    for admin_id in admin_ids:
+        for row in travel_rows:
+            enabled = bool(row.get("new_self_travel"))
+            action = "enabled" if enabled else "reversed"
+            event_date = str(row.get("event_date") or "")
+            created += int(queue_notification(
+                user_id=admin_id, event_type="admin_alert", workday_kind="self_travel",
+                workday_id=str(row["id"]), event_date=event_date,
+                title="Re-Deputy · Admin alert",
+                body=f"{row.get('display_name') or 'Crew member'} · Making My Own Way {action} · {row.get('location_key') or event_date}",
+                target_url=f"/day/{event_date}" if event_date else "/admin", scheduled_at=now,
+                revision=f"self-travel:{row['id']}:{int(enabled)}",
+            ))
+        for row in report_rows:
+            created += int(queue_notification(
+                user_id=admin_id, event_type="admin_alert", workday_kind="error_report",
+                workday_id=str(row["id"]), event_date="", title="Re-Deputy · New error report",
+                body=f"{row['display_name']} · {str(row.get('report_text') or '')[:120]}",
+                target_url="/admin#error-reports", scheduled_at=now,
+                revision=f"error-report:{row['id']}",
+            ))
+        for row in sync_rows:
+            created += int(queue_notification(
+                user_id=admin_id, event_type="admin_alert", workday_kind="sync_failure",
+                workday_id=str(row["user_id"]), event_date="", title="Re-Deputy · Sync failed",
+                body=f"{row.get('display_name') or 'Crew member'} · {str(row.get('last_message') or 'Primary roster sync failed')[:120]}",
+                target_url="/admin#sync-status", scheduled_at=now,
+                revision=f"sync-error:{row['user_id']}:{row.get('updated_at')}",
+            ))
+        for row in integrity_rows:
+            created += int(queue_notification(
+                user_id=admin_id, event_type="admin_alert", workday_kind="roster_integrity",
+                workday_id=f"{row['date']}:{row['area_location_id']}:{row.get('event_start_at') or ''}",
+                event_date=str(row["date"]), title="Re-Deputy · Roster integrity warning",
+                body=str(row.get("reason") or "Conflicting roster evidence")[:140],
+                target_url="/admin#roster-integrity", scheduled_at=now,
+                revision=f"integrity:{row['date']}:{row['area_location_id']}:{row.get('last_capture_at')}",
+            ))
+        for row in write_rows:
+            created += int(queue_notification(
+                user_id=admin_id, event_type="admin_alert", workday_kind="deputy_write_unknown",
+                workday_id=str(row["operation_uuid"]), event_date="", title="Re-Deputy · Deputy write unresolved",
+                body=f"{row.get('operation_type') or 'Write'} · {row.get('stable_assignment_key') or 'assignment'} · inspect before retry",
+                target_url="/admin#deputy-write-audit", scheduled_at=now,
+                revision=f"write-unknown:{row['operation_uuid']}:{row.get('updated_at')}",
+            ))
+    return created
+
+
 def generate_due_notifications(now: datetime | None = None) -> dict[str, int]:
     settings = get_settings()
     now = (now or datetime.now(settings.timezone)).astimezone(settings.timezone).replace(microsecond=0)
-    created = {"reminders": 0, "changes": 0, "digests": 0, "open_positions": 0}
+    created = {"reminders": 0, "changes": 0, "digests": 0, "open_positions": 0, "admin_alerts": 0}
+    created["admin_alerts"] = _queue_admin_operational_alerts(now)
     with get_connection() as conn:
         prefs = [dict(row) for row in conn.execute(
             "SELECT * FROM notification_preferences WHERE enabled=1"
@@ -363,27 +486,37 @@ def generate_due_notifications(now: datetime | None = None) -> dict[str, int]:
         _queue_manual_notifications(pref=pref, now=now, reminder_at=reminder_at, created=created)
         with get_connection() as conn:
             shifts = [dict(row) for row in conn.execute(
-                """SELECT s.*,m.personal_start_time,m.personal_finish_time FROM shifts s
-                   LEFT JOIN shift_marks m ON m.shift_id=s.id
+                """SELECT s.* FROM shifts s
                    WHERE s.owner_user_id=? AND s.date BETWEEN ? AND ?
                    AND (s.deleted_from_source=0 OR s.changed_since_viewed=1) ORDER BY s.start_at,s.id""",
                 (user_id, (now.date() - timedelta(days=1)).isoformat(), (now.date() + timedelta(days=31)).isoformat()),
             ).fetchall()]
-        for shift in shifts:
+        for shift in _group_deputy_notification_workdays(shifts):
             event_date = date.fromisoformat(str(shift["date"]))
-            location, role = _parse_deputy_title(str(shift.get("title") or ""))
-            start = str(shift.get("personal_start_time") or "") or str(shift.get("start_at") or "")[11:16]
-            transport = _transport_from_source(str(shift.get("source_payload") or ""))
-            title = _portable_title(event_date)
-            body = " · ".join(value for value in (location, role, start, transport) if value)
+            location = str(shift.get("notification_location") or "Work day")
+            role = str(shift.get("notification_role") or "Shift")
+            start = str(shift.get("notification_rostered_start") or "") or str(shift.get("start_at") or "")[11:16]
+            transport = str(shift.get("notification_transport") or "")
+            title, body = compact_push_payload(
+                event_date=event_date, location=location, role=role, start=start, transport=transport,
+            )
             for days, field, kind in ((1, "night_before", "night_before"), (2, "two_days_before", "two_days_before")):
                 due = datetime.combine(event_date - timedelta(days=days), reminder_at, settings.timezone)
                 if pref.get(field) and due <= now < due + timedelta(days=1):
                     created["reminders"] += int(queue_notification(
-                        user_id=user_id, event_type=kind, workday_kind="deputy", workday_id=str(shift["id"]),
+                        user_id=user_id, event_type=kind, workday_kind="deputy", workday_id=str(shift["notification_workday_id"]),
                         event_date=event_date.isoformat(), title=title, body=body,
                         target_url=f"/day/{event_date.isoformat()}", scheduled_at=due,
                         revision=f"{kind}:{event_date.isoformat()}",
+                    ))
+            if pref.get("one_hour_before") and start:
+                due = datetime.combine(event_date, time.fromisoformat(start), settings.timezone) - timedelta(hours=1)
+                if due <= now < due + timedelta(minutes=15):
+                    created["reminders"] += int(queue_notification(
+                        user_id=user_id, event_type="one_hour_before", workday_kind="deputy",
+                        workday_id=str(shift["notification_workday_id"]), event_date=event_date.isoformat(),
+                        title=title, body=body, target_url=f"/day/{event_date.isoformat()}", scheduled_at=due,
+                        revision=f"one_hour_before:{event_date.isoformat()}:{start}",
                     ))
             preferences_updated = _local_datetime(pref.get("updated_at"), settings)
             first_seen_at = _local_datetime(shift.get("first_seen_at"), settings)
@@ -401,9 +534,12 @@ def generate_due_notifications(now: datetime | None = None) -> dict[str, int]:
                 within_24h = timedelta(0) <= event_at - now <= timedelta(hours=24)
                 if not within_24h or pref.get("changes_within_24h"):
                     changed_at = str(shift.get("last_changed_at") or shift.get("last_synced_at") or "")
-                    changed_body = " · ".join(value for value in (location, role, "Cancelled" if shift.get("deleted_from_source") else start, transport, "Change") if value)
+                    _, changed_body = compact_push_payload(
+                        event_date=event_date, location=location, role=role, start=start,
+                        transport=transport, change=True, cancelled=bool(shift.get("deleted_from_source")),
+                    )
                     created["changes"] += int(queue_notification(
-                        user_id=user_id, event_type="change", workday_kind="deputy", workday_id=str(shift["id"]),
+                        user_id=user_id, event_type="change", workday_kind="deputy", workday_id=str(shift["notification_workday_id"]),
                         event_date=event_date.isoformat(), title=title, body=changed_body,
                         target_url=f"/day/{event_date.isoformat()}", scheduled_at=now,
                         revision=hashlib.sha256(f"{changed_at}|{location}|{role}|{start}|{transport}|{shift.get('deleted_from_source')}".encode()).hexdigest(),

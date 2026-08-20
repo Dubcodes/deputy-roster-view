@@ -233,6 +233,15 @@
       const go = (url) => {
         if (url) window.location.href = url;
       };
+      const syncNow = async () => {
+        if (!nav.dataset.syncUrl) return;
+        const response = await fetch(nav.dataset.syncUrl, {
+          method: "POST",
+          headers: { "Accept": "application/json", "X-Requested-With": "fetch" },
+          credentials: "same-origin"
+        });
+        if (response.ok) window.location.reload();
+      };
       const isTyping = (event) => {
         const tag = event.target && event.target.tagName;
         return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || event.target?.isContentEditable;
@@ -245,7 +254,7 @@
         if (key === "l") go(nav.dataset.listUrl);
         if (key === "n") go(nav.dataset.nextUrl);
         if (key === "p") go(nav.dataset.prevUrl);
-        if (key === "s") go(nav.dataset.syncUrl);
+        if (key === "s") { event.preventDefault(); void syncNow(); }
       });
 
       let startX = 0;

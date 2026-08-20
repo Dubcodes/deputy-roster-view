@@ -74,6 +74,17 @@ def main() -> None:
     }
     if taupo_vehicles != expected_taupo or "Rav91, Rav" in repr(taupo_people):
         raise AssertionError(f"Vehicle aliases were not canonicalized before aggregation: {taupo_people!r}")
+    precedence_people = [{"employee_name": "Alf", "vehicle_label": "Rav91"}]
+    apply_roster_note_vehicles(
+        precedence_people,
+        [{"roster_summary": parse_roster_summary(["684 Alf"])}],
+    )
+    if (
+        precedence_people[0]["vehicle_label"] != "684"
+        or precedence_people[0].get("structured_vehicle_label") != "Rav91"
+        or precedence_people[0].get("vehicle_provenance") != "roster_note_override"
+    ):
+        raise AssertionError("Explicit note vehicle did not override while retaining structured provenance.")
 
     main_module.queue_manual_sync = lambda *_args, **_kwargs: True
     client = TestClient(main_module.app)
@@ -120,7 +131,11 @@ def main() -> None:
         )
         conn.execute(
             "INSERT INTO deputy_schedule_shifts(source_shift_id,captured_at,area_name,employee_id,employee_name,start_at,end_at,date,duration,is_published,changed_since_viewed,change_summary) VALUES (?,?,?,?,?,?,?,?,?,1,1,?)",
-            (9001, now, "Travel then Overnighter", 999, "Rob Watson", "2026-08-14T12:00:00+12:00", "2026-08-14T17:00:00+12:00", "2026-08-14", 18000, "Mark Strachan -> Rob Watson"),
+            (9001, now, "Travel then Overnighter", 999, "Rob Watson", "2026-08-14T18:00:00+12:00", "2026-08-14T20:00:00+12:00", "2026-08-14", 7200, "Mark Strachan -> Rob Watson"),
+        )
+        conn.execute(
+            "INSERT INTO deputy_schedule_shifts(source_shift_id,captured_at,area_name,employee_id,employee_name,start_at,end_at,date,duration,is_published) VALUES (?,?,?,?,?,?,?,?,?,1)",
+            (9002, now, "Travel then Overnighter", 102, "Grant Woolston", "2026-08-14T12:00:00+12:00", "2026-08-14T17:00:00+12:00", "2026-08-14", 18000),
         )
         conn.execute(
             "INSERT INTO deputy_schedule_event_changes(group_id,change_key,change_type,date,old_positions,new_positions,old_employee_name,new_employee_name,changed_at,display_summary,inline_summary) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -137,7 +152,7 @@ def main() -> None:
     html = rendered.text
     crew_match = re.search(r'aria-label="Deputy schedule crew".*?</section>', html, re.S)
     crew_html = crew_match.group(0) if crew_match else ""
-    expected_people = ("Dylan Holden", "Esq", "Grant Woolston", "Lans McGall", "Joshua Druett", "Jayden-lee", "Nate")
+    expected_people = ("Dylan Holden", "Esq", "Grant Woolston", "Todd", "Lans McGall", "Junior", "Joshua Druett", "Jayden-lee", "Nate")
     if not crew_html or any(name not in crew_html for name in expected_people):
         raise AssertionError(f"Rendered Travel cohort omitted confidently resolved note people: {crew_html}")
     if "Rob Watson" in html or "Mark Strachan" in html:
@@ -146,8 +161,8 @@ def main() -> None:
         raise AssertionError("Rendered Travel cohort lost canonical note vehicles.")
     if "Rav91, Rav" in crew_html:
         raise AssertionError("Final rendered Travel cohort leaked the Rav alias beside canonical Rav91.")
-    if "Todd" in crew_html or "Junior" in crew_html:
-        raise AssertionError("Unresolved short names were guessed into the visible Travel cohort.")
+    if "Unresolved note-only person" not in crew_html:
+        raise AssertionError("Explicit note-only people lost their unresolved provenance.")
     for raw_line in travel_note.splitlines():
         if raw_line not in html:
             raise AssertionError(f"Raw Travel roster note line was not preserved: {raw_line!r}")

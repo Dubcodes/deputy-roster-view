@@ -92,10 +92,12 @@ def main() -> None:
                         raise AssertionError(f"{label} header controls were missing at {width}px.")
                     if abs(brand_box["y"] - actions_box["y"]) > 12 or actions_box["x"] <= brand_box["x"]:
                         raise AssertionError(f"{label} brand/actions did not share the first row at {width}px.")
-                    if month_box["y"] < max(brand_box["y"] + brand_box["height"], actions_box["y"] + actions_box["height"]) - 2:
-                        raise AssertionError(f"{label} month navigation overlapped the first row at {width}px.")
-                    if month_box["x"] > width * .35:
-                        raise AssertionError(f"{label} month navigation remained rigidly viewport-centred at {width}px.")
+                    if abs(month_box["y"] - brand_box["y"]) > 12:
+                        raise AssertionError(f"{label} month navigation left the compact header row at {width}px.")
+                    if month_box["x"] < brand_box["x"] + brand_box["width"] - 2:
+                        raise AssertionError(f"{label} month navigation overlapped the brand at {width}px.")
+                    if month_box["x"] + month_box["width"] > actions_box["x"] + 2:
+                        raise AssertionError(f"{label} month navigation overlapped the actions at {width}px.")
                 for path, selector in (("/settings", ".settings-grid"), ("/__release_gate_trial_preview", ".settings-grid")):
                     response = page.goto(f"http://127.0.0.1:{port}{path}")
                     if not response or response.status != 200 or page.locator(selector).count() == 0:
@@ -146,6 +148,22 @@ def main() -> None:
             page.goto(f"http://127.0.0.1:{port}/admin/roster-days/new")
             if "Build a work day" not in page.locator("body").inner_text():
                 raise AssertionError("Workday builder did not render in browser smoke.")
+            role_panel = page.locator(".role-catalogue-panel")
+            role_panel.evaluate("element => { element.open = true; element.scrollIntoView({block: 'end'}); }")
+            page.wait_for_timeout(100)
+            role_form = page.locator(".role-catalogue-add")
+            role_form.locator('[name="display_label"]').fill("Fixture Replay")
+            builder_url = page.url
+            builder_scroll = page.evaluate("window.scrollY")
+            role_form.locator('button[type="submit"]').evaluate("element => element.click()")
+            role_form.locator('button[type="submit"]', has_text="Saved").wait_for(timeout=5_000)
+            if page.url != builder_url:
+                raise AssertionError("Reusable-role micro-action performed a full navigation.")
+            final_builder_scroll = page.evaluate("window.scrollY")
+            if abs(final_builder_scroll - builder_scroll) > 12:
+                raise AssertionError(f"Reusable-role micro-action changed builder scroll position: {builder_scroll} -> {final_builder_scroll}.")
+            if page.locator('#workday-role-options option[value="Fixture Replay"]').count() != 1:
+                raise AssertionError("Reusable-role micro-action did not refresh role choices in place.")
             first_row = page.locator("[data-assignment-row]").first
             person_picker = first_row.locator('[data-picker-kind="person"] [data-picker-input]')
             person_picker.click()

@@ -41,7 +41,8 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path></svg>
             </a>
             {% endif %}
-            {% if global_view %}
+            {% if current_user and current_user.account_type == 'contractor' %}
+            {% elif global_view %}
             <a class="icon-button is-active" href="{{ personal_view_url }}" aria-label="Personal roster">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></svg>
             </a>
@@ -81,7 +82,7 @@
     </header>
 
     <main class="page-shell">
-      {% if current_user and current_user.account_type != 'contractor' %}
+      {% if current_user %}
         <p class="sync-notice sync-notice-{{ current_user.sync_notice_kind or 'stale' }}">{{ current_user.sync_notice_text or 'Deputy roster status unavailable' }}</p>
       {% endif %}
       {% if notice %}

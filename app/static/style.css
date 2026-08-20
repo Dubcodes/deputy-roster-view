@@ -5743,3 +5743,18 @@ th {
     min-height: 30px;
   }
 }
+.same-date-roster-warning {
+  align-items: center;
+  border: 1px solid #d44242;
+  border-radius: 50%;
+  color: #d44242;
+  display: inline-flex;
+  font-size: .7em;
+  height: 1.15rem;
+  justify-content: center;
+  line-height: 1;
+  margin-left: .25rem;
+  width: 1.15rem;
+}
+
+.same-date-roster-warning[hidden] { display: none; }

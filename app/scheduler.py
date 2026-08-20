@@ -332,7 +332,15 @@ def sync_summary_message(summary: dict[str, object]) -> str:
 
 
 def _combined_sync_status(calendar_result: dict[str, object], web_result: dict[str, object]) -> str:
-    if calendar_result.get("status") == "ok" or web_result.get("status") == "ok":
+    web_status = str(web_result.get("status") or "")
+    if web_status == "ok":
+        payload = web_result.get("payload") if isinstance(web_result.get("payload"), dict) else {}
+        if payload and not payload.get("schedule_coverage"):
+            return "partial"
+        return "ok"
+    if web_status and web_status != "skipped":
+        return "error"
+    if calendar_result.get("status") == "ok":
         return "ok"
     return "error"
 
