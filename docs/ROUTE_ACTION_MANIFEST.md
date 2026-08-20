@@ -32,3 +32,8 @@ effective port differ from the request origin. Default ports are 80/443; an
 explicit default port is equivalent to an omitted default port. Missing `Origin` remains accepted for compatible
 non-browser clients; endpoint-level checks remain on sensitive forms. OAuth and
 public invite protocol paths are explicit exceptions through public routing.
+
+For the separate Cloudflare-tunnel topology, forwarded proto/host evidence is
+used only when the request's actual network peer matches `TRUSTED_PROXY_SOURCES`
+(an explicit IP, CIDR, or controlled Docker DNS name). Untrusted direct/LAN
+clients cannot change their effective origin with forwarding headers.

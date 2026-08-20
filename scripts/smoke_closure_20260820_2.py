@@ -14,6 +14,7 @@ os.environ.update(DATA_DIR=str(TEMP), DB_PATH=str(TEMP / "closure.sqlite3"), APP
 from app.database import get_connection, init_db, save_deputy_web_schedule
 from app.deputy_web import _extract_management_shifts, _extract_schedule_shifts
 from app.interpreted_workdays import interpret_deputy_workdays
+from app.roster_note_interpretation import note_vehicle_allocations_from_text, resolve_note_allocations
 
 
 def row(uid: str, start: str, end: str, role: str = "Director", **extra: object) -> dict[str, object]:
@@ -38,12 +39,127 @@ combined = interpret_deputy_workdays([
 ])
 assert len(combined) == 1 and combined[0]["production_position"] == "Director" and combined[0]["vehicle"] == "Rav91"
 
+# Exact boundary adjacency joins only complementary vehicle/travel + production evidence.
+touching = interpret_deputy_workdays([
+    row(
+        "taupo-vehicle", "2026-08-16T07:30:00+12:00", "2026-08-16T09:30:00+12:00", "Rav91",
+        title="[Taupo] Rav91", location_name="Taupo", employee_name="Jayden Smith",
+    ),
+    row(
+        "taupo-production", "2026-08-16T09:30:00+12:00", "2026-08-16T19:30:00+12:00", "Sound/VT",
+        title="[Taupo] Sound/VT", location_name="Taupo", employee_name="Jayden Smith",
+    ),
+], person_identity={"aliases": ["Jayden Smith", "Jayden"]})
+assert len(touching) == 1
+assert (touching[0]["location"], touching[0]["production_position"], touching[0]["vehicle"]) == ("Taupo", "Sound/VT", "Rav91")
+assert (touching[0]["rostered_start"], touching[0]["rostered_finish"]) == ("07:30", "19:30")
+
+# The shared parser handles real multi-person, vehicle-first/last and qua684 lines.
+taupo_allocations = []
+for line in ("684 james grant lans", "Rav Alf jayden and josh", "Matt and Troy trucks"):
+    taupo_allocations.extend(note_vehicle_allocations_from_text(line))
+assert [(item["vehicle"], item["people"]) for item in taupo_allocations] == [
+    ("684", ["james", "grant", "lans"]),
+    ("Rav91", ["Alf", "jayden", "josh"]),
+    ("Truck (unspecified)", ["Matt", "Troy"]),
+]
+assert note_vehicle_allocations_from_text("qua684 Jayden")[0]["vehicle"] == "684"
+assert note_vehicle_allocations_from_text("QUA690 Olivia")[0]["vehicle"] == "QUA690"
+assert note_vehicle_allocations_from_text("Rav Olivia, Alf and Todd")[0]["people"] == ["Olivia", "Alf", "Todd"]
+assert note_vehicle_allocations_from_text("685 Jr, Lans and Josh")[0]["people"] == ["Jr", "Lans", "Josh"]
+assert not note_vehicle_allocations_from_text("Troy ,Gaz, Jayden and Nate")  # no invented vehicle context
+
+travel_allocations = []
+for line in (
+    "Trucks Dylan and Esq",
+    "Grant, Todd, Lans and Junior Rav91",
+    "Josh Jayden Nate qua684",
+):
+    travel_allocations.extend(note_vehicle_allocations_from_text(line))
+travel_people = [
+    {"employee_id": 7, "employee_name": "Danny Hunter", "aliases": ["Esq"]},
+    {"employee_id": 13, "employee_name": "Gary McClure", "aliases": ["Jr", "Jnr", "Junior"]},
+    {"employee_id": 14, "employee_name": "Gary Russo", "aliases": ["Gaz", "Gazz"]},
+    {"employee_id": 20, "employee_name": "Grant Woolston"},
+    {"employee_id": 21, "employee_name": "Lans"},
+    {"employee_id": 22, "employee_name": "Joshua", "aliases": ["Josh"]},
+    {"employee_id": 23, "employee_name": "Jayden"},
+    {"employee_id": 24, "employee_name": "Nate"},
+    {"employee_id": 25, "employee_name": "Dylan"},
+]
+travel_resolution = resolve_note_allocations(travel_allocations, travel_people)
+assigned = {
+    travel_people[int(item["person_index"])]["employee_id"]: item["vehicle"]
+    for item in travel_resolution["assignments"]
+}
+assert assigned == {7: "Truck (unspecified)", 13: "Rav91", 20: "Rav91", 21: "Rav91", 22: "684", 23: "684", 24: "684", 25: "Truck (unspecified)"}
+assert any(item["name"] == "Todd" for item in travel_resolution["unresolved"])
+assert 14 not in assigned  # Gaz/Gary Russo is never confused with Gary McClure #13.
+
+esq_resolution = resolve_note_allocations(
+    note_vehicle_allocations_from_text("Trucks Esq"),
+    [{"employee_id": 7, "employee_name": "Danny Hunter", "current_deputy_name": "Sir Daniel Hunter ESQ."}],
+)
+assert esq_resolution["assignments"] == [{
+    "vehicle": "Truck (unspecified)", "name": "Esq", "raw": "Trucks Esq", "person_index": 0,
+}]
+
+ambiguous = resolve_note_allocations(
+    note_vehicle_allocations_from_text("Rav Grant"),
+    [{"employee_name": "Grant Woolston"}, {"employee_name": "Grant Another"}],
+)
+assert not ambiguous["assignments"] and ambiguous["unresolved"][0]["candidate_count"] == 2
+
+# Cohort resolution ignores a simultaneous same-first-name person at another venue.
+isolated_grant = interpret_deputy_workdays([
+    row(
+        "ruakaka-grant", "2026-08-24T09:00:00+12:00", "2026-08-24T17:00:00+12:00",
+        title="[Ruakaka] Sound", location_name="Ruakaka", employee_name="Grant Woolston",
+        description="Grant, Todd, Lans and Junior Rav91",
+    ),
+], structured_rows=[
+    {"source_shift_id": 801, "employee_id": 20, "employee_name": "Grant Woolston", "area_name": "684",
+     "location_name": "Ruakaka", "start_at": "2026-08-24T08:30:00+12:00", "end_at": "2026-08-24T17:30:00+12:00"},
+    {"source_shift_id": 802, "employee_id": 26, "employee_name": "Grant Another", "area_name": "685",
+     "location_name": "Taupo", "start_at": "2026-08-24T08:30:00+12:00", "end_at": "2026-08-24T17:30:00+12:00"},
+], person_identity={"deputy_employee_id": 20, "aliases": ["Grant Woolston"]})
+assert isolated_grant[0]["vehicle"] == "Rav91"
+assert isolated_grant[0]["field_provenance"]["vehicle"] == "current_roster_note"
+
+# A preceding Travel batch can supply a vehicle across the venue/date boundary,
+# without being merged into the following Ruakaka workday itself.
+carryover = interpret_deputy_workdays([
+    row("ruakaka-production", "2026-08-15T09:00:00+12:00", "2026-08-15T18:00:00+12:00", "Sound",
+        title="[T-Ruakaka] Sound", location_name="T-Ruakaka", employee_name="Grant Woolston"),
+], person_identity={"deputy_employee_id": 20, "aliases": ["Grant Woolston", "Grant"]}, preceding_rows=[
+    row("travel-grant", "2026-08-14T12:00:00+12:00", "2026-08-14T17:00:00+12:00", "Travel then Overnighter",
+        title="[T-Travel] Travel then Overnighter", location_name="T-Travel",
+        description="Grant, Todd, Lans and Junior Rav91"),
+    row("travel-other", "2026-08-14T12:00:00+12:00", "2026-08-14T17:00:00+12:00", "Travel then Overnighter",
+        title="[T-Travel] Travel then Overnighter", location_name="T-Travel",
+        description="Rav Gary and Olivia"),
+], preceding_structured_rows=[
+    {"source_shift_id": 901, "date": "2026-08-14", "employee_id": 20, "employee_name": "Grant Woolston",
+     "area_name": "Travel then Overnighter", "location_name": "T-Travel",
+     "start_at": "2026-08-14T12:00:00+12:00", "end_at": "2026-08-14T17:00:00+12:00"},
+])
+assert carryover[0]["vehicle"] == "Rav91"
+assert carryover[0]["vehicle_provenance"] == "preceding_travel_note"
+assert len(carryover[0]["raw_source_shift_ids"]) == 1
+
+note_only = interpret_deputy_workdays([
+    row("rotorua", "2026-08-17T09:00:00+12:00", "2026-08-17T17:00:00+12:00", "Sound",
+        title="[Rotorua] Sound", location_name="Rotorua", employee_name="Olivia",
+        description="Rav Olivia, Alf and Todd"),
+], person_identity={"aliases": ["Olivia"]})
+assert any(item["name"] == "Todd" and item["vehicle"] == "Rav91" for item in note_only[0]["vehicle_evidence"]["note_only_people"])
+
 # C: an exact current-note allocation overrides structured Deputy for that person only.
 note_override = interpret_deputy_workdays([
     row(
         "jayden", "2026-08-27T09:00:00+12:00", "2026-08-27T17:00:00+12:00",
         employee_name="Jayden Smith",
-        description="Rav91 Jayden\n685 Josh",
+        description="684 james grant lans\nRav Alf Jayden and Josh\nMatt and Troy trucks",
     )
 ], structured_rows=[{
     "source_shift_id": 701, "employee_id": 7, "employee_name": "Jayden Smith", "area_name": "684",
@@ -51,6 +167,8 @@ note_override = interpret_deputy_workdays([
 }], person_identity={"deputy_employee_id": 7, "aliases": ["Jayden Smith", "Jayden"]})
 assert note_override[0]["vehicle"] == "Rav91"
 assert note_override[0]["field_provenance"]["vehicle"] == "current_roster_note"
+assert note_override[0]["vehicle_evidence"]["structured_value"] == "684"
+assert note_override[0]["vehicle_evidence"]["roster_note_value"] == "Rav91"
 unrelated = interpret_deputy_workdays([
     row(
         "jayden-2", "2026-08-28T09:00:00+12:00", "2026-08-28T17:00:00+12:00",
@@ -105,4 +223,4 @@ with get_connection() as conn:
 assert stored["canEdit"] is False and stored["timesheet"]["id"] == 44
 assert stored["mealbreakSlots"][0]["end"] == "12:30" and stored["warning"]["code"] == "overlap"
 
-print("2026.08.20.2 closure fixtures passed")
+print("2026.08.21.1 closure fixtures passed")

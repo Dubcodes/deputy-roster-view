@@ -270,10 +270,18 @@ def main() -> None:
         conn.execute(
             """INSERT INTO shifts(source_uid,title,start_at,end_at,date,changed_since_viewed,
                                   deleted_from_source,owner_user_id,first_seen_at,last_synced_at,source_payload)
-               VALUES ('notify-taupo-one-hour','[Taupo] Sound/VT','2026-08-16T07:30:00+12:00',
-                       '2026-08-16T18:00:00+12:00','2026-08-16',0,0,?,
-                       '2026-08-12T18:15:00+12:00','2026-08-12T18:15:00+12:00','{"vehicle_label":"Rav91"}')""",
+               VALUES ('notify-taupo-vehicle','[Taupo] Rav91','2026-08-16T07:30:00+12:00',
+                       '2026-08-16T09:30:00+12:00','2026-08-16',0,0,?,
+                       '2026-08-12T18:15:00+12:00','2026-08-12T18:15:00+12:00','{}')""",
             (owner_id,),
+        )
+        conn.execute(
+            """INSERT INTO shifts(source_uid,title,start_at,end_at,date,changed_since_viewed,
+                                  deleted_from_source,owner_user_id,first_seen_at,last_synced_at,source_payload)
+               VALUES ('notify-taupo-production','[Taupo] Sound/VT','2026-08-16T09:30:00+12:00',
+                       '2026-08-16T19:30:00+12:00','2026-08-16',0,0,?,
+                       '2026-08-12T18:15:00+12:00','2026-08-12T18:15:00+12:00',?)""",
+            (owner_id, json.dumps({"description": "684 james grant lans\nRav Alf owner and josh"})),
         )
         conn.execute(
             """INSERT INTO shifts(source_uid,title,start_at,end_at,date,changed_since_viewed,
@@ -351,6 +359,8 @@ def main() -> None:
         ).fetchall()]
     if exact != [("Re-Deputy · Sunday 16 August", "Taupo · Sound/VT · Rav91 · 07:30")]:
         raise AssertionError(f"One-hour payload did not use interpreted workday order: {exact!r}")
+    if generate_due_notifications(datetime.fromisoformat("2026-08-16T06:36:00+12:00"))["reminders"]:
+        raise AssertionError("The contiguous Taupo workday generated a duplicate one-hour reminder.")
 
     digest = generate_due_notifications(datetime.fromisoformat("2026-08-10T19:01:00+12:00"))
     if digest["digests"] != 1:
@@ -406,7 +416,10 @@ def main() -> None:
             "UPDATE user_sync_state SET last_sync_at=?,last_status='success',sync_in_progress=0,updated_at=? WHERE user_id=?",
             (alert_now.isoformat(), alert_now.isoformat(), owner_id),
         )
-        person_id = int(conn.execute(
+        existing_person = conn.execute(
+            "SELECT id FROM crew_people WHERE app_user_id=?", (owner_id,),
+        ).fetchone()
+        person_id = int(existing_person["id"]) if existing_person else int(conn.execute(
             "INSERT INTO crew_people(canonical_display_name,app_user_id,is_active,created_at,updated_at) VALUES('Alert Owner',?,1,?,?)",
             (owner_id, alert_now.isoformat(), alert_now.isoformat()),
         ).lastrowid)

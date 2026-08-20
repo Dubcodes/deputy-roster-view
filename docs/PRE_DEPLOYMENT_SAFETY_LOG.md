@@ -4,6 +4,62 @@ Purpose: maintain a durable record of significant pre-deployment defects, invest
 
 Do not delete old entries when an issue is fixed. Update its status and add the release/commit that resolved it.
 
+## 2026.08.21.1 canonical interpreted-workday closure
+
+The 2026.08.20.3 correction joined touching vehicle/production rows and shared
+the note grammar, but the interpreter still lacked an explicit preceding
+Travel/Overnighter evidence input and did not retain all unresolved note-only
+people as first-class diagnostics. Its day route also did not pass the same
+structured identity evidence used by notifications.
+
+The canonical interpreter now accepts current and preceding structured/source
+evidence. It keeps current-day note and structured precedence, then applies a
+single unambiguous preceding Travel note or structured vehicle only for the
+same resolved person. Travel rows are retained as provenance rather than
+merged into the following workday. Identity resolution remains ID/exact-name/
+observed-display/confirmed-alias first and only permits unique first-name
+resolution inside the already isolated cohort. `qua684` is explicitly mapped
+to `684`; other `QUA###` labels are preserved without generic rewriting.
+
+Regression coverage includes Taupo touching rows, separated duties,
+multi-person Taupo/Ruakaka notes, #13/#14 and Danny/Esq separation, note-only
+diagnostics, cross-location Grant isolation, direct LAN and trusted/untrusted
+proxy mutation routes, notification dedupe, and the preceding-Travel API.
+No live Deputy tenant was contacted or mutated. The complete deterministic
+release gate and local 320px/375px Playwright gate passed; CI remains required
+for the committed SHA and Docker image/container rehearsal.
+
+## 2026.08.20.3 final deployment-closure correction
+
+Starting source: clean `main`/`origin/main` at `f4491823df2e25aac02622f18bda1b15dd7d3a38`.
+
+Independent review found three defects in `2026.08.20.2`: exact-boundary
+Travel/vehicle and production segments were split into separate workdays; the
+new interpreter maintained a second simplified `_note_vehicle()` parser that
+could not interpret real multi-person notes; and strict origin comparison had
+not been proven for the real public-HTTPS → cloudflared → HTTP-Uvicorn topology.
+
+Root causes were an unconditional `start >= current_end` split, duplicated note
+grammar/identity resolution, and comparing browser Origin only with the
+internal ASGI origin without an explicit trusted-proxy boundary.
+
+Fixes in build `2026.08.20.3`:
+
+* connected cohorts join true overlaps and exact touching boundaries only when same-location vehicle/travel and production evidence are complementary; genuine gaps and unrelated touching production blocks remain separate;
+* `app/roster_note_interpretation.py` is the single roster-note allocation parser/resolver used by day display, interpreted workdays and notifications, including multi-person lines, vehicle-first/last, `Rav`, `qua684`, truck-class notes, guarded aliases and cohort-unique first names;
+* final vehicle diagnostics retain the final value/source, structured value/rows, note value/evidence, unresolved note evidence and source shift IDs;
+* browser-visible forwarded origin metadata is accepted only from an actual peer explicitly matched by `TRUSTED_PROXY_SOURCES`; direct LAN requests use their actual origin and spoofed forwarding headers from other peers are ignored/rejected;
+* Docker Compose defaults the trusted source to the controlled `deputy-roster-tunnel` DNS name rather than a transient container IP.
+
+Regression evidence includes the contiguous Taupo `Rav91 07:30–09:30` +
+`Sound/VT 09:30–19:30` workday/reminder, real Taupo and Ruakaka multi-person
+notes, Gary #13/#14 and Danny/Esq separation, structured fallback, ambiguous
+identity retention, repeated notification dedupe, four authenticated mutations
+through trusted and spoofed proxy topologies, and retained direct LAN/strict
+origin cases. No live Deputy mutation or deployment was performed.
+
+Final status: FIXED in build `2026.08.20.3`; commit and CI evidence are reported with the release handoff.
+
 ## 2026.08.20.2 deployment-closure correction
 
 Starting source: clean `main`/`origin/main` at `96432aa88247f86a3b2d63510960ac82ab56029b`.

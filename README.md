@@ -1,8 +1,10 @@
 # Re-Deputy
 
-Re-Deputy is a small private multi-user web app that mirrors Deputy roster data into SQLite and shows a clearer calendar plus local workday planning, contractor access, notifications, and narrowly gated Deputy trial-write tooling.
+Re-Deputy is a small private multi-user web app that mirrors Deputy roster data into SQLite and shows a clearer calendar plus local workday planning, contractor access, notifications, and narrowly gated Deputy roster-write tooling.
 
-Normal roster sync, iCal, web capture, planning, travel, vehicles, Open/TBC positions, Making My Own Way and contractor workflows are read-only against Deputy. Optional per-user OAuth supports an Admin-triggered trial workflow for assigned production shifts on an exact allowlisted tenant; write mode is off by default, and every mutation uses the initiating user's own OAuth identity plus preview, permission, overlap, optimistic-drift, read-back and audit safeguards. There is no production-write mode.
+Normal roster sync, iCal, web capture, planning, travel, vehicles, Open/TBC positions, Making My Own Way and contractor workflows are read-only against Deputy. Optional per-user OAuth supports an explicit Admin-triggered controlled workflow for assigned production shifts; write mode is off by default. Re-Deputy Admin is not Deputy authority: every mutation uses the initiating Admin's own OAuth identity, requires that identity's current Deputy roster-management permission, and preserves preview, overlap, optimistic-drift, read-back and audit safeguards. There are no automatic/background writes and no browser-write fallback.
+
+Unknown or ambiguous results are never blindly retried. Externally created matching rows may be adopted for comparison/update but do not thereby gain Re-Deputy deletion ownership. Travel, vehicles, Open/TBC, contractors and production-wide writes remain outside the controlled workflow.
 
 ## Setup
 
@@ -32,6 +34,7 @@ Normal roster sync, iCal, web capture, planning, travel, vehicles, Open/TBC posi
    TRUSTED_DEVICE_DAYS=730
    SIGNUP_ENABLED=false
    COOKIE_SECURE=false
+   TRUSTED_PROXY_SOURCES=deputy-roster-tunnel
    ```
 
 5. Optional: set Deputy web env values if you want a server-level fallback account. It is unconfigured by default. Normal multi-user sync uses the encrypted per-user credentials entered at `/signup`, which continue to work without a global URL. Do not put secrets in Git.
@@ -85,6 +88,8 @@ If you changed `APP_PORT`, use that port instead.
 In Portainer, create a stack from this repository. Set `APP_PORT` to whichever host port you want exposed. You can provide `DEPUTY_ICAL_URL` as an environment variable, or leave it blank and paste the URL into Settings once the app is running. The app stores its SQLite database, generated app secret, VAPID private identity, uploaded maps, and other local data in the bind-mounted `./data` directory. Preserve the real stack's existing port, network, volume mapping, environment, tunnel routing, and `APP_SECRET_KEY` during redeploy.
 
 For the new multi-user flow, open the app and complete `/signup`. The shipped `SIGNUP_ENABLED=false` still permits this first-user bootstrap, then closes public signup once an account exists. For direct HTTP LAN access, keep `COOKIE_SECURE=false`; for a permanent HTTPS-only deployment, set `COOKIE_SECURE=true`.
+
+`TRUSTED_PROXY_SOURCES` is a comma-separated allowlist of proxy peer IPs, CIDRs, or controlled Docker DNS names. Only requests whose actual network peer matches this list may use `X-Forwarded-Proto`/`X-Forwarded-Host` to reconstruct the browser-visible origin. The shipped Compose default names the separate `deputy-roster-tunnel` service; if your tunnel service uses another name, set that exact Docker DNS name. Direct LAN clients are not proxy-trusted and continue to use their actual HTTP origin.
 
 If using the older Deputy web diagnostics fallback, set `DEPUTY_LOGIN_EMAIL`, `DEPUTY_LOGIN_PASSWORD`, and `DEPUTY_DISPLAY_NAME` as Portainer environment variables. The app shows whether the login is configured, but never displays the password. Use Settings -> Capture Web Data to check whether the logged-in web app exposes richer roster data. Once configured, normal syncs also refresh this Deputy web crew data.
 

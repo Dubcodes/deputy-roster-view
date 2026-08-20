@@ -22,7 +22,7 @@ Re-Deputy is a private FastAPI/Jinja/SQLite multi-user roster and workday planni
 - Do not commit `.env`, `data/`, database files, Deputy credentials, calendar URLs, browser session data, or captured secrets.
 - Do not print the Deputy calendar URL or login password.
 - Redact long Deputy URLs and tokens in diagnostics where practical.
-- Treat Deputy as read-only everywhere except the existing, explicit OAuth-backed trial workflow. That workflow is limited to assigned production shifts on an exact allowlisted tenant and must preserve permission, ownership, overlap, drift, read-back and audit safeguards. Never extend it to travel, vehicles, Open/TBC, contractors or production-wide writes without explicit review.
+- Treat Deputy as read-only everywhere except the existing, explicit OAuth-backed trial workflow. That workflow is limited to assigned production shifts, uses the initiating Admin's own verified OAuth tenant and identity, and must preserve permission, ownership, overlap, drift, read-back and audit safeguards. Never extend it to travel, vehicles, Open/TBC, contractors or production-wide writes without explicit review.
 - Deputy write mode must remain off by default. Never contact a live Deputy tenant or test a live Deputy write without explicit task authorization, and never substitute another user's OAuth connection or a global token.
 
 ## Useful Commands

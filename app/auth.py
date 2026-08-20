@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 import hashlib
 import hmac
+import ipaddress
+import socket
 from urllib.parse import quote, urlsplit
 from datetime import datetime, timedelta
 
@@ -72,7 +74,50 @@ def normalized_origin(value: str) -> tuple[str, str, int] | None:
     return scheme, parsed.hostname.lower(), port or (443 if scheme == "https" else 80)
 
 
+def _trusted_proxy_peer(request: Request) -> bool:
+    peer = str(request.client.host if request.client else "").strip()
+    try:
+        peer_ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    for source in get_settings().trusted_proxy_sources:
+        try:
+            if peer_ip in ipaddress.ip_network(source, strict=False):
+                return True
+            continue
+        except ValueError:
+            pass
+        try:
+            resolved = {
+                ipaddress.ip_address(item[4][0])
+                for item in socket.getaddrinfo(source, None, type=socket.SOCK_STREAM)
+            }
+        except (OSError, ValueError):
+            resolved = set()
+        if peer_ip in resolved:
+            return True
+    return False
+
+
+def _trusted_external_origin(request: Request) -> tuple[str, str, int] | None:
+    if not _trusted_proxy_peer(request):
+        return None
+    proto = request.headers.get("x-forwarded-proto", "").strip().lower()
+    host = request.headers.get("x-forwarded-host", "").strip() or request.headers.get("host", "").strip()
+    forwarded_port = request.headers.get("x-forwarded-port", "").strip()
+    if not proto or not host or "," in proto or "," in host or "," in forwarded_port:
+        return None
+    if forwarded_port:
+        if not forwarded_port.isdigit() or ":" in host.rsplit("]", 1)[-1]:
+            return None
+        host = f"{host}:{forwarded_port}"
+    return normalized_origin(f"{proto}://{host}")
+
+
 def request_origin(request: Request) -> tuple[str, str, int] | None:
+    external = _trusted_external_origin(request)
+    if external is not None:
+        return external
     scheme = str(request.url.scheme or "").lower()
     host = str(request.url.hostname or "").lower()
     if scheme not in {"http", "https"} or not host:

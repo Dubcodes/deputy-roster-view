@@ -9,7 +9,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 tmp = Path(tempfile.mkdtemp(prefix="redeputy-release-"))
-os.environ.update({"DB_PATH": str(tmp / "app.sqlite3"), "DATA_DIR": str(tmp), "APP_SECRET_KEY": "release-smoke-key", "COOKIE_SECURE": "false"})
+os.environ.update({
+    "DB_PATH": str(tmp / "app.sqlite3"), "DATA_DIR": str(tmp),
+    "APP_SECRET_KEY": "release-smoke-key", "COOKIE_SECURE": "false",
+    "TRUSTED_PROXY_SOURCES": "10.0.0.8",
+})
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.contractors import activate_invite, authenticate_contractor_link, create_invite, deactivate_inactive_contractors, invite_details, revoke_invite
@@ -220,6 +224,52 @@ assert admin_client.get("/settings/deputy-api/callback").status_code == 303
 assert admin_client.post("/settings/deputy-api/connect", headers={"origin": "http://testserver"}).status_code == 303
 assert admin_client.post("/settings/deputy-api/recheck", headers={"origin": "http://testserver"}).status_code == 303
 assert admin_client.post("/settings/deputy-api/disconnect", headers={"origin": "http://testserver"}).status_code == 303
+
+# Public HTTPS is reconstructed only for the explicitly trusted tunnel peer.
+import importlib
+main_module = importlib.import_module("app.main")
+original_queue_manual_sync = main_module.queue_manual_sync
+main_module.queue_manual_sync = lambda _tasks, user_id=None: True
+proxy_headers = {
+    "Origin": "https://reviewer.example",
+    "X-Forwarded-Proto": "https",
+    "X-Forwarded-Host": "reviewer.example",
+}
+
+
+class PeerAddressApp:
+    def __init__(self, wrapped, host):
+        self.wrapped = wrapped
+        self.host = host
+
+    async def __call__(self, scope, receive, send):
+        scope = {**scope, "client": (self.host, 50000)}
+        await self.wrapped(scope, receive, send)
+
+
+trusted_proxy = TestClient(PeerAddressApp(app, "10.0.0.8"), base_url="http://app:8000", follow_redirects=False)
+untrusted_proxy = TestClient(PeerAddressApp(app, "10.0.0.9"), base_url="http://app:8000", follow_redirects=False)
+direct_lan = TestClient(
+    PeerAddressApp(app, "192.168.0.50"), base_url="http://192.168.0.238:8000", follow_redirects=False,
+)
+for proxy_client in (trusted_proxy, untrusted_proxy, direct_lan):
+    proxy_client.cookies.set(SESSION_COOKIE_NAME, "admin-session")
+try:
+    public_mutations = (
+        ("/sync-now", {}),
+        (f"/shift/{shift_id}/marks", {"checked": "1"}),
+        ("/settings/theme", {"theme": "jade"}),
+        ("/admin/clear-changed", {}),
+    )
+    for path, data in public_mutations:
+        accepted = trusted_proxy.post(path, data=data, headers=proxy_headers)
+        assert accepted.status_code == 303, (path, accepted.status_code, accepted.text)
+        spoofed = untrusted_proxy.post(path, data=data, headers=proxy_headers)
+        assert spoofed.status_code == 403, (path, spoofed.status_code, spoofed.text)
+        direct = direct_lan.post(path, data=data, headers={"Origin": "http://192.168.0.238:8000"})
+        assert direct.status_code == 303, (path, direct.status_code, direct.text)
+finally:
+    main_module.queue_manual_sync = original_queue_manual_sync
 with get_connection() as conn:
     alias_people = conn.execute("SELECT id FROM crew_people WHERE app_user_id IN (?,?) ORDER BY id", (admin_id, int(ordinary["id"]))).fetchall()
     assert len(alias_people) == 2

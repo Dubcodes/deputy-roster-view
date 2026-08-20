@@ -22,6 +22,7 @@ class Settings:
     trusted_device_days: int
     signup_enabled: bool
     cookie_secure: bool
+    trusted_proxy_sources: tuple[str, ...]
     tz_name: str
     sync_at_hour: int
     early_pre_shift_sync_hours: int
@@ -98,6 +99,9 @@ def get_settings() -> Settings:
         trusted_device_days=_int_env("TRUSTED_DEVICE_DAYS", 730),
         signup_enabled=_bool_env("SIGNUP_ENABLED", False),
         cookie_secure=_bool_env("COOKIE_SECURE", False),
+        trusted_proxy_sources=tuple(
+            item.strip() for item in os.getenv("TRUSTED_PROXY_SOURCES", "").split(",") if item.strip()
+        ),
         tz_name=tz_name,
         sync_at_hour=_int_env("SYNC_AT_HOUR", 5),
         early_pre_shift_sync_hours=_int_env("EARLY_PRE_SHIFT_SYNC_HOURS", 12),

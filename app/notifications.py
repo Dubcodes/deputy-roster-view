@@ -8,7 +8,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Callable
 
 from .config import Settings, get_settings
-from .database import get_connection, list_open_workday_positions, resolve_workday_snapshot_assignments
+from .database import crew_identity_records, get_connection, list_open_workday_positions, resolve_workday_snapshot_assignments
 from .push_identity import ensure_push_identity
 from .interpreted_workdays import interpret_deputy_workdays
 from .workday_timing import effective_rostered_start
@@ -144,13 +144,19 @@ def _group_deputy_notification_workdays(
 ) -> list[dict[str, object]]:
     """Consume the same structured/note-aware final interpretation as the day page."""
     structured_rows: list[dict[str, object]] = []
+    preceding_rows: list[dict[str, object]] = []
     identity: dict[str, object] = {}
     dates = sorted({str(row.get("date") or "") for row in shifts if row.get("date")})
     if user_id is not None and dates:
+        previous_date = (date.fromisoformat(dates[0]) - timedelta(days=1)).isoformat()
         with get_connection() as conn:
             structured_rows = [dict(row) for row in conn.execute(
                 "SELECT * FROM deputy_schedule_shifts WHERE date BETWEEN ? AND ? ORDER BY start_at,source_shift_id",
-                (dates[0], dates[-1]),
+                (previous_date, dates[-1]),
+            ).fetchall()]
+            preceding_rows = [dict(row) for row in conn.execute(
+                "SELECT * FROM shifts WHERE owner_user_id=? AND date=? AND deleted_from_source=0 ORDER BY start_at,id",
+                (user_id, previous_date),
             ).fetchall()]
             person = conn.execute(
                 "SELECT id,deputy_employee_id,canonical_display_name FROM crew_people WHERE app_user_id=? AND is_active=1",
@@ -167,6 +173,8 @@ def _group_deputy_notification_workdays(
     result = []
     for workday in interpret_deputy_workdays(
         shifts, structured_rows=structured_rows, person_identity=identity,
+        identity_records=crew_identity_records(), preceding_rows=preceding_rows,
+        preceding_structured_rows=structured_rows,
     ):
         evidence = list(workday.get("structured_deputy_evidence") or [])
         item = dict(evidence[0]) if evidence else {}

@@ -197,6 +197,16 @@ from .security import (
 )
 from .user_credentials import settings_for_user
 from .interpreted_workdays import interpret_deputy_workdays
+from .roster_note_interpretation import (
+    VEHICLE_ALLOCATION_TOKEN_RE,
+    VEHICLE_ALLOCATION_WORD_RE,
+    allocations_from_shifts,
+    canonical_vehicle_label,
+    clear_vehicle_alias_cache,
+    note_vehicle_allocations_from_text,
+    resolve_note_allocations,
+    vehicle_note_label,
+)
 from .url_safety import normalize_deputy_web_url, validate_public_https_url
 from .track_maps import (
     MAX_MANUAL_MAP_BYTES,
@@ -253,7 +263,7 @@ from .deputy_integration import (
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.20.2"
+APP_BUILD = "2026.08.21.1"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -486,8 +496,6 @@ RACE_COUNT_WITH_TIMES_RE = re.compile(
 )
 CREW_LINE_RE = re.compile(r"^([A-Za-z]{1,8}\d{0,3}|\d{3,4})\s+(.+)$")
 NON_CREW_LABELS = {"office", "trucks", "truck", "clow", "on", "first", "last", "race", "races", "breaks", "records"}
-VEHICLE_ALLOCATION_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]*\d*|(?<!\d)\d{3}(?!\d)")
-VEHICLE_ALLOCATION_TOKEN_RE = re.compile(r"^(?:\d{3}|rav\d+|rp\d+|ob|tender|transit)$", re.IGNORECASE)
 TIMING_LABELS = {
     "truck": "Trucks",
     "trucks": "Trucks",
@@ -664,7 +672,6 @@ class AppTemplates(Jinja2Templates):
 
 templates = AppTemplates(directory=str(APP_DIR / "templates"))
 _sync_worker_lock = threading.Lock()
-_vehicle_suffix_cache: tuple[float, dict[str, str]] = (0.0, {})
 _sync_state_lock = threading.Lock()
 _manual_sync_status_by_scope: dict[str, dict[str, object]] = {}
 
@@ -1277,89 +1284,6 @@ def shift_hours_value(shift: dict[str, object]) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
-
-
-def vehicle_note_label(value: str) -> str:
-    clean_value = value.strip()
-    upper_value = clean_value.upper()
-    if upper_value == "OB":
-        return "OB"
-    if upper_value.startswith("RAV") and upper_value[3:].isdigit():
-        return f"Rav{upper_value[3:]}"
-    if upper_value.startswith("RP") and upper_value[2:].isdigit():
-        return f"RP{upper_value[2:]}"
-    if upper_value == "TENDER":
-        return "Tender"
-    if upper_value == "TRANSIT":
-        return "Transit"
-    return clean_value
-
-
-def note_vehicle_allocations_from_text(value: str) -> list[dict[str, object]]:
-    text = re.split(r"\s+[-–]\s+", value, maxsplit=1)[-1]
-    tokens = VEHICLE_ALLOCATION_WORD_RE.findall(text)
-    if not any(VEHICLE_ALLOCATION_TOKEN_RE.match(token) for token in tokens):
-        global _vehicle_suffix_cache
-        cached_at, known = _vehicle_suffix_cache
-        if time.monotonic() - cached_at > 30:
-            known = {}
-            for item in list_crew_vehicles(include_inactive=False):
-                labels = [str(item.get("display_label") or "")]
-                try:
-                    aliases = json.loads(str(item.get("aliases") or "[]"))
-                except (TypeError, ValueError):
-                    aliases = []
-                labels.extend(str(alias) for alias in aliases if isinstance(alias, str))
-                for label in labels:
-                    key = re.sub(r"[^a-z0-9]+", "", label.casefold())
-                    if key:
-                        known[key] = str(item.get("display_label") or label)
-            _vehicle_suffix_cache = (time.monotonic(), known)
-        for index, token in enumerate(tokens):
-            compact = re.sub(r"[^a-z0-9]+", "", token.casefold())
-            if compact in known:
-                tokens[index] = known[compact]
-                break
-            matches = [
-                (key, label) for key, label in known.items()
-                if any(char.isdigit() for char in compact)
-                and any(char.isdigit() for char in key)
-                and compact != key and compact.endswith(key)
-            ]
-            if len(matches) == 1 and compact[:-len(matches[0][0])].isalpha() and len(compact[:-len(matches[0][0])]) <= 4:
-                tokens[index] = matches[0][1]
-                break
-    if not any(VEHICLE_ALLOCATION_TOKEN_RE.match(token) for token in tokens):
-        return []
-
-    allocations: dict[str, list[str]] = {}
-    current_vehicle = ""
-    pending_people: list[str] = []
-    for token in tokens:
-        if VEHICLE_ALLOCATION_TOKEN_RE.match(token):
-            vehicle = vehicle_note_label(token)
-            if pending_people and not current_vehicle:
-                allocations.setdefault(vehicle, []).extend(pending_people)
-                pending_people = []
-                current_vehicle = ""
-            else:
-                current_vehicle = vehicle
-                allocations.setdefault(current_vehicle, [])
-            continue
-
-        person_token = token.strip(" ,")
-        if not person_token:
-            continue
-        if current_vehicle:
-            allocations.setdefault(current_vehicle, []).append(person_token)
-        else:
-            pending_people.append(person_token)
-
-    return [
-        {"vehicle": vehicle, "people": people}
-        for vehicle, people in allocations.items()
-        if vehicle and people
-    ]
 
 
 def parse_roster_summary(lines: list[str]) -> dict[str, object]:
@@ -3287,55 +3211,21 @@ def apply_crew_directory_identity(people: list[dict[str, object]]) -> None:
 
 
 def roster_note_vehicle_allocations(shifts: list[dict[str, object]]) -> list[dict[str, str]]:
-    allocations = []
-    seen = set()
-    for shift in shifts:
-        summary = shift.get("roster_summary") if isinstance(shift.get("roster_summary"), dict) else {}
-        for allocation in summary.get("crew_allocations") or []:
-            if not isinstance(allocation, dict):
-                continue
-            vehicle = str(allocation.get("vehicle") or "").strip()
-            people_text = str(allocation.get("people") or "")
-            if not vehicle or not people_text:
-                continue
-            for name in VEHICLE_ALLOCATION_WORD_RE.findall(people_text):
-                if VEHICLE_ALLOCATION_TOKEN_RE.match(name):
-                    continue
-                key = (vehicle.lower(), name.lower())
-                if key in seen:
-                    continue
-                seen.add(key)
-                allocations.append({"vehicle": vehicle_note_label(vehicle), "name": name})
-    return allocations
+    return [
+        {"vehicle": str(allocation.get("vehicle") or ""), "name": str(name), "raw": allocation.get("raw")}
+        for allocation in allocations_from_shifts(shifts)
+        for name in allocation.get("people") or []
+    ]
 
 
 def canonical_vehicle_labels(value: object) -> str:
     """Canonicalize known catalogue labels/aliases while preserving unknown labels."""
-    global _vehicle_suffix_cache
-    cached_at, known = _vehicle_suffix_cache
-    if time.monotonic() - cached_at > 30:
-        known = {}
-        for item in list_crew_vehicles(include_inactive=False):
-            canonical = str(item.get("display_label") or "").strip()
-            labels = [canonical]
-            try:
-                aliases = json.loads(str(item.get("aliases") or "[]"))
-            except (TypeError, ValueError):
-                aliases = []
-            labels.extend(str(alias) for alias in aliases if isinstance(alias, str))
-            for label in labels:
-                key = re.sub(r"[^a-z0-9]+", "", label.casefold())
-                if key:
-                    known[key] = canonical or label.strip()
-        _vehicle_suffix_cache = (time.monotonic(), known)
     result: list[str] = []
     seen: set[str] = set()
     for raw_label in str(value or "").split(","):
-        label = raw_label.strip()
-        if not label:
+        display = canonical_vehicle_label(raw_label)
+        if not display:
             continue
-        key = re.sub(r"[^a-z0-9]+", "", label.casefold())
-        display = known.get(key, label)
         identity = re.sub(r"[^a-z0-9]+", "", display.casefold())
         if identity and identity not in seen:
             seen.add(identity)
@@ -3346,17 +3236,28 @@ def canonical_vehicle_labels(value: object) -> str:
 def apply_roster_note_vehicles(people: list[dict[str, object]], shifts: list[dict[str, object]]) -> None:
     if not people:
         return
-    alias_map = schedule_person_alias_map(people)
-    for allocation in roster_note_vehicle_allocations(shifts):
-        matched_indexes = set()
-        for key in note_person_keys(allocation.get("name")):
-            indexes = alias_map.get(key, [])
-            if len(indexes) == 1:
-                matched_indexes.add(indexes[0])
-        if len(matched_indexes) != 1:
-            continue
-        person = people[matched_indexes.pop()]
-        vehicle = canonical_vehicle_labels(allocation.get("vehicle"))
+    identities = crew_identity_records()
+    resolution_people = []
+    for person in people:
+        enriched = dict(person)
+        person_id = safe_int(person.get("canonical_person_id"))
+        employee_id = safe_int(person.get("employee_id"))
+        matches = [
+            identity for identity in identities
+            if (person_id is not None and safe_int(identity.get("id")) == person_id)
+            or (person_id is None and employee_id is not None and safe_int(identity.get("deputy_employee_id")) == employee_id)
+        ]
+        if len(matches) == 1:
+            enriched.update({
+                "canonical_display_name": matches[0].get("canonical_display_name"),
+                "current_deputy_name": matches[0].get("current_deputy_name"),
+                "aliases": matches[0].get("aliases") or [],
+            })
+        resolution_people.append(enriched)
+    resolution = resolve_note_allocations(allocations_from_shifts(shifts), resolution_people)
+    for assignment in resolution["assignments"]:
+        person = people[int(assignment["person_index"])]
+        vehicle = canonical_vehicle_labels(assignment.get("vehicle"))
         # Explicit roster-note allocation is the highest-authority source. It
         # replaces structured/travel/history guesses instead of producing an
         # impossible comma-joined pair of vehicles.
@@ -3364,7 +3265,12 @@ def apply_roster_note_vehicles(people: list[dict[str, object]], shifts: list[dic
         if structured_vehicle and structured_vehicle != vehicle:
             person["structured_vehicle_label"] = structured_vehicle
         person["vehicle_label"] = vehicle
+        person["roster_note_vehicle_label"] = vehicle
+        person["roster_note_vehicle_evidence"] = assignment.get("raw")
         person["vehicle_provenance"] = "roster_note_override"
+    if resolution["unresolved"]:
+        for person in people:
+            person.setdefault("unresolved_roster_note_vehicle_evidence", resolution["unresolved"])
 
 
 def travel_note_people(
@@ -3389,13 +3295,6 @@ def travel_note_people(
     candidates: list[tuple[str, str]] = []
     for allocation in roster_note_vehicle_allocations(shifts):
         candidates.append((str(allocation.get("name") or ""), str(allocation.get("vehicle") or "")))
-    for shift in shifts:
-        for line in shift.get("description_lines") or []:
-            match = re.match(r"(?i)^\s*trucks?\s+(.+)$", str(line or ""))
-            if match:
-                for name in re.split(r"(?i)\s*(?:,|\band\b)\s*", match.group(1)):
-                    if name.strip():
-                        candidates.append((name.strip(), "Truck (unspecified)"))
     people: list[dict[str, object]] = []
     seen: set[int] = set()
     for raw_name, vehicle in candidates:
@@ -3436,17 +3335,17 @@ def travel_note_people(
     return people
 
 
-def vehicle_for_user_from_schedule(
+def schedule_person_for_user(
     people: list[dict[str, object]],
     user: object | None,
     shift: dict[str, object],
-) -> str:
+) -> dict[str, object] | None:
     candidates = person_name_keys(payload_employee_name(shift))
     if isinstance(user, dict):
         candidates.update(person_name_keys(str(user.get("display_name") or "")))
         candidates.update(person_name_keys(str(user.get("deputy_email") or "").split("@", 1)[0]))
     if not candidates:
-        return ""
+        return None
 
     alias_map = schedule_person_alias_map(people)
     matched_indexes = set()
@@ -3455,8 +3354,15 @@ def vehicle_for_user_from_schedule(
         if len(indexes) == 1:
             matched_indexes.add(indexes[0])
     if len(matched_indexes) != 1:
-        return ""
-    return str(people[matched_indexes.pop()].get("vehicle_label") or "").strip()
+        return None
+    return people[matched_indexes.pop()]
+
+
+def vehicle_for_user_from_schedule(
+    people: list[dict[str, object]], user: object | None, shift: dict[str, object],
+) -> str:
+    person = schedule_person_for_user(people, user, shift)
+    return str(person.get("vehicle_label") or "").strip() if person else ""
 
 
 def schedule_item_position_key(item: dict[str, object]) -> str:
@@ -7102,10 +7008,34 @@ def day_view(
         apply_event_changes_to_schedule_people(deputy_schedule_people, deputy_event_change_groups)
     for shift in shifts:
         if not str(shift.get("header_vehicle_label") or "").strip():
-            shift["resolved_vehicle"] = vehicle_for_user_from_schedule(deputy_schedule_people, user, shift)
+            resolved_person = schedule_person_for_user(deputy_schedule_people, user, shift)
+            if resolved_person:
+                shift["resolved_vehicle"] = str(resolved_person.get("vehicle_label") or "")
+                shift["resolved_vehicle_provenance"] = str(resolved_person.get("vehicle_provenance") or "structured_deputy")
+                shift["structured_vehicle_label"] = str(resolved_person.get("structured_vehicle_label") or resolved_person.get("vehicle_label") or "")
+                shift["roster_note_vehicle_label"] = str(resolved_person.get("roster_note_vehicle_label") or "")
+                shift["roster_note_vehicle_evidence"] = resolved_person.get("roster_note_vehicle_evidence")
+    interpreter_identities = crew_identity_records()
+    current_user_id = safe_int(user.get("id")) if isinstance(user, dict) else None
+    previous_interpreted_date = (day_date - timedelta(days=1)).isoformat()
+    preceding_interpreter_rows = fetch_shifts_between(
+        previous_interpreted_date, previous_interpreted_date, owner_user_id=owner_user_id,
+    )
+    preceding_interpreter_structured = fetch_deputy_schedule_for_date(previous_interpreted_date)
+    interpreter_person = next(
+        (item for item in interpreter_identities if safe_int(item.get("app_user_id")) == current_user_id),
+        {},
+    )
     interpreted_by_shift_id = {
         int(source_id): workday
-        for workday in interpret_deputy_workdays(shifts)
+        for workday in interpret_deputy_workdays(
+            shifts,
+            structured_rows=deputy_schedule_rows,
+            person_identity=interpreter_person,
+            identity_records=interpreter_identities,
+            preceding_rows=preceding_interpreter_rows,
+            preceding_structured_rows=preceding_interpreter_structured,
+        )
         for source_id in workday.get("raw_source_shift_ids", [])
         if str(source_id).isdigit()
     }
@@ -7450,8 +7380,7 @@ async def admin_save_crew_vehicle(request: Request) -> RedirectResponse:
         notes=str(form.get("notes") or ""),
         actor_user_id=int(user["id"]),
     )
-    global _vehicle_suffix_cache
-    _vehicle_suffix_cache = (0.0, {})
+    clear_vehicle_alias_cache()
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
