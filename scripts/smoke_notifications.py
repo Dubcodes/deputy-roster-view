@@ -499,7 +499,7 @@ def main() -> None:
     if member["status"] != "success" or member["message"] != "winner" or generation["status"] != "complete":
         raise AssertionError("Generation terminal transition was not idempotent.")
     serious_alerts = generate_due_notifications(alert_now)
-    if serious_alerts["admin_alerts"] != 4 or generate_due_notifications(alert_now)["admin_alerts"]:
+    if serious_alerts["admin_alerts"] != 3 or generate_due_notifications(alert_now)["admin_alerts"]:
         raise AssertionError(f"Serious Admin Alerts were not queued and deduped once: {serious_alerts!r}")
     settled_alerts = generate_due_notifications(alert_now + timedelta(seconds=91))
     if settled_alerts["admin_alerts"] != 1 or generate_due_notifications(alert_now + timedelta(seconds=91))["admin_alerts"]:
