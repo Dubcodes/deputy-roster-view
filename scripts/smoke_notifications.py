@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 import types
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -29,7 +30,7 @@ def main() -> None:
     from fastapi.testclient import TestClient
 
     from app.config import get_settings
-    from app.database import create_app_user, get_connection, init_db, set_user_event_self_travel
+    from app.database import claim_sync_generation_member, create_app_user, create_sync_generation, get_connection, init_db, mark_sync_generation_member, set_user_event_self_travel
     from app.main import app
     from app.notifications import (
         _canonical_integrity_snapshot,
@@ -471,6 +472,32 @@ def main() -> None:
                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             ("ambiguous-fixture", owner_id, "fixture.au.deputy.com", 1, 2, "hash", "{}", "fixture-ambiguous", "update", "{}", "ambiguous", "readback_ambiguous", stamp, stamp),
         )
+    generation_id = create_sync_generation("fixture", [(owner_id, alert_now.isoformat())], alert_now.isoformat())
+    assert claim_sync_generation_member(generation_id, owner_id, alert_now.isoformat())
+    mark_sync_generation_member(generation_id, owner_id, "success", alert_now.isoformat())
+
+    # The member conditional update is the execution claim: competing manual
+    # and due-runner paths can never both reach roster capture.
+    race_generation = create_sync_generation("race", [(owner_id, alert_now.isoformat())], alert_now.isoformat())
+    captures: list[str] = []
+    def contender(name: str) -> bool:
+        claimed = claim_sync_generation_member(race_generation, owner_id, alert_now.isoformat())
+        if claimed:
+            captures.append(name)  # stands in for sync_roster_sources()
+        return claimed
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        claims = list(executor.map(contender, ("scheduled", "manual")))
+    if claims.count(True) != 1 or len(captures) != 1:
+        raise AssertionError(f"Generation execution claim was not exclusive: {claims!r}, {captures!r}")
+    if not mark_sync_generation_member(race_generation, owner_id, "success", alert_now.isoformat(), "winner"):
+        raise AssertionError("Claim winner could not complete its generation member.")
+    if mark_sync_generation_member(race_generation, owner_id, "error", alert_now.isoformat(), "loser"):
+        raise AssertionError("A terminal generation member was incorrectly overwritten.")
+    with get_connection() as conn:
+        member = conn.execute("SELECT status,message FROM sync_generation_members WHERE generation_id=? AND user_id=?", (race_generation, owner_id)).fetchone()
+        generation = conn.execute("SELECT status FROM sync_generations WHERE id=?", (race_generation,)).fetchone()
+    if member["status"] != "success" or member["message"] != "winner" or generation["status"] != "complete":
+        raise AssertionError("Generation terminal transition was not idempotent.")
     serious_alerts = generate_due_notifications(alert_now)
     if serious_alerts["admin_alerts"] != 4 or generate_due_notifications(alert_now)["admin_alerts"]:
         raise AssertionError(f"Serious Admin Alerts were not queued and deduped once: {serious_alerts!r}")
@@ -507,6 +534,11 @@ def main() -> None:
     }])
     if snapshot_a != snapshot_reordered or snapshot_a == snapshot_new_date or snapshot_a == snapshot_changed_conflict:
         raise AssertionError("Integrity snapshot equivalence or episode identity was not canonical.")
+    soundvt = _canonical_integrity_snapshot([{"date":"2026-08-23","area_location_id":58,"event_start_at":"07:30","reason":"expected positions absent: Sound/VT","conflict_count":1}])
+    sound_vt = _canonical_integrity_snapshot([{"date":"2026-08-23","area_location_id":58,"event_start_at":"07:30","reason":"expected positions absent: sound, vt","conflict_count":1}])
+    svt = _canonical_integrity_snapshot([{"date":"2026-08-23","area_location_id":58,"event_start_at":"07:30","reason":"expected positions absent: SVT","conflict_count":1}])
+    if soundvt != svt or soundvt == sound_vt:
+        raise AssertionError("Sound/VT canonical role semantics collapsed distinct roles.")
     with get_connection() as conn:
         healthy_stamp = (alert_now + timedelta(hours=1)).isoformat()
         conn.execute(

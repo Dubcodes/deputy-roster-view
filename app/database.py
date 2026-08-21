@@ -620,6 +620,36 @@ def init_db(settings: Settings | None = None) -> None:
                 raw_payload TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS sync_generations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reason TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                superseded_by_generation_id INTEGER,
+                FOREIGN KEY (superseded_by_generation_id) REFERENCES sync_generations(id)
+            );
+            CREATE TABLE IF NOT EXISTS sync_generation_members (
+                generation_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                planned_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                message TEXT,
+                PRIMARY KEY (generation_id, user_id),
+                FOREIGN KEY (generation_id) REFERENCES sync_generations(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_sync_generation_members_user ON sync_generation_members(user_id,status,planned_at);
+            CREATE TABLE IF NOT EXISTS settled_integrity_state (
+                id INTEGER PRIMARY KEY CHECK (id=1),
+                generation_id INTEGER,
+                findings_json TEXT NOT NULL DEFAULT '[]',
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (generation_id) REFERENCES sync_generations(id)
+            );
+
             CREATE TABLE IF NOT EXISTS deputy_schedule_observations (
                 source_shift_id INTEGER NOT NULL,
                 observer_key TEXT NOT NULL,
@@ -2624,6 +2654,114 @@ def get_trusted_device(token_hash: str, now: str | None = None) -> sqlite3.Row |
             """,
             (token_hash, now),
         ).fetchone()
+
+
+def create_sync_generation(reason: str, members: list[tuple[int, str]], created_at: str) -> int:
+    """Persist a planned dispatch; completion is derived only from terminal members."""
+    with get_connection() as conn:
+        cursor = conn.execute("INSERT INTO sync_generations(reason,created_at) VALUES(?,?)", (reason, created_at))
+        generation_id = int(cursor.lastrowid)
+        conn.executemany(
+            "INSERT INTO sync_generation_members(generation_id,user_id,planned_at) VALUES(?,?,?)",
+            [(generation_id, user_id, planned_at) for user_id, planned_at in members],
+        )
+    return generation_id
+
+
+def claim_sync_generation_member(generation_id: int, user_id: int, started_at: str) -> bool:
+    """Atomically claim one pending member. Only the winner may capture roster data."""
+    with get_connection() as conn:
+        result = conn.execute(
+            """UPDATE sync_generation_members SET status='running',started_at=?
+               WHERE generation_id=? AND user_id=? AND status='pending'""",
+            (started_at, generation_id, user_id),
+        )
+        return result.rowcount == 1
+
+
+def mark_sync_generation_member(generation_id: int, user_id: int, status: str, at: str, message: str = "") -> bool:
+    """Finish a claimed member without permitting terminal states to regress."""
+    if status not in {"success", "error", "skipped", "superseded"}:
+        raise ValueError("Invalid sync generation member status")
+    with get_connection() as conn:
+        result = conn.execute(
+            """UPDATE sync_generation_members SET status=?,finished_at=?,message=?
+               WHERE generation_id=? AND user_id=? AND status='running'""",
+            (status, at, message[:500], generation_id, user_id),
+        )
+        if result.rowcount != 1:
+            return False
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM sync_generation_members WHERE generation_id=? AND status NOT IN ('success','error','skipped','superseded')",
+            (generation_id,),
+        ).fetchone()[0]
+        if not remaining:
+            errors = conn.execute("SELECT COUNT(*) FROM sync_generation_members WHERE generation_id=? AND status='error'", (generation_id,)).fetchone()[0]
+            conn.execute("""UPDATE sync_generations SET status=?,completed_at=COALESCE(completed_at,?)
+                            WHERE id=? AND status='pending'""", ("error" if errors else "complete", at, generation_id))
+        return True
+
+
+def recover_incomplete_sync_generations(at: str, message: str = "Previous sync stopped during app restart.") -> int:
+    """Repair persisted generations after restart; future pending members remain runnable."""
+    with get_connection() as conn:
+        running = conn.execute(
+            """UPDATE sync_generation_members SET status='error',finished_at=?,message=?
+               WHERE status='running'""", (at, message[:500])
+        ).rowcount
+        generation_ids = [row[0] for row in conn.execute(
+            """SELECT id FROM sync_generations WHERE status='pending'
+               AND NOT EXISTS (SELECT 1 FROM sync_generation_members m WHERE m.generation_id=sync_generations.id
+                               AND m.status NOT IN ('success','error','skipped','superseded'))"""
+        ).fetchall()]
+        for generation_id in generation_ids:
+            errors = conn.execute("SELECT COUNT(*) FROM sync_generation_members WHERE generation_id=? AND status='error'", (generation_id,)).fetchone()[0]
+            conn.execute("UPDATE sync_generations SET status=?,completed_at=COALESCE(completed_at,?) WHERE id=? AND status='pending'", ("error" if errors else "complete", at, generation_id))
+        return running + len(generation_ids)
+
+
+def latest_relevant_sync_generation() -> sqlite3.Row | None:
+    with get_connection() as conn:
+        return conn.execute("SELECT * FROM sync_generations ORDER BY id DESC LIMIT 1").fetchone()
+
+
+def active_sync_generation_for_user(user_id: int) -> sqlite3.Row | None:
+    with get_connection() as conn:
+        return conn.execute(
+            """SELECT m.generation_id,m.status FROM sync_generation_members m JOIN sync_generations g ON g.id=m.generation_id
+               WHERE m.user_id=? AND g.status='pending' AND m.status IN ('pending','running') ORDER BY m.generation_id DESC LIMIT 1""",
+            (user_id,),
+        ).fetchone()
+
+
+def promote_pending_sync_generation_member(user_id: int, planned_at: str) -> int | None:
+    """Bring one existing pending member forward without creating another dispatch."""
+    with get_connection() as conn:
+        row = conn.execute(
+            """SELECT m.generation_id FROM sync_generation_members m JOIN sync_generations g ON g.id=m.generation_id
+               WHERE m.user_id=? AND g.status='pending' AND m.status='pending' ORDER BY m.generation_id DESC LIMIT 1""",
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        generation_id = int(row["generation_id"])
+        conn.execute("UPDATE sync_generation_members SET planned_at=? WHERE generation_id=? AND user_id=? AND status='pending'", (planned_at, generation_id, user_id))
+        conn.execute("UPDATE user_sync_state SET next_sync_after=?,updated_at=? WHERE user_id=?", (planned_at, planned_at, user_id))
+        return generation_id
+
+
+def get_settled_integrity_state() -> sqlite3.Row | None:
+    with get_connection() as conn:
+        return conn.execute("SELECT * FROM settled_integrity_state WHERE id=1").fetchone()
+
+
+def save_settled_integrity_state(generation_id: int, findings_json: str, updated_at: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO settled_integrity_state(id,generation_id,findings_json,updated_at) VALUES(1,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET generation_id=excluded.generation_id,findings_json=excluded.findings_json,updated_at=excluded.updated_at""",
+            (generation_id, findings_json, updated_at),
+        )
 
 
 def update_trusted_device_seen(device_id: int, expires_at: str | None = None) -> None:

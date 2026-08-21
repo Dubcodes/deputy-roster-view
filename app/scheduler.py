@@ -12,6 +12,9 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import Settings, get_settings
 from .database import (
+    active_sync_generation_for_user,
+    claim_sync_generation_member,
+    create_sync_generation,
     get_calendar_url,
     get_due_user_syncs,
     get_next_upcoming_shift,
@@ -19,6 +22,7 @@ from .database import (
     list_syncable_app_users,
     mark_user_sync_finished,
     mark_user_sync_started,
+    mark_sync_generation_member,
     set_user_next_sync,
     write_sync_log,
 )
@@ -175,6 +179,7 @@ def plan_staggered_user_syncs(
     stagger_minutes = max(1, settings.user_sync_stagger_minutes)
     jitter_minutes = max(0, settings.user_sync_jitter_minutes)
     planned_times: list[str] = []
+    members: list[tuple[int, str]] = []
 
     for index, user in enumerate(users):
         jitter = _stable_jitter_minutes(int(user["id"]), start_at.date().isoformat(), reason, jitter_minutes)
@@ -182,6 +187,9 @@ def plan_staggered_user_syncs(
         next_sync_text = next_sync.isoformat()
         set_user_next_sync(int(user["id"]), next_sync_text, reason)
         planned_times.append(next_sync_text)
+        members.append((int(user["id"]), next_sync_text))
+
+    generation_id = create_sync_generation(reason, members, start_at.isoformat())
 
     return {
         "planned": len(users),
@@ -190,6 +198,7 @@ def plan_staggered_user_syncs(
         "last_at": planned_times[-1],
         "stagger_minutes": stagger_minutes,
         "jitter_minutes": jitter_minutes,
+        "generation_id": generation_id,
     }
 
 
@@ -205,7 +214,11 @@ def run_due_user_syncs(settings: Settings | None = None) -> dict[str, object]:
         for user in due_users:
             user_id = int(user["id"])
             started_at = _now(settings).isoformat()
+            generation = active_sync_generation_for_user(user_id)
+            if not generation or not claim_sync_generation_member(int(generation["generation_id"]), user_id, started_at):
+                continue
             if not mark_user_sync_started(user_id, started_at):
+                mark_sync_generation_member(int(generation["generation_id"]), user_id, "error", started_at, "Sync claim lost to an existing user sync.")
                 continue
             try:
                 summary = sync_roster_sources(settings, user_id=user_id)
@@ -221,6 +234,8 @@ def run_due_user_syncs(settings: Settings | None = None) -> dict[str, object]:
                 status=status,
                 message=message,
             )
+            if generation:
+                mark_sync_generation_member(int(generation["generation_id"]), user_id, "success" if status == "ok" else "error", finished_at, message)
             results.append({"user_id": user_id, "status": status, "message": message})
         return {"ran": bool(results), "count": len(results), "results": results}
     finally:

@@ -25,6 +25,8 @@ from .auth import (
 from .config import get_settings
 from .database import (
     calendar_location_key,
+    active_sync_generation_for_user,
+    claim_sync_generation_member,
     canonical_travel_base_label,
     canonical_travel_track,
     clear_all_changed_flags,
@@ -34,6 +36,7 @@ from .database import (
     count_active_admins,
     count_app_users,
     create_admin_override,
+    create_sync_generation,
     create_app_user,
     create_error_report,
     create_trusted_device,
@@ -114,8 +117,11 @@ from .database import (
     list_trusted_devices_for_user,
     mark_user_sync_finished,
     mark_user_sync_started,
+    mark_sync_generation_member,
+    promote_pending_sync_generation_member,
     revoke_trusted_device_for_user,
     reset_incomplete_user_syncs,
+    recover_incomplete_sync_generations,
     reset_user_roster_data,
     purge_app_user,
     purge_old_inactive_records,
@@ -261,7 +267,7 @@ from .deputy_integration import (
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.21.4"
+APP_BUILD = "2026.08.21.5"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -4646,7 +4652,7 @@ def sync_summary_message(summary: dict[str, object]) -> str:
     return message or "No sync source ran. Add a Deputy login or backup iCal URL."
 
 
-def run_manual_sync_job(user_id: int | None = None) -> None:
+def run_manual_sync_job(user_id: int | None = None, generation_id: int | None = None) -> None:
     settings = get_settings()
     if not _sync_worker_lock.acquire(blocking=False):
         set_manual_sync_status(
@@ -4662,6 +4668,9 @@ def run_manual_sync_job(user_id: int | None = None) -> None:
     try:
         started_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
         if user_id is not None:
+            if generation_id is not None and not claim_sync_generation_member(generation_id, user_id, started_at):
+                set_manual_sync_status(user_id, running=False, label="Ready", message="This scheduled sync was already claimed.", finished_at=started_at, status="ready")
+                return
             ensure_user_sync_state(user_id)
             user_state_started = mark_user_sync_started(user_id, started_at)
             if not user_state_started:
@@ -4702,6 +4711,8 @@ def run_manual_sync_job(user_id: int | None = None) -> None:
                 status=status,
                 message=message,
             )
+            if generation_id is not None:
+                mark_sync_generation_member(generation_id, user_id, "success" if status == "ready" else "error", finished_at, message)
     except Exception as exc:
         finished_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
         set_manual_sync_status(
@@ -4719,6 +4730,8 @@ def run_manual_sync_job(user_id: int | None = None) -> None:
                 status="error",
                 message=f"Sync failed: {exc.__class__.__name__}.",
             )
+            if generation_id is not None:
+                mark_sync_generation_member(generation_id, user_id, "error", finished_at, f"Sync failed: {exc.__class__.__name__}.")
     finally:
         _sync_worker_lock.release()
 
@@ -4728,16 +4741,29 @@ def queue_manual_sync(background_tasks: BackgroundTasks, user_id: int | None = N
     if bool(status.get("running")):
         return False
     settings = get_settings()
+    now = datetime.now(settings.timezone).isoformat(timespec="seconds")
+    if user_id is not None:
+        active = active_sync_generation_for_user(user_id)
+        if active:
+            if str(active["status"] or "") == "pending":
+                promote_pending_sync_generation_member(user_id, now)
+                set_manual_sync_status(user_id, running=True, label="Sync queued", message="Scheduled sync brought forward.", started_at=now, finished_at="", status="running")
+                background_tasks.add_task(run_manual_sync_job, user_id, int(active["generation_id"]))
+                return True
+            return False
     set_manual_sync_status(
         user_id,
         running=True,
         label="Scanning Deputy page now",
         message="Sync queued.",
-        started_at=datetime.now(settings.timezone).isoformat(timespec="seconds"),
+            started_at=now,
         finished_at="",
         status="running",
     )
-    background_tasks.add_task(run_manual_sync_job, user_id)
+    generation_id = None
+    if user_id is not None:
+        generation_id = create_sync_generation("manual", [(user_id, now)], now)
+    background_tasks.add_task(run_manual_sync_job, user_id, generation_id)
     return True
 
 
@@ -5339,6 +5365,7 @@ def on_startup() -> None:
     purge_old_inactive_records(days=30)
     deactivate_inactive_contractors()
     reset_incomplete_user_syncs()
+    recover_incomplete_sync_generations(datetime.now(get_settings().timezone).isoformat(timespec="seconds"))
     start_scheduler()
 
 

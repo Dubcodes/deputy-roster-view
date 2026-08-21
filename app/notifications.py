@@ -8,10 +8,11 @@ from datetime import date, datetime, time, timedelta
 from typing import Callable
 
 from .config import Settings, get_settings
-from .database import crew_identity_records, get_connection, list_open_workday_positions, resolve_workday_snapshot_assignments
+from .database import crew_identity_records, get_connection, get_settled_integrity_state, latest_relevant_sync_generation, list_open_workday_positions, resolve_workday_snapshot_assignments, save_settled_integrity_state
 from .push_identity import ensure_push_identity
 from .interpreted_workdays import interpret_deputy_workdays
 from .workday_timing import effective_rostered_start
+from .workday_builder import canonical_role_key
 
 
 DEFAULT_PREFERENCES = {
@@ -421,28 +422,38 @@ def push_open_position_eligible(position: dict[str, object]) -> bool:
 
 def _canonical_integrity_snapshot(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     """Canonical persisted integrity state: stable formatting, distinct episodes."""
-    role_aliases = {"soundvt": ("sound", "vt"), "sound": ("sound",), "vt": ("vt",)}
     snapshots = []
     for row in rows:
         reason = str(row.get("reason") or "Conflicting roster evidence").casefold()
-        compact = re.sub(r"[^a-z0-9]+", "", reason)
         roles: set[str] = set()
-        for token in re.findall(r"[a-z]+\d*", reason):
-            roles.update(role_aliases.get(token, (token,) if token.startswith("ccu") else ()))
-        if "sound" in compact and "vt" in compact:
-            roles.update(("sound", "vt"))
-        condition = re.sub(r"\bsoundvt\b", "sound vt", reason)
-        condition = re.sub(r"\b(?:sound|vt|ccu\d*)\b", "role", condition)
-        condition = re.sub(r"[^a-z0-9]+", " ", condition).strip()
+        clauses = []
+        for raw_clause in reason.split(";"):
+            condition_text, _, role_text = raw_clause.partition(":")
+            clause_roles = {canonical_role_key(token) for token in re.split(r"\s*,\s*", role_text) if token.strip()}
+            clause_roles.discard("")
+            roles.update(clause_roles)
+            condition = re.sub(r"[^a-z0-9]+", "_", condition_text).strip("_")
+            clauses.append({"condition": condition or re.sub(r"[^a-z0-9]+", "_", raw_clause).strip("_"), "roles": sorted(clause_roles)})
         snapshots.append({
             "date": str(row.get("date") or ""),
             "location": str(row.get("area_location_id") or ""),
             "event_start": str(row.get("event_start_at") or ""),
-            "condition": condition,
+            "clauses": sorted(clauses, key=lambda item: json.dumps(item, sort_keys=True)),
             "roles": sorted(roles),
             "conflict_count": int(row.get("conflict_count") or 0),
         })
     return sorted(snapshots, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
+
+
+def _integrity_delta(previous: list[dict[str, object]], current: list[dict[str, object]]) -> bool:
+    def keyed(items: list[dict[str, object]]) -> dict[str, int]:
+        result = {}
+        for item in items:
+            key = json.dumps({key: value for key, value in item.items() if key != "conflict_count"}, sort_keys=True, separators=(",", ":"))
+            result[key] = max(result.get(key, 0), int(item.get("conflict_count") or 0))
+        return result
+    old, new = keyed(previous), keyed(current)
+    return any(key not in old or value > old[key] for key, value in new.items())
 
 
 def _queue_admin_operational_alerts(now: datetime) -> int:
@@ -489,27 +500,34 @@ def _queue_admin_operational_alerts(now: datetime) -> int:
                  AND last_capture_at>=?""",
             (cutoff,),
         ).fetchall()]
-        sync_activity = conn.execute(
-            """SELECT MAX(updated_at) AS latest,
-                      MAX(CASE WHEN COALESCE(sync_in_progress,0)=1 AND updated_at>=? THEN 1 ELSE 0 END) AS active
-               FROM user_sync_state""",
-            ((now - timedelta(minutes=15)).isoformat(),),
-        ).fetchone()
         write_rows = [dict(row) for row in conn.execute(
             """SELECT operation_uuid,operation_type,stable_assignment_key,status,error_class,updated_at
                FROM deputy_write_operations WHERE status IN ('unknown','ambiguous') AND updated_at>=?""",
             (cutoff,),
         ).fetchall()]
-    latest_sync = str(sync_activity["latest"] or "") if sync_activity else ""
-    sync_active = bool(sync_activity and sync_activity["active"])
+    latest_generation = latest_relevant_sync_generation()
+    latest_sync = str(latest_generation["completed_at"] or "") if latest_generation else ""
+    sync_active = bool(latest_generation and str(latest_generation["status"] or "") == "pending")
     try:
         latest_sync_at = datetime.fromisoformat(latest_sync).astimezone(now.tzinfo) if latest_sync else None
     except ValueError:
         latest_sync_at = None
     integrity_ready = bool(
-        integrity_rows and not sync_active
+        integrity_rows and latest_generation is not None and str(latest_generation["status"] or "") == "complete" and not sync_active
         and (latest_sync_at is None or (now - latest_sync_at).total_seconds() >= INTEGRITY_SETTLE_SECONDS)
     )
+    snapshot: list[dict[str, object]] = []
+    should_alert = False
+    dates: set[str] = set()
+    if integrity_ready:
+        dates = {str(row.get("date") or "") for row in integrity_rows}
+        snapshot = _canonical_integrity_snapshot(integrity_rows)
+        baseline = get_settled_integrity_state()
+        try:
+            previous = json.loads(str(baseline["findings_json"] or "[]")) if baseline else []
+        except (TypeError, ValueError, json.JSONDecodeError):
+            previous = []
+        should_alert = _integrity_delta(previous, snapshot)
     created = 0
     for admin_id in admin_ids:
         for row in travel_rows:
@@ -551,16 +569,13 @@ def _queue_admin_operational_alerts(now: datetime) -> int:
         # Coverage warnings are snapshots of a multi-step sync.  Do not emit
         # provisional per-event pushes; after the persistent 90-second settle
         # period, send one deterministic aggregate for the committed state.
-        if integrity_ready:
-            dates = {str(row.get("date") or "") for row in integrity_rows}
-            snapshot = _canonical_integrity_snapshot(integrity_rows)
-            signature = hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:20]
+        if integrity_ready and should_alert:
             created += int(queue_notification(
                 user_id=admin_id, event_type="admin_alert", workday_kind="roster_integrity",
                 workday_id="settled-integrity", event_date="", title="Re-Deputy · Roster integrity",
                 body=f"{len(integrity_rows)} items need review · {len(dates)} dates · inspect Roster integrity",
                 target_url="/admin#roster-integrity", scheduled_at=now,
-                revision=f"integrity-settled:{signature}",
+                revision=f"integrity-settled:generation:{latest_generation['id']}",
             ))
         for row in write_rows:
             created += int(queue_notification(
@@ -570,6 +585,10 @@ def _queue_admin_operational_alerts(now: datetime) -> int:
                 target_url="/admin#deputy-write-audit", scheduled_at=now,
                 revision=f"write-unresolved:{row['operation_uuid']}:{row.get('status')}:{row.get('error_class')}",
             ))
+    # Persist only after every eligible recipient has been durably queued.  A
+    # crash before this point is retried safely by queue_notification's key.
+    if integrity_ready:
+        save_settled_integrity_state(int(latest_generation["id"]), json.dumps(snapshot, sort_keys=True), now.isoformat())
     return created
 
 
