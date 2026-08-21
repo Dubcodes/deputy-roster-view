@@ -267,7 +267,7 @@ from .deputy_integration import (
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.21.5"
+APP_BUILD = "2026.08.21.6"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -4674,6 +4674,8 @@ def run_manual_sync_job(user_id: int | None = None, generation_id: int | None = 
             ensure_user_sync_state(user_id)
             user_state_started = mark_user_sync_started(user_id, started_at)
             if not user_state_started:
+                if generation_id is not None:
+                    mark_sync_generation_member(generation_id, user_id, "error", started_at, "Sync claim lost to an existing user sync.")
                 set_manual_sync_status(
                     user_id,
                     running=False,

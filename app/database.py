@@ -2725,6 +2725,29 @@ def latest_relevant_sync_generation() -> sqlite3.Row | None:
         return conn.execute("SELECT * FROM sync_generations ORDER BY id DESC LIMIT 1").fetchone()
 
 
+def active_scheduled_sync_generation() -> sqlite3.Row | None:
+    """The one persisted scheduled batch that future dispatches must reuse."""
+    with get_connection() as conn:
+        return conn.execute(
+            """SELECT * FROM sync_generations WHERE status='pending' AND reason!='manual'
+               ORDER BY id DESC LIMIT 1"""
+        ).fetchone()
+
+
+def integrity_generation_boundary() -> tuple[sqlite3.Row | None, bool]:
+    """Return the final terminal mutation boundary, while any active work blocks it."""
+    with get_connection() as conn:
+        active = conn.execute(
+            """SELECT 1 FROM sync_generation_members m JOIN sync_generations g ON g.id=m.generation_id
+               WHERE m.status IN ('pending','running') AND g.status!='superseded' LIMIT 1"""
+        ).fetchone() is not None
+        latest = conn.execute(
+            """SELECT * FROM sync_generations WHERE status IN ('complete','error')
+               ORDER BY completed_at DESC,id DESC LIMIT 1"""
+        ).fetchone()
+        return latest, active
+
+
 def active_sync_generation_for_user(user_id: int) -> sqlite3.Row | None:
     with get_connection() as conn:
         return conn.execute(

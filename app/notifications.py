@@ -8,7 +8,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Callable
 
 from .config import Settings, get_settings
-from .database import crew_identity_records, get_connection, get_settled_integrity_state, latest_relevant_sync_generation, list_open_workday_positions, resolve_workday_snapshot_assignments, save_settled_integrity_state
+from .database import crew_identity_records, get_connection, get_settled_integrity_state, integrity_generation_boundary, list_open_workday_positions, resolve_workday_snapshot_assignments, save_settled_integrity_state
 from .push_identity import ensure_push_identity
 from .interpreted_workdays import interpret_deputy_workdays
 from .workday_timing import effective_rostered_start
@@ -505,15 +505,16 @@ def _queue_admin_operational_alerts(now: datetime) -> int:
                FROM deputy_write_operations WHERE status IN ('unknown','ambiguous') AND updated_at>=?""",
             (cutoff,),
         ).fetchall()]
-    latest_generation = latest_relevant_sync_generation()
+    latest_generation, sync_active = integrity_generation_boundary()
     latest_sync = str(latest_generation["completed_at"] or "") if latest_generation else ""
-    sync_active = bool(latest_generation and str(latest_generation["status"] or "") == "pending")
     try:
         latest_sync_at = datetime.fromisoformat(latest_sync).astimezone(now.tzinfo) if latest_sync else None
     except ValueError:
         latest_sync_at = None
+    # A trustworthy empty result is a real settled state too: it clears the
+    # durable baseline so a later reappearance is a fresh notification episode.
     integrity_ready = bool(
-        integrity_rows and latest_generation is not None and str(latest_generation["status"] or "") == "complete" and not sync_active
+        latest_generation is not None and str(latest_generation["status"] or "") == "complete" and not sync_active
         and (latest_sync_at is None or (now - latest_sync_at).total_seconds() >= INTEGRITY_SETTLE_SECONDS)
     )
     snapshot: list[dict[str, object]] = []

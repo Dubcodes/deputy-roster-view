@@ -13,6 +13,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from .config import Settings, get_settings
 from .database import (
     active_sync_generation_for_user,
+    active_scheduled_sync_generation,
     claim_sync_generation_member,
     create_sync_generation,
     get_calendar_url,
@@ -176,6 +177,9 @@ def plan_staggered_user_syncs(
         return {"planned": 0, "reason": "no users with saved Deputy credentials"}
 
     start_at = (start_at or _now(settings)).replace(microsecond=0)
+    existing = active_scheduled_sync_generation()
+    if existing:
+        return {"planned": 0, "reason": reason, "generation_id": int(existing["id"]), "coalesced": True}
     stagger_minutes = max(1, settings.user_sync_stagger_minutes)
     jitter_minutes = max(0, settings.user_sync_jitter_minutes)
     planned_times: list[str] = []
