@@ -1650,7 +1650,6 @@ async def capture_and_save_deputy_web(
             "responses": [],
         }
         payload_text = json.dumps(payload, ensure_ascii=True)
-        update_app_settings({"last_deputy_web_capture": payload_text})
         save_deputy_web_capture_diagnostic(
             owner_user_id=owner_user_id,
             captured_at=str(payload.get("captured_at") or ""),
@@ -1694,7 +1693,6 @@ async def capture_and_save_deputy_web(
             result.payload.setdefault("events", []).append(
                 f"Removed {removed_schedule_rows} schedule rows absent from complete Deputy windows."
             )
-        update_app_settings({"last_deputy_web_capture": json.dumps(result.payload, ensure_ascii=True)})
 
     return {
         "status": result.status,

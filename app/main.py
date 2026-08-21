@@ -63,7 +63,6 @@ from .database import (
     get_app_user,
     get_app_user_by_email,
     get_shift_changes_for_date,
-    get_last_deputy_web_capture,
     get_latest_deputy_web_capture_for_user,
     get_love_racing_snapshot,
     get_love_racing_planning_meeting,
@@ -159,7 +158,7 @@ from .database import (
     user_has_ical_url,
     visible_workday_ids_for_user,
 )
-from .deputy_web import capture_and_save_deputy_web, format_capture_payload
+from .deputy_web import format_capture_payload
 from .love_racing import LOVE_RACING_URL
 from .planning_calendar import (
     preview_love_racing_meeting,
@@ -262,7 +261,7 @@ from .deputy_integration import (
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.21.3"
+APP_BUILD = "2026.08.21.4"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -5910,6 +5909,7 @@ def admin_page_context(
         "notification_summary": notification_admin_summary(),
         "contractors": contractor_admin_rows(),
         "deputy_api_config": load_deputy_api_config(),
+        "deputy_api_connection": connection_status(int(user["id"])),
         "deputy_write_audit": write_audit_summary(),
         "deputy_mappings": mapping_snapshot(int(user["id"])),
     }

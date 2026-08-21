@@ -6584,10 +6584,6 @@ def get_app_setting(key: str, default: str = "") -> str:
     return str(row["value"] or "")
 
 
-def get_last_deputy_web_capture() -> str:
-    return get_app_setting("last_deputy_web_capture", "")
-
-
 def save_deputy_web_capture_diagnostic(
     *,
     owner_user_id: int | None,

@@ -93,29 +93,6 @@
           </form>
           <p class="muted">Use this if your Deputy password changed or the original signup details were wrong. Email, URL, and accidental edge spaces are cleaned up before saving. Passwords are encrypted before storage.</p>
         </details>
-        {% if current_user and current_user.is_admin %}
-        <details class="inline-settings-details">
-          <summary>Deputy roster editing <span>{{ 'OAuth linked' if deputy_api_connection.connected else 'OAuth not linked' }}</span></summary>
-          {% if deputy_api_connection.connected %}
-            <p><strong>{{ deputy_api_connection.display_label }}</strong><br>Employee #{{ deputy_api_connection.deputy_employee_id }}</p>
-            <p>Read access<br><strong>{{ 'Ready' if deputy_api_connection.read_ready else 'Not ready' }}</strong></p>
-            {% if not deputy_api_connection.read_ready %}<p class="muted">{{ deputy_api_connection.read_reason }}</p>{% endif %}
-            <p>Roster writes<br><strong>{{ deputy_api_connection.write_label }}</strong></p>
-            {% if not deputy_api_connection.write_ready and deputy_api_connection.write_label == 'Not available' %}<p class="muted">{{ deputy_api_connection.write_reason }}</p>{% endif %}
-            <p class="muted">{{ deputy_api_connection.tenant_host }} · verified {{ deputy_api_connection.last_verified_at|datetime }}</p>
-            <div class="settings-action-row">
-              <form action="/settings/deputy-api/recheck" method="post"><button class="button button-secondary" type="submit">Recheck access</button></form>
-              <form action="/settings/deputy-api/disconnect" method="post"><button class="button button-quiet" type="submit" onclick="return confirm('Disconnect your Deputy API account?');">Disconnect</button></form>
-            </div>
-          {% else %}
-            <p class="muted">Normal roster syncing is separate and can continue without this connection. Link your Deputy account here only for authorized roster-management actions; Re-Deputy Admin status does not grant Deputy permission.</p>
-            <form class="settings-form compact-settings-form" action="/settings/deputy-api/connect" method="post">
-              <p class="muted">Deputy will ask you to choose the installation. Re-Deputy accepts only the verified regional Deputy endpoint returned by OAuth.</p>
-              <button class="button button-secondary" type="submit">Connect Deputy</button>
-            </form>
-          {% endif %}
-        </details>
-        {% endif %}
         <details class="inline-settings-details">
           <summary>Deactivate my account</summary>
           <p class="muted">This signs this device out, stops future syncs, and marks your account for deletion after 30 days unless an admin reactivates it.</p>
@@ -356,13 +333,13 @@
       </details>
 
       <details class="inline-settings-details">
-        <summary>Most Recent iCal Data</summary>
+        <summary>Recent raw roster source data</summary>
         {% if not source_payload_shifts %}
-          <div class="empty-state">No iCal source data has been stored yet.</div>
+          <div class="empty-state">No raw roster source data has been stored yet.</div>
         {% else %}
           <div class="copy-panel">
             <div class="section-heading">
-              <h3>Copy iCal Data</h3>
+              <h3>Copy roster source data</h3>
               <button class="button button-compact" type="button" data-copy-target="ical-copy">Copy All</button>
             </div>
             <textarea id="ical-copy" class="copy-box" rows="10" readonly>{% for shift in source_payload_shifts %}--- {{ shift.start_at|datetime }} · {{ shift.track_label }} · {{ shift.role_full_label or shift.role_label or shift.title or "Shift" }} ---

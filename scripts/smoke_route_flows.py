@@ -711,10 +711,11 @@ def main() -> None:
         raise AssertionError(
             "Expected duplicate next-shift details removed while preserving last-sync status."
         )
-    if "Deputy roster editing" not in settings_page.text:
-        raise AssertionError(
-            "Expected Admin Settings to retain the Deputy roster editing panel."
-        )
+    if any(text in settings_page.text for text in ("Deputy roster editing", "Connect Deputy", "Recheck access", "Disconnect")):
+        raise AssertionError("Settings must not expose Deputy OAuth or write-management controls, even to Admins.")
+    admin_page = client.get("/admin")
+    if admin_page.status_code != 200 or "Deputy API" not in admin_page.text or "Connect Deputy" not in admin_page.text:
+        raise AssertionError("Expected the disconnected Admin Deputy OAuth controls under Admin.")
     if "Roster snapshot" in settings_page.text:
         raise AssertionError("Expected the duplicate roster snapshot panel to remain removed.")
     if "Refresh Planning Calendar" in settings_page.text:
