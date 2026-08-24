@@ -3,7 +3,7 @@
 {% macro crew_person_row(person, app_users, active_teams) %}
   <article id="crew-person-{{ person.id }}" class="crew-management-row{% if not person.is_active %} is-inactive{% endif %}" data-crew-row data-search="{{ person.search_text }}" data-team-ids="{{ person.team_ids|join(',') }}">
     <div class="crew-management-main">
-      <span><strong>{{ person.canonical_display_name }}</strong><small>{% if person.deputy_employee_id %}Deputy #{{ person.deputy_employee_id }}{% else %}No Deputy ID{% endif %}{% if person.aliases_text %} · {{ person.aliases_text }}{% endif %} · {% if person.app_user_id %}App linked{% else %}<span class="badge">No app login</span>{% endif %}</small></span>
+      <span><strong>{{ person.canonical_display_name }}</strong><small>{% if person.person_type == 'contractor' %}Contractor{% if person.company %} · {{ person.company }}{% endif %}{% elif person.deputy_employee_id %}Deputy #{{ person.deputy_employee_id }}{% else %}Employee · no Deputy ID{% endif %}{% if person.aliases_text %} · {{ person.aliases_text }}{% endif %} · {% if person.app_user_id %}App linked{% else %}<span class="badge">No app login</span>{% endif %}</small></span>
       <div class="crew-team-editor" aria-label="Teams for {{ person.canonical_display_name }}">
         <div class="crew-team-chips">
           {% for team in person.teams if team.active %}
@@ -39,16 +39,6 @@
 {% block title %}Admin - Re-Deputy{% endblock %}
 
 {% block content %}
-  <section class="table-panel">
-    <h2>Invite Re-Deputy account</h2>
-    {% if new_account_invite_url %}<div class="copy-panel"><label class="form-row"><span>Activation link — copy now</span><input value="{{ new_account_invite_url }}" readonly></label></div>{% endif %}
-    <form class="settings-form" action="/admin/account-invitations" method="post">
-      <label class="form-row"><span>Account email</span><input type="email" name="account_email" required></label>
-      <label class="form-row"><span>Display name (optional)</span><input name="display_name" autocomplete="name"></label>
-      <button class="button" type="submit">Invite Re-Deputy account</button>
-    </form>
-    {% for invite in account_invitations %}<div class="admin-device-row"><span><strong>{{ invite.display_name or invite.account_email }}</strong><small>{{ invite.account_email }} · expires {{ invite.expires_at|datetime }}{% if invite.consumed_at %} · consumed{% elif invite.revoked_at %} · revoked{% endif %}</small></span>{% if not invite.consumed_at and not invite.revoked_at %}<form action="/admin/account-invitations/{{ invite.id }}/revoke" method="post"><button class="button button-secondary button-compact">Revoke</button></form>{% endif %}</div>{% endfor %}
-  </section>
   <section class="page-heading compact-heading">
     <div>
       <p class="eyebrow">Admin</p>
@@ -58,6 +48,33 @@
       <a class="button" href="/admin/roster-days/new">Build Work Day</a>
     </div>
   </section>
+
+  <details class="table-panel"{% if new_account_invite_url %} open{% endif %}>
+    <summary class="management-panel-summary"><span><strong>Accounts &amp; access</strong><small>Users, invitations, and restricted contractors</small></span><span>{{ users|length }} users</span></summary>
+    <div class="management-panel-body">
+      <p><a class="button button-secondary button-compact" href="#admin-users">Manage users and trusted devices</a></p>
+      <details{% if new_account_invite_url %} open{% endif %}><summary>Re-Deputy account invitations</summary>
+        {% if new_account_invite_url %}<div class="copy-panel"><label class="form-row"><span>Activation link — copy now</span><input value="{{ new_account_invite_url }}" readonly></label></div>{% endif %}
+        <form class="settings-form compact-settings-form" action="/admin/account-invitations" method="post">
+          <label class="form-row"><span>Account email</span><input type="email" name="account_email" required></label>
+          <label class="form-row"><span>Display name (optional)</span><input name="display_name" autocomplete="name"></label>
+          <label class="form-row"><span>Link to existing crew person (optional)</span><select name="crew_person_id"><option value="">Account only</option>{% for person in unlinked_crew_people if person.person_type != 'contractor' %}<option value="{{ person.id }}">{{ person.canonical_display_name }}</option>{% endfor %}</select></label>
+          <button class="button" type="submit">Create account invitation</button>
+        </form>
+        {% for invite in account_invitations %}<div class="admin-device-row"><span><strong>{{ invite.display_name or invite.account_email }}</strong><small>{{ invite.account_email }} · expires {{ invite.expires_at|datetime }}{% if invite.crew_person_id %} · explicit crew link{% endif %}{% if invite.consumed_at %} · consumed{% elif invite.revoked_at %} · revoked{% endif %}</small></span>{% if not invite.consumed_at and not invite.revoked_at %}<form action="/admin/account-invitations/{{ invite.id }}/revoke" method="post"><button class="button button-secondary button-compact">Revoke</button></form>{% else %}<form action="/admin/account-invitations/{{ invite.id }}/delete" method="post"><button class="button button-quiet button-compact">Remove record</button></form>{% endif %}</div>{% endfor %}
+      </details>
+      <details><summary>Contractors · {{ contractors.accounts|length }} accounts</summary>
+        <form class="settings-form compact-settings-form" action="/admin/contractors/invites" method="post">
+          <label class="form-row"><span>Name</span><input name="contractor_name" autocomplete="name" required></label>
+          <label class="form-row"><span>Company / organisation (optional)</span><input name="company" autocomplete="organization"></label>
+          <button class="button" type="submit">Create contractor invite</button>
+        </form>
+        {% if contractors.accounts %}<form class="settings-form compact-settings-form" action="/admin/contractors/invites" method="post"><label class="form-row"><span>Replacement invitation</span><select name="replacement_person_id" required><option value="">Choose contractor…</option>{% for account in contractors.accounts %}<option value="{{ account.contractor_person_id }}">{{ account.display_name }}{% if account.company %} · {{ account.company }}{% endif %}</option>{% endfor %}</select></label><button class="button button-secondary" type="submit">Create replacement invite</button></form>{% endif %}
+        <p class="muted">Contractors are external crew identities with personal-only access. Invite links expire after 7 days and are displayed once.</p>
+        {% for invite in contractors.invites %}<div class="admin-device-row"><span><strong>{{ invite.canonical_display_name }}</strong><small>{% if invite.company %}{{ invite.company }} · {% endif %}expires {{ invite.expires_at|datetime }}{% if invite.consumed_at %} · consumed{% elif invite.revoked_at %} · revoked{% endif %}</small></span>{% if not invite.consumed_at and not invite.revoked_at %}<form action="/admin/contractors/invites/{{ invite.id }}/revoke" method="post"><button class="button button-secondary button-compact">Revoke</button></form>{% endif %}</div>{% endfor %}
+      </details>
+    </div>
+  </details>
 
   <details class="table-panel">
     <summary class="management-panel-summary"><span><strong>Deputy API</strong><small>Per-user OAuth · production writes unavailable</small></span><span>{% if deputy_api_config.write_mode == 'trial' %}Deputy writes · TRIAL ONLY{% else %}Writes off{% endif %}</span></summary>
@@ -85,18 +102,6 @@
     </div>
   </details>
 
-  <details class="table-panel">
-    <summary class="management-panel-summary"><span><strong>Contractors</strong><small>Restricted access linked to canonical crew</small></span><span>{{ contractors.accounts|length }} accounts</span></summary>
-    <div class="management-panel-body">
-      <form class="settings-form" action="/admin/contractors/invites" method="post">
-        <label class="form-row"><span>Existing crew person</span><select name="person_id" required><option value="">Select…</option>{% for person in unlinked_crew_people %}<option value="{{ person.id }}">{{ person.canonical_display_name }}</option>{% endfor %}{% for account in contractors.accounts %}<option value="{{ account.contractor_person_id }}">{{ account.display_name }} · replacement invite</option>{% endfor %}</select></label>
-        <button class="button" type="submit">Create contractor invite</button>
-      </form>
-      <p class="muted">Invite links expire after 7 days and are displayed once for copying. Only a hash is stored.</p>
-      {% for invite in contractors.invites %}<div class="admin-device-row"><span><strong>{{ invite.canonical_display_name }}</strong><small>{{ invite.created_at|datetime }} · expires {{ invite.expires_at|datetime }}{% if invite.consumed_at %} · consumed{% elif invite.revoked_at %} · revoked{% endif %}</small></span>{% if not invite.consumed_at and not invite.revoked_at %}<form action="/admin/contractors/invites/{{ invite.id }}/revoke" method="post"><button class="button button-secondary button-compact">Revoke</button></form>{% endif %}</div>{% endfor %}
-    </div>
-  </details>
-
   <section class="settings-grid">
     <article class="settings-panel">
       <span class="summary-label">Users</span>
@@ -116,7 +121,7 @@
     <article class="settings-panel">
       <span class="summary-label">Version</span>
       <strong>{{ app_version }}</strong>
-      <p class="muted">Build {{ app_build }}</p>
+      {% if app_build != app_version %}<p class="muted">Revision {{ app_build }}</p>{% endif %}
     </article>
   </section>
 
@@ -776,7 +781,7 @@
 
   <dialog class="builder-duplicate-dialog" data-create-team-dialog><form method="dialog"><h2>Create new team?</h2><p><strong data-create-team-name></strong> does not currently exist.</p><p>This will create the team and assign <strong data-create-team-person></strong> to it.</p><div class="dialog-actions"><button class="button button-secondary" value="cancel">Cancel</button><button class="button" value="create" data-confirm-create-team>Create team</button></div></form></dialog>
 
-  <details class="table-panel">
+  <details class="table-panel" id="admin-users">
     <summary class="management-panel-summary"><span><strong>Users</strong><small>{{ users|length }} accounts</small></span><span>Devices, login, PIN, and account controls</span></summary>
     <div class="management-panel-body">
     <div class="admin-user-list">

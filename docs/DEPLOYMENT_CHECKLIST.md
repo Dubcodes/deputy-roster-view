@@ -4,20 +4,18 @@ Use this immediately before and after a production redeploy. Do not put secrets 
 
 ## Before
 
-- Confirm the intended Git commit and `APP_BUILD`.
+- Confirm the intended immutable Git tag (for this release, `v0.5.1`) and its commit SHA.
 - Stop the existing app and make one timestamped backup of its complete persistent data directory, or use SQLite's online backup API before copying other runtime files.
 - Verify the backup includes the SQLite database, `app_secret.key` when used, `web_push_vapid_private.pem`, `track_maps/`, and every other runtime file in the data directory.
 - **Preserve the existing `APP_SECRET_KEY`.** If the deployment uses `data/app_secret.key`, preserve that file instead. Never generate a replacement for an existing database.
-- Preserve the current Portainer external port, network membership, persistent-volume mapping, Cloudflare/tunnel routing, and environment overrides.
-- Confirm the persistent host directory still maps to `/app/data`; repository Compose expects `./data:/app/data` and the default database is `/app/data/deputy_roster.sqlite3` in-container.
-- Keep `SIGNUP_ENABLED=false` unless public signup is deliberately required. First-user bootstrap remains available on an empty database.
-- Choose `COOKIE_SECURE=true` for permanent HTTPS-only access. Direct HTTP LAN access requires `COOKIE_SECURE=false` and acceptance of the weaker transport protection.
+- Use `production/docker-compose.portainer.yml`; preserve `/data/compose/22/data:/app/data`, the `deputy-roster-multi_default` network, Cloudflare routing, and existing environment values.
+- Confirm there is no published host application port. Cloudflare reaches `deputy-roster-view:8000` privately on the shared Docker network.
+- Keep this installation's intentional `SIGNUP_ENABLED=true` and `COOKIE_SECURE=true` HTTPS-only settings.
 - Confirm Deputy trial-write mode is OFF.
 
 ## Deploy
 
-- Pull/build the intended commit without altering the existing deployment environment.
-- Recreate the app container using the existing port, network, and volume mappings.
+- Set the Portainer Git stack Reference to the approved immutable tag, then Pull and redeploy without altering the existing deployment environment.
 - Do not replace, clear, or remount the persistent data directory.
 - Do not enable Deputy trial writes as part of a normal redeploy.
 
@@ -29,10 +27,10 @@ Use this immediately before and after a production redeploy. Do not put secrets 
 - Check the UI at 320px and 375px widths.
 - Confirm Deputy trial-write mode remains OFF and no background Deputy mutation occurred.
 
-## Rollback
+## Release and rollback
 
-1. Stop the failed container.
-2. Restore the previous known-good code/image.
-3. Restore the timestamped persistent-data backup if database migration rollback is necessary; Git rollback alone does not reverse a migrated database.
-4. Preserve the same `APP_SECRET_KEY` (or restored `app_secret.key`).
-5. Restart and smoke login, month, representative day, and Settings.
+Normal release: review code, run `python scripts/release_gate.py`, push the release commit, wait for exact-SHA CI success, and create immutable tag `v0.5.1`. In Portainer set the Git Reference to `v0.5.1`, then Pull and redeploy and smoke HTTPS, version, and database integrity.
+
+Rollback: choose a previous approved immutable tag such as `v0.5.0`, change the Portainer Git Reference, Pull and redeploy, then verify HTTPS and the database. Restore the timestamped persistent-data backup only when a database migration rollback actually requires it; changing code cannot reverse migrated data.
+
+Changing an environment/display version label alone never changes application code. The Git tag/reference selects the code.

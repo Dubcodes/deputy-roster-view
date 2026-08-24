@@ -193,7 +193,7 @@
               {{ shift.role_chain_label or shift.role_full_label or shift.role_label or shift.title or "Shift" }}
               {% if shift.race_type_label %} · {{ shift.race_type_label }}{% endif %}
               {% if shift.time_range %} · {{ shift.time_range }}{% endif %}
-              · {{ shift.display_hours_label }}
+              · {% if 'Travel' in (shift.role_chain_label or shift.role_full_label or shift.role_label or shift.title or '') %}Rostered travel duration {% endif %}{{ shift.display_hours_label }}
             </p>
           </div>
           <div class="badge-row">
@@ -246,7 +246,7 @@
           </section>
         {% elif shift.description_lines %}
           <section class="description-block">
-            <h3>Roster Notes</h3>
+            <h3>Current roster note</h3>
             <ul class="roster-lines">
               {% for line in shift.description_lines %}
                 <li>{{ line }}</li>

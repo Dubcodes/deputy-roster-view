@@ -1,5 +1,15 @@
 # Re-Deputy Pre-Deployment Safety Log
 
+## 0.5.1 release-candidate closure
+
+Starting baseline: `c29f918f88e98f366add4b1ff9fb52a9198192e8` (`0.5.0`).
+
+Scope: account/crew separation, explicit external contractors, invitation lifecycle, per-account trusted-device LRU cap, conservative Travel participant union, narrow racing gap-fill verification, quieter semantic history, targeted placeholder filtering, limited responsive cleanup, and a tracked hardened Portainer Compose definition.
+
+Safety boundaries retained: production was not deployed or restarted; no live Deputy tenant was contacted; Deputy write mode remains off by default; contractors, Travel, vehicles, Open/TBC, and background work cannot enter Deputy mutation paths. `SIGNUP_ENABLED=true` and `COOKIE_SECURE=true` remain deliberate production settings in `production/docker-compose.portainer.yml`; no host application port is published.
+
+Release selection is now the immutable Git tag `v0.5.1`, created only after exact-release-SHA CI succeeds. Validation evidence and the final tag SHA are recorded in the release handoff rather than guessed before CI.
+
 ## 2026.08.21.7 account/onboarding closure
 
 Phase 0 first reran the canonical deterministic offline release gate against the unchanged 2026.08.21.6 state-machine foundation; it passed, including sync generations, integrity settlement/deduplication, production-shaped interpretation fixtures, migration rehearsal, SQLite integrity/foreign keys, and collision audits. Phase 1 then added hash-only ordinary invitations, independent Re-Deputy/Deputy email handling, the central 4–32 digit PIN contract, healthy no-Deputy behavior, installation-level URL forms, and notification navigation fallback. No live Deputy access/write or deployment was performed.

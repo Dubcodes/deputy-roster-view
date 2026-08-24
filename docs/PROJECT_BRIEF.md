@@ -32,7 +32,7 @@ The app exists because Deputy's roster view is hard to scan. The main questions 
 - Let users deactivate their own account, with deactivated account/device data purged after a 30-day cooling-off period.
 - Let admins manage default track travel times used when Deputy roster notes are missing base/on-track timing.
 - Let admins manage directed travel routes so outbound and return destinations can differ across overnight and multi-day trips.
-- Keep a canonical crew directory for Deputy-only crew, app users, published assignees, and unambiguous aliases.
+- Keep a canonical crew directory for Deputy-observed employees, explicit external contractors, published assignees, and unambiguous aliases; login accounts alone are not crew evidence.
 - Mark New Zealand public holidays consistently on calendar, day, and timesheet dates without changing pay or roster hours.
 - Cache the best validated official Love Racing track-map candidate with its natural dimensions and source diagnostics.
 - Cache official Thoroughbred meeting programmes and fill only race-count/first-race/last-race fields missing from Deputy, without changing roster notes or change history.
@@ -75,4 +75,4 @@ The builder searches all active canonical crew by canonical name, retained Deput
 App users are login accounts; canonical crew people are the humans selected for work. A successful authenticated personal Deputy capture links the account to the one crew person carrying that Deputy employee ID. Published workday visibility follows that canonical link, so differing app and Deputy display names do not create a second crew member. Unlinked attendees remain visible to the crew but do not receive personal calendar access until an app login is linked.
 # 2026.08.13.1 integration release
 
-Re-Deputy now supports encrypted per-user Deputy OAuth connections and a server-enforced, exact-host, trial-tenant-only assigned-shift experiment. Production Deputy writes, Deputy Open-shift writes, and Timesheet writes remain unavailable. Restricted contractor accounts are linked to existing canonical crew identities and see only their assigned work. Personal My start/My finish overrides are local to the signed-in user.
+Re-Deputy now supports encrypted per-user Deputy OAuth connections and a server-enforced, exact-host, trial-tenant-only assigned-shift experiment. Production Deputy writes, Deputy Open-shift writes, and Timesheet writes remain unavailable. Restricted contractor accounts use deliberately created external canonical identities and see only their assigned work. Personal My start/My finish overrides are local to the signed-in user.

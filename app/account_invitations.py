@@ -16,7 +16,14 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def create_account_invite(account_email: str, display_name: str, created_by: int, days: int = 7) -> dict[str, object]:
+def create_account_invite(
+    account_email: str,
+    display_name: str,
+    created_by: int,
+    days: int = 7,
+    *,
+    crew_person_id: int | None = None,
+) -> dict[str, object]:
     email = account_email.strip().lower()
     if "@" not in email:
         raise ValueError("Enter the Re-Deputy account email.")
@@ -30,9 +37,16 @@ def create_account_invite(account_email: str, display_name: str, created_by: int
             "UPDATE account_invitations SET revoked_at=? WHERE LOWER(account_email)=LOWER(?) AND consumed_at IS NULL AND revoked_at IS NULL",
             (now.isoformat(timespec="seconds"), email),
         )
+        if crew_person_id is not None:
+            person = conn.execute(
+                "SELECT id,app_user_id,person_type FROM crew_people WHERE id=? AND is_active=1 AND merged_into_person_id IS NULL",
+                (crew_person_id,),
+            ).fetchone()
+            if person is None or person["app_user_id"] is not None or str(person["person_type"] or "employee") != "employee":
+                raise ValueError("Select an active, unlinked canonical crew person.")
         cursor = conn.execute(
-            "INSERT INTO account_invitations(token_hash,account_email,display_name,created_by_user_id,created_at,expires_at) VALUES(?,?,?,?,?,?)",
-            (_token_hash(token), email, display_name.strip(), created_by, now.isoformat(timespec="seconds"), expires.isoformat(timespec="seconds")),
+            "INSERT INTO account_invitations(token_hash,account_email,display_name,created_by_user_id,created_at,expires_at,crew_person_id) VALUES(?,?,?,?,?,?,?)",
+            (_token_hash(token), email, display_name.strip(), created_by, now.isoformat(timespec="seconds"), expires.isoformat(timespec="seconds"), crew_person_id),
         )
     return {"id": int(cursor.lastrowid), "token": token, "account_email": email, "display_name": display_name.strip(), "expires_at": expires.isoformat(timespec="seconds")}
 
@@ -76,6 +90,13 @@ def activate_account_invite(
             (email, display_name.strip(), hash_pin(pin), now, now),
         )
         user_id = int(cursor.lastrowid)
+        if invite["crew_person_id"] is not None:
+            linked = conn.execute(
+                "UPDATE crew_people SET app_user_id=?,identity_source='admin_link',updated_at=? WHERE id=? AND app_user_id IS NULL AND is_active=1 AND merged_into_person_id IS NULL",
+                (user_id, now, int(invite["crew_person_id"])),
+            )
+            if linked.rowcount != 1:
+                raise ValueError("The selected crew person is no longer available to link.")
         if all(credential_values):
             persist_deputy_user_credentials(
                 conn,
@@ -99,8 +120,20 @@ def revoke_account_invite(invite_id: int) -> None:
         conn.execute("UPDATE account_invitations SET revoked_at=? WHERE id=? AND consumed_at IS NULL", (_now().isoformat(timespec="seconds"), invite_id))
 
 
+def delete_terminal_account_invite(invite_id: int) -> bool:
+    """Delete only a terminal invitation record; never its activated account/person."""
+    now = _now().isoformat(timespec="seconds")
+    with get_connection() as conn:
+        result = conn.execute(
+            """DELETE FROM account_invitations
+               WHERE id=? AND (consumed_at IS NOT NULL OR revoked_at IS NOT NULL OR expires_at<=?)""",
+            (invite_id, now),
+        )
+    return bool(result.rowcount)
+
+
 def account_invite_admin_rows() -> list[dict[str, object]]:
     with get_connection() as conn:
         return [dict(row) for row in conn.execute(
-            "SELECT id,account_email,display_name,created_at,expires_at,consumed_at,revoked_at FROM account_invitations ORDER BY id DESC LIMIT 30"
+            "SELECT id,account_email,display_name,created_at,expires_at,consumed_at,revoked_at,crew_person_id FROM account_invitations ORDER BY id DESC LIMIT 30"
         )]

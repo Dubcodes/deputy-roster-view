@@ -14,8 +14,8 @@ os.environ.update({"DATA_DIR": str(temp_dir), "DB_PATH": str(temp_dir / "account
 
 from fastapi.testclient import TestClient
 import app.account_invitations as account_invitation_module
-from app.account_invitations import activate_account_invite, account_invite_details, create_account_invite, revoke_account_invite
-from app.database import get_connection, get_deputy_user_secret, init_db, list_syncable_app_users, update_deputy_user_credentials
+from app.account_invitations import activate_account_invite, account_invite_details, create_account_invite, delete_terminal_account_invite, revoke_account_invite
+from app.database import crew_picker_records, get_connection, get_deputy_user_secret, init_db, list_crew_people, list_syncable_app_users, update_deputy_user_credentials
 import app.main as main_module
 from app.main import app, infer_display_name_from_email
 from app.security import decrypt_text, encrypt_text, valid_re_deputy_pin
@@ -62,6 +62,18 @@ with get_connection() as conn:
     assert manager and manager["account_type"] == "user"
     assert conn.execute("SELECT COUNT(*) FROM crew_people WHERE app_user_id=?", (manager["id"],)).fetchone()[0] == 0
 manager_id = int(manager["id"])
+# Repeated crew refreshes must not manufacture an identity from account profile data.
+for _ in range(3):
+    list_crew_people()
+with get_connection() as conn:
+    assert conn.execute("SELECT COUNT(*) FROM crew_people WHERE app_user_id=?", (manager_id,)).fetchone()[0] == 0
+    now_placeholder = datetime.now().isoformat()
+    conn.execute("INSERT INTO crew_people(canonical_display_name,is_active,created_at,updated_at) VALUES('TBC TBC',1,?,?)", (now_placeholder, now_placeholder))
+    conn.execute("INSERT INTO crew_people(canonical_display_name,is_active,created_at,updated_at) VALUES('tbc2 tbc2',1,?,?)", (now_placeholder, now_placeholder))
+assert not {"TBC TBC", "tbc2 tbc2"} & {row["canonical_display_name"] for row in list_crew_people()}
+assert not {"TBC TBC", "tbc2 tbc2"} & {row["canonical_display_name"] for row in crew_picker_records()}
+with get_connection() as conn:
+    assert conn.execute("SELECT COUNT(*) FROM crew_people WHERE canonical_display_name IN ('TBC TBC','tbc2 tbc2')").fetchone()[0] == 2
 assert manager_id not in {int(row["id"]) for row in list_syncable_app_users()}
 manager_client = TestClient(app)
 manager_login = manager_client.post("/login", data={"deputy_email": "manager.one@company.example", "pin": "5678", "next_url": "/month"}, follow_redirects=False)
@@ -153,12 +165,23 @@ revoke_account_invite(int(revoked["id"]))
 assert not account_invite_details(str(revoked["token"]))["available"]
 revoked_post = client.post(f"/account/invite/{revoked['token']}", data={"pin": "5678", "pin_confirm": "5678"}, follow_redirects=False)
 assert revoked_post.status_code == 400 and "location" not in revoked_post.headers
+assert delete_terminal_account_invite(int(revoked["id"]))
+with get_connection() as conn:
+    assert conn.execute("SELECT COUNT(*) FROM account_invitations WHERE id=?", (revoked["id"],)).fetchone()[0] == 0
 expired = create_account_invite("expired.user@company.example", "", admin_id)
 with get_connection() as conn:
     conn.execute("UPDATE account_invitations SET expires_at=? WHERE id=?", ((datetime.now().astimezone() - timedelta(minutes=1)).isoformat(), expired["id"]))
 assert not account_invite_details(str(expired["token"]))["available"]
 expired_post = client.post(f"/account/invite/{expired['token']}", data={"pin": "5678", "pin_confirm": "5678"}, follow_redirects=False)
 assert expired_post.status_code == 400 and "location" not in expired_post.headers
+
+# Explicit Admin linking is optional and links only the selected existing identity.
+with get_connection() as conn:
+    link_person_id = int(conn.execute("INSERT INTO crew_people(canonical_display_name,is_active,created_at,updated_at) VALUES('Explicit Link Person',1,?,?)", (datetime.now().isoformat(), datetime.now().isoformat())).lastrowid)
+linked_invite = create_account_invite("linked.account@company.example", "Linked Account", admin_id, crew_person_id=link_person_id)
+linked_user = activate_account_invite(str(linked_invite["token"]), "2468", "Linked Account")
+with get_connection() as conn:
+    assert int(conn.execute("SELECT app_user_id FROM crew_people WHERE id=?", (link_person_id,)).fetchone()[0]) == int(linked_user["id"])
 
 worker_login = client.post("/login", data={"deputy_email": "worker.first@example.invalid", "pin": "1234", "next_url": "/month"}, follow_redirects=False)
 assert worker_login.status_code == 303

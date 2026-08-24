@@ -113,6 +113,12 @@ def main() -> None:
             with get_connection() as conn:
                 admin = conn.execute("SELECT id FROM app_users WHERE deputy_email='responsive@example.com'").fetchone()
                 person = conn.execute("SELECT id FROM crew_people WHERE app_user_id=?", (int(admin["id"]),)).fetchone()
+                if person is None:
+                    person_id = int(conn.execute(
+                        "INSERT INTO crew_people(canonical_display_name,current_deputy_name,app_user_id,is_active,identity_source,created_at,updated_at) VALUES('Campbell Stephens','Cambo',?,1,'admin_link','','')",
+                        (int(admin["id"]),),
+                    ).lastrowid)
+                    person = {"id": person_id}
                 conn.execute("UPDATE crew_people SET canonical_display_name='Campbell Stephens',current_deputy_name='Cambo' WHERE id=?", (int(person["id"]),))
                 conn.execute(
                     "INSERT INTO crew_aliases(person_id,alias,normalized_alias,created_at,updated_at) VALUES (?,?,?,?,?)",

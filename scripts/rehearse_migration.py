@@ -71,7 +71,9 @@ after_twice = counts()
 assert all(after_once[name] >= before[name] for name in before)
 for preserved_name in ("app_users", "deputy_user_secrets", "user_sync_state", "trusted_devices"):
     assert after_once[preserved_name] == before[preserved_name] > 0
-assert after_once["crew_people"] >= before["crew_people"] and after_once["crew_people"] > 0
+assert after_once["crew_people"] >= before["crew_people"]
+if create_representative_fixture:
+    assert after_once["crew_people"] == 0  # an account alone is not crew evidence
 assert after_once == after_twice
 assert mode == "off"
 assert assignment_duplicates == 0 and link_collisions == 0

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 import json
+import os
 import re
 import threading
 import time
@@ -87,6 +88,7 @@ from .database import (
     get_user_sync_state,
     get_user_canonical_person_id,
     init_db,
+    is_placeholder_crew_name,
     list_admin_overrides,
     list_active_admin_overrides_between,
     list_app_users,
@@ -241,6 +243,7 @@ from .contractors import (
     activate_invite,
     authenticate_contractor_link,
     contractor_admin_rows,
+    create_contractor_invite,
     create_invite,
     deactivate_inactive_contractors,
     invite_details,
@@ -251,6 +254,7 @@ from .account_invitations import (
     account_invite_details,
     activate_account_invite,
     create_account_invite,
+    delete_terminal_account_invite,
     revoke_account_invite,
 )
 from .deputy_integration import (
@@ -274,8 +278,8 @@ from .deputy_integration import (
 
 
 APP_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.21.7"
+APP_VERSION = "0.5.1"
+APP_BUILD = (os.getenv("GIT_SHA", "").strip()[:12] or APP_VERSION)
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -3691,6 +3695,10 @@ def schedule_people(
         )
     people.extend(placeholders)
     people.extend(open_entries)
+    people = [
+        person for person in people
+        if not is_placeholder_crew_name(person.get("employee_name"))
+    ]
     apply_crew_directory_identity(people)
     return sorted(
         people,
@@ -3708,6 +3716,7 @@ def reconcile_personal_assignment_evidence(
     *,
     event_start_at: object = None,
     event_end_at: object = None,
+    travel_participant_union: bool = False,
 ) -> None:
     for raw_evidence in evidence_rows:
         evidence = dict(raw_evidence)
@@ -3770,6 +3779,31 @@ def reconcile_personal_assignment_evidence(
         )
         if same_person:
             shared["personal_evidence"] = True
+            continue
+        if travel_participant_union and any(
+            token in position_key for token in ("travel", "overnighter")
+        ):
+            # Travel is a participant cohort rather than a one-person production
+            # position. Matching authenticated personal evidence adds the linked
+            # person without inventing a role or touching unrelated crews.
+            if not any(
+                (evidence_employee_id is not None and safe_int(person.get("employee_id")) == evidence_employee_id)
+                or schedule_label_key(str(person.get("employee_name") or "")) == schedule_label_key(employee_name)
+                for person in people
+            ):
+                people.append({
+                    "employee_name": employee_name,
+                    "employee_id": evidence_employee_id,
+                    "position_label": str(evidence.get("position_label") or "Travel"),
+                    "vehicle_label": "",
+                    "sort_order": schedule_display_sort("Travel"),
+                    "changed": False,
+                    "change_summary": "",
+                    "change_time_label": "",
+                    "placeholder": False,
+                    "personal_evidence": True,
+                    "provenance_label": "Confirmed from personal roster",
+                })
             continue
         shared["assignment_conflict"] = True
         shared["conflict_warning"] = (
@@ -3931,7 +3965,6 @@ def group_event_changes(changes: list[dict[str, object]]) -> list[dict[str, obje
             )
             source_summary = f"{moved_name} moved to {new_position}"
             if opened_index is not None:
-                lines.append(f"{old_position} is now TBC")
                 source_summary += "; position now TBC"
             inline_changes.append(
                 {"position_key": schedule_label_key(old_position), "summary": source_summary}
@@ -6058,7 +6091,16 @@ async def admin_create_contractor_invite(request: Request) -> RedirectResponse:
     require_same_origin(request)
     form = await request.form()
     try:
-        invite = create_invite(int(form.get("person_id") or 0), int(actor["id"]))
+        replacement_person_id = int(form.get("replacement_person_id") or 0)
+        invite = (
+            create_invite(replacement_person_id, int(actor["id"]))
+            if replacement_person_id
+            else create_contractor_invite(
+                str(form.get("contractor_name") or ""),
+                str(form.get("company") or ""),
+                int(actor["id"]),
+            )
+        )
     except ValueError as exc:
         return RedirectResponse(url=notice_url("/admin", str(exc)), status_code=303)
     origin = str(request.base_url).rstrip("/")
@@ -6072,8 +6114,9 @@ async def admin_create_account_invitation(request: Request) -> RedirectResponse:
     form = await request.form()
     email = str(form.get("account_email") or "").strip().lower()
     display_name = str(form.get("display_name") or "").strip() or infer_display_name_from_email(email)
+    crew_person_id = int(form.get("crew_person_id") or 0) or None
     try:
-        invite = create_account_invite(email, display_name, int(actor["id"]))
+        invite = create_account_invite(email, display_name, int(actor["id"]), crew_person_id=crew_person_id)
     except ValueError as exc:
         return RedirectResponse(url=notice_url("/admin", str(exc)), status_code=303)
     origin = str(request.base_url).rstrip("/")
@@ -6091,6 +6134,15 @@ def admin_revoke_account_invitation(request: Request, invite_id: int) -> Redirec
     require_same_origin(request)
     revoke_account_invite(invite_id)
     return RedirectResponse(url=notice_url("/admin", "Re-Deputy account invitation revoked."), status_code=303)
+
+
+@app.post("/admin/account-invitations/{invite_id}/delete")
+def admin_delete_account_invitation(request: Request, invite_id: int) -> RedirectResponse:
+    require_admin_user(request)
+    require_same_origin(request)
+    deleted = delete_terminal_account_invite(invite_id)
+    message = "Invitation record removed." if deleted else "Only consumed, revoked, or expired invitations can be removed."
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
 @app.post("/admin/contractors/invites/{invite_id}/revoke")
@@ -7048,6 +7100,9 @@ def day_view(
         fetch_personal_assignment_evidence_for_date(
             date_text, schedule_location_ids or None
         ),
+        event_start_at=min((str(item.get("start_at") or "") for item in shifts), default="") if travel_schedule_context else None,
+        event_end_at=max((str(item.get("end_at") or "") for item in shifts), default="") if travel_schedule_context else None,
+        travel_participant_union=travel_schedule_context,
     )
     apply_schedule_role_context(shifts, deputy_schedule_rows)
     note_travel_cohort = False

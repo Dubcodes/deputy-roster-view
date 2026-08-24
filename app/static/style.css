@@ -857,7 +857,7 @@ a {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 14px;
 }
 
 .month-nav strong {
@@ -4311,7 +4311,16 @@ input[type="number"] {
 .sync-panel {
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 8px;
+}
+
+@media (min-width: 900px) {
+  .workday-assignment {
+    padding: 8px;
+  }
+  .workday-assignment-list {
+    gap: 6px;
+  }
 }
 
 .sync-state {

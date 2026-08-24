@@ -1,6 +1,6 @@
 # Architecture
 
-## Account identity and onboarding (2026.08.21.7)
+## Account identity and onboarding (0.5.1)
 
 `app_users.deputy_email` remains the historically named Re-Deputy account/login email. Actual Deputy email and password are optional encrypted values in `deputy_user_secrets`; updating them does not change the Re-Deputy login. An account, canonical `crew_people` identity, and Deputy connection are independent. Ordinary invited management accounts may therefore have no crew link and no Deputy connection while retaining the existing Crew/global view.
 
@@ -48,7 +48,9 @@ The effective schedule interpretation pass also resolves context-dependent area 
 
 All users currently belong to one shared crew pool, `Northern Crew`. When a user's rostered shift syncs with a usable location, the app records that location in `crew_known_locations` for the shared crew. This does not filter open shifts or change the UI yet; it only leaves a clean data shape for future location, crew, or region tagging.
 
-`crew_people` and `crew_aliases` form the canonical identity directory. It is refreshed from Deputy employee rows, registered users, roster-builder assignments, and published snapshots. Deputy employee ID is the strongest key; name-only observations are merged only on a unique normalized full-name match. Aliases belong to one person and are rejected when they would be ambiguous across active people. Schedule assignments remain authoritative; directory aliases only fill missing note/vehicle context and canonicalize display names.
+`crew_people` and `crew_aliases` form the canonical identity directory. It is refreshed from Deputy employee rows, roster-builder assignments, published snapshots, and explicit contractor creation—not merely from app account existence. `person_type` distinguishes employees from external contractors; contractors do not need or receive a Deputy employee ID. Deputy employee ID is the strongest employee key; name-only observations are merged only on a unique normalized full-name match. Aliases belong to one person and are rejected when they would be ambiguous across active people.
+
+Travel participant display is a narrow exception to position reconciliation: for a matching Travel/Overnighter cohort, it unions shared schedule names with app-linked users whose authenticated personal Deputy evidence overlaps the same date, location, and cohort window. It does not inject users into production crews.
 
 ### Love Racing Planning Calendar
 

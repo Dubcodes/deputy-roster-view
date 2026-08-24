@@ -84,9 +84,11 @@ If you changed `APP_PORT`, use that port instead.
 
 ## Portainer
 
-In Portainer, create a stack from this repository. Set `APP_PORT` to whichever host port you want exposed. You can provide `DEPUTY_ICAL_URL` as an environment variable, or leave it blank and paste the URL into Settings once the app is running. The app stores its SQLite database, generated app secret, VAPID private identity, uploaded maps, and other local data in the bind-mounted `./data` directory. Preserve the real stack's existing port, network, volume mapping, environment, tunnel routing, and `APP_SECRET_KEY` during redeploy.
+Use the Git-backed stack definition at `production/docker-compose.portainer.yml` and an immutable release Reference such as `v0.5.1`. It intentionally publishes no host application port, binds `/data/compose/22/data:/app/data`, and exposes port 8000 only on `deputy-roster-multi_default` for the separately running Cloudflare tunnel. Preserve every existing secret value, especially `APP_SECRET_KEY`; no secret belongs in Git.
 
-For the new multi-user flow, open the app and complete `/signup`. The shipped `SIGNUP_ENABLED=false` still permits this first-user bootstrap, then closes public signup once an account exists. For direct HTTP LAN access, keep `COOKIE_SECURE=false`; for a permanent HTTPS-only deployment, set `COOKIE_SECURE=true`.
+This production definition deliberately defaults `SIGNUP_ENABLED=true` and `COOKIE_SECURE=true` for the current HTTPS-only installation. Change policy only through an explicit reviewed operator decision.
+
+Release and rollback are tag-based: after exact-SHA CI succeeds, create the immutable release tag; set Portainer's Reference to that tag and Pull and redeploy. To roll back, select a previous approved tag such as `v0.5.0`, then Pull and redeploy. Editing a visible version/environment label does not select or change application code.
 
 `TRUSTED_PROXY_SOURCES` is a comma-separated allowlist of proxy peer IPs, CIDRs, or controlled Docker DNS names. Only requests whose actual network peer matches this list may use `X-Forwarded-Proto`/`X-Forwarded-Host` to reconstruct the browser-visible origin. The shipped Compose default names the separate `deputy-roster-tunnel` service; if your tunnel service uses another name, set that exact Docker DNS name. Direct LAN clients are not proxy-trusted and continue to use their actual HTTP origin.
 
@@ -96,7 +98,7 @@ If using Deputy web sync, set `DEPUTY_LOGIN_EMAIL`, `DEPUTY_LOGIN_PASSWORD`, and
 
 For temporary testing, run `cloudflared` as a separate Portainer stack. This keeps app redeploys from recreating the tunnel container and changing the temporary URL.
 
-Before a real HTTPS deployment, set `COOKIE_SECURE=true`; leaving it false permits the trusted-device cookie over HTTP. Disable public account creation with `SIGNUP_ENABLED=false` once the intended accounts exist; leaving it true exposes the signup route to anyone who can reach the app.
+Before a real HTTPS deployment, set `COOKIE_SECURE=true`; leaving it false permits the trusted-device cookie over HTTP. This installation deliberately keeps `SIGNUP_ENABLED=true`; do not silently change that policy during a release or rollback.
 
 1. In Portainer, open the app container and copy its network name. It will usually look like `deputy-roster-multi_default`.
 2. Create a second stack, for example `deputy-roster-tunnel`.

@@ -80,9 +80,20 @@ def main() -> None:
     campbell_user = add_user("campbell@example.com", "Cambo", "3456")
     dylan_user = add_user("dylan@example.com", "Dylan Holden", "4567")
     other_user = add_user("other@example.com", "Aaron Rangi", "5678")
+    with get_connection() as conn:
+        admin_user = int(conn.execute("SELECT id FROM app_users WHERE deputy_email='admin@example.com'").fetchone()[0])
+        now_link = "2026-08-10T08:59:00+12:00"
+        for user_id, name in (
+            (admin_user, "Admin Crew"), (alf_user, "Otm685"),
+            (campbell_user, "Cambo"), (dylan_user, "Dylan Holden"),
+            (other_user, "Aaron Rangi"),
+        ):
+            conn.execute(
+                "INSERT INTO crew_people(canonical_display_name,current_deputy_name,app_user_id,is_active,identity_source,created_at,updated_at) VALUES(?,?,?,1,'admin_link',?,?)",
+                (name, name, user_id, now_link, now_link),
+            )
     init_db()
     people = {int(item["app_user_id"]): dict(item) for item in list_crew_people() if item.get("app_user_id")}
-    admin_user = next(user_id for user_id in people if user_id not in {alf_user, campbell_user, dylan_user, other_user})
     alf_person = int(people[alf_user]["id"])
     campbell_person = int(people[campbell_user]["id"])
     dylan_person = int(people[dylan_user]["id"])

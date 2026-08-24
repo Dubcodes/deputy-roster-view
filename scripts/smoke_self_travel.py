@@ -62,6 +62,14 @@ def main() -> None:
     init_db()
     with get_connection() as conn:
         owner_id = int(conn.execute("SELECT id FROM app_users WHERE deputy_email = 'owner@example.com'").fetchone()["id"])
+        conn.execute(
+            "INSERT INTO crew_people(canonical_display_name,current_deputy_name,app_user_id,is_active,identity_source,created_at,updated_at) VALUES('Owner Crew','Owner Crew',?,1,'admin_link','','')",
+            (owner_id,),
+        )
+        conn.execute(
+            "INSERT INTO crew_people(canonical_display_name,current_deputy_name,app_user_id,is_active,identity_source,created_at,updated_at) VALUES('Other Crew','Other Crew',?,1,'admin_link','','')",
+            (int(other["id"]),),
+        )
         event_date = (datetime.now(settings.timezone).date() + timedelta(days=7)).isoformat()
         cursor = conn.execute(
             """

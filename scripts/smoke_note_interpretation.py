@@ -21,7 +21,7 @@ def main() -> None:
     sys.path.insert(0, str(ROOT))
 
     from app.config import get_settings
-    from app.database import get_travel_route, init_db, save_crew_vehicle, upsert_travel_route
+    from app.database import _compare_event_assignments, get_travel_route, init_db, save_crew_vehicle, upsert_travel_route
     import app.main as main_module
     from fastapi.testclient import TestClient
     from app.main import (
@@ -286,7 +286,6 @@ def main() -> None:
     groups = group_event_changes(audit_rows)
     expected_group_lines = [
         "Nate moved CCU2 → Head On, replacing Campbell Stephens",
-        "CCU2 is now TBC",
     ]
     if len(audit_rows) != 3 or groups[0]["lines"] != expected_group_lines:
         raise AssertionError(f"Related audit rows were not grouped coherently: {groups!r}")
@@ -317,6 +316,20 @@ def main() -> None:
         raise AssertionError(f"Simple crew replacement was over-grouped: {simple_groups!r}")
     if simple_people[0].get("change_summary") != "TBC → Dylan Holden":
         raise AssertionError(f"Simple crew row lost its change summary: {simple_people!r}")
+
+    event_base = {"position_key": "side2", "position_label": "Side 2", "start_at": "2026-09-01T09:00:00+12:00", "end_at": "2026-09-01T17:00:00+12:00"}
+    initial = _compare_event_assignments(
+        [{**event_base, "identity": "open", "employee_name": "", "employee_id": None, "is_open": False}],
+        [{**event_base, "identity": "employee:7", "employee_name": "Dylan Holden", "employee_id": 7, "is_open": False}],
+    )
+    if len(initial) != 1 or not initial[0].get("initial_population"):
+        raise AssertionError(f"Initial TBC population was not classified for user-facing suppression: {initial!r}")
+    replacement = _compare_event_assignments(
+        [{**event_base, "identity": "employee:7", "employee_name": "Dylan Holden", "employee_id": 7, "is_open": False}],
+        [{**event_base, "identity": "employee:8", "employee_name": "Nate", "employee_id": 8, "is_open": False}],
+    )
+    if len(replacement) != 1 or replacement[0].get("initial_population"):
+        raise AssertionError(f"Actual replacement was incorrectly hidden: {replacement!r}")
 
     changes = [
         decorate_change(

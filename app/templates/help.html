@@ -71,7 +71,7 @@
         </div>
         <div>
           <dt>Your crew identity</dt>
-          <dd>Your app account is how you sign in. Deputy may roster you under a shorter crew name, and the app links those two records so published work days still reach your calendar. Crew without an app login remain visible on the shared day page.</dd>
+          <dd>Your app account is how you sign in; it is separate from a crew identity and a Deputy connection. Some management accounts have no Deputy login or crew identity at all. When verified Deputy evidence or an Admin explicitly links you, published work days reach the right calendar. Crew without an app login remain visible.</dd>
         </div>
         <div>
           <dt>Race Day</dt>
@@ -79,7 +79,7 @@
         </div>
         <div>
           <dt>Crew schedule</dt>
-          <dd>Shows the positions, people, and vehicles for that location. A muted TBC means Deputy has a position for the day but has not given us a name.</dd>
+          <dd>Shows the positions, people, and vehicles for that location. A muted TBC means Deputy has a position for the day but has not given us a name. On matching Travel days, the participant list combines the shared schedule with linked users whose authenticated personal roster confirms the same Travel allocation.</dd>
         </div>
         <div>
           <dt>Changed</dt>
@@ -125,7 +125,7 @@
         </div>
         <div>
           <dt>Love Racing</dt>
-          <dd>A faded gold planning entry is a public race date, not a roster. Tap it to see the saved date, location, and source. An admin can use it to start a private draft without changing the planning entry. Once Deputy has a real shift for that day and location, Deputy takes priority.</dd>
+          <dd>A faded gold planning entry is a public race date, not a roster. Love Racing only fills missing race count or first/last race times. Deliberate Admin values win first, then Deputy, then Love Racing; it never overwrites known roster information or removes a known race day.</dd>
         </div>
       </dl>
     </article>
@@ -187,12 +187,13 @@
       <h2>Good to know</h2>
       <ul class="help-bullets">
         <li>Contractor accounts use the same personal calendar, day, timesheet, Settings, Help and notification screens, but cannot open shared crew or Admin views.</li>
-        <li>Your trusted-device login lasts a long time and its expiry is refreshed while you keep using the app.</li>
+        <li>Contractors are external crew identities and do not need a Deputy employee ID.</li>
+        <li>Re-Deputy remembers up to 10 trusted devices per account. Signing in on another device removes trust from the least recently used device.</li>
         <li>Opening a change badge never marks it as read or removes it.</li>
         <li>The shared crew calendar does not show private notes, open shifts, or personal change badges.</li>
         <li>If the shared crew list misses your position, your confirmed personal roster can fill that spot. If the two Deputy views disagree, the day shows both as a conflict instead of guessing.</li>
         <li>A future shift missing from one complete sync is marked possibly missing first. It is not removed unless another complete sync also omits it, or Deputy explicitly cancels it.</li>
-        <li>Completed workdays are kept as history even after Deputy stops returning them. Old Changed alerts clear, while genuine change history remains available.</li>
+        <li>The latest applicable roster note and information are shown normally. Older and raw evidence is retained for history and diagnostics without presenting every initial TBC fill as a meaningful change.</li>
         <li>Deputy remains the source of truth for confirmed shifts and rostered hours.</li>
       </ul>
     </article>

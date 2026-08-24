@@ -65,6 +65,15 @@ def main() -> None:
     joshua = add_user("Joshua Druett", "joshua@example.com")
     olivia = add_user("Olivia Dooley", "olivia@example.com")
     ambiguous = add_user("Unknown Operator", "unknown@example.com")
+    # Explicitly model legacy account-synthetic rows; current account creation
+    # must no longer manufacture these identities.
+    with get_connection() as conn:
+        for user in (jayden, otm, nate_user, gary, joshua, olivia, ambiguous):
+            conn.execute(
+                """INSERT INTO crew_people(canonical_display_name,current_deputy_name,app_user_id,is_active,identity_source,created_at,updated_at)
+                   VALUES(?,?,?,1,'account_synthetic','','')""",
+                (str(user["display_name"]), str(user["display_name"]), int(user["id"])),
+            )
     init_db()
 
     with get_connection() as conn:
@@ -303,6 +312,11 @@ def main() -> None:
     # Exercise the explicit Admin merge workflow independently of automatic
     # personal-capture reconciliation.
     manual_user = add_user("Manual Login", "manual@example.com")
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO crew_people(canonical_display_name,current_deputy_name,app_user_id,is_active,identity_source,created_at,updated_at) VALUES('Manual Login','Manual Login',?,1,'account_synthetic','','')",
+            (int(manual_user["id"]),),
+        )
     manual_source = next(row for row in list_crew_people() if row.get("app_user_id") == int(manual_user["id"]))
     with get_connection() as conn:
         cursor = conn.execute(

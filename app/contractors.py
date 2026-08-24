@@ -16,14 +16,34 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def create_contractor_invite(name: str, company: str, created_by: int, days: int = 7) -> dict[str, object]:
+    display_name = " ".join(str(name or "").split())
+    organisation = " ".join(str(company or "").split())
+    if not display_name:
+        raise ValueError("Enter the contractor's name.")
+    now = _now().isoformat(timespec="seconds")
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """INSERT INTO crew_people(
+                   canonical_display_name,person_type,company,identity_source,deputy_employee_id,
+                   current_deputy_name,app_user_id,is_active,admin_note,created_at,updated_at
+               ) VALUES(?,'contractor',?,'contractor',NULL,NULL,NULL,1,'',?,?)""",
+            (display_name, organisation, now, now),
+        )
+        person_id = int(cursor.lastrowid)
+    return create_invite(person_id, created_by, days)
+
+
 def create_invite(person_id: int, created_by: int, days: int = 7) -> dict[str, object]:
     token = secrets.token_urlsafe(40)
     now = _now()
     expires = now + timedelta(days=max(1, min(days, 30)))
     with get_connection() as conn:
-        person = conn.execute("SELECT id,canonical_display_name,app_user_id FROM crew_people WHERE id=? AND is_active=1 AND merged_into_person_id IS NULL", (person_id,)).fetchone()
+        person = conn.execute("SELECT id,canonical_display_name,app_user_id,person_type FROM crew_people WHERE id=? AND is_active=1 AND merged_into_person_id IS NULL", (person_id,)).fetchone()
         if person is None:
             raise ValueError("Select an active canonical crew person.")
+        if str(person["person_type"] or "employee") != "contractor":
+            raise ValueError("Replacement invitations are available only for contractor identities.")
         if person["app_user_id"]:
             existing = conn.execute("SELECT account_type FROM app_users WHERE id=?", (person["app_user_id"],)).fetchone()
             if existing is None or str(existing["account_type"] or "user") != "contractor":
@@ -90,10 +110,11 @@ def revoke_invite(invite_id: int) -> None:
 
 def contractor_admin_rows() -> dict[str, list[dict[str, object]]]:
     with get_connection() as conn:
-        invites = [dict(r) for r in conn.execute("""SELECT i.id,i.created_at,i.expires_at,i.consumed_at,i.revoked_at,p.canonical_display_name
+        invites = [dict(r) for r in conn.execute("""SELECT i.id,i.created_at,i.expires_at,i.consumed_at,i.revoked_at,p.canonical_display_name,p.company
                                                    FROM contractor_invites i JOIN crew_people p ON p.id=i.crew_person_id ORDER BY i.id DESC LIMIT 30""")]
-        accounts = [dict(r) for r in conn.execute("""SELECT u.id,u.display_name,u.is_active,u.last_activity_at,u.contractor_person_id
-                                                     FROM app_users u WHERE u.account_type='contractor' ORDER BY u.display_name""")]
+        accounts = [dict(r) for r in conn.execute("""SELECT u.id,u.display_name,u.is_active,u.last_activity_at,u.contractor_person_id,p.company
+                                                     FROM app_users u LEFT JOIN crew_people p ON p.id=u.contractor_person_id
+                                                     WHERE u.account_type='contractor' ORDER BY u.display_name""")]
     return {"invites": invites, "accounts": accounts}
 
 

@@ -77,6 +77,13 @@ def main() -> None:
         encrypted_email=encrypt_text("olivia@example.com", settings),
         encrypted_password=encrypt_text("password", settings),
     )
+    with get_connection() as conn:
+        jayden_id = int(conn.execute("SELECT id FROM app_users WHERE deputy_email='jayden@example.com'").fetchone()[0])
+        for user_id, name in ((jayden_id, "Jayden Lee Slater"), (int(gary["id"]), "Gary McClure"), (int(olivia["id"]), "Olivia Dooley")):
+            conn.execute(
+                "INSERT INTO crew_people(canonical_display_name,current_deputy_name,app_user_id,is_active,identity_source,created_at,updated_at) VALUES(?,?,?,1,'admin_link','','')",
+                (name, name, user_id),
+            )
     init_db()
     people = {str(row["canonical_display_name"]): dict(row) for row in list_crew_people()}
     jayden_person = next(row for row in people.values() if row.get("app_user_id") not in {int(gary["id"]), int(olivia["id"])})

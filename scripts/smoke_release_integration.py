@@ -16,8 +16,8 @@ os.environ.update({
 })
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.contractors import activate_invite, authenticate_contractor_link, create_invite, deactivate_inactive_contractors, invite_details, revoke_invite
-from app.database import create_app_user, create_trusted_device, fetch_shift, get_connection, init_db, update_shift_marks
+from app.contractors import activate_invite, authenticate_contractor_link, create_contractor_invite, create_invite, deactivate_inactive_contractors, invite_details, revoke_invite
+from app.database import create_app_user, create_trusted_device, fetch_shift, get_connection, get_trusted_device, init_db, update_shift_marks
 from app.deputy_integration import (
     begin_oauth, build_v2_shift_payload, complete_oauth, connection_status, disconnect, execute_operation, extract_v2_shift, load_config, normalize_v2_response, permission_hash,
     prepare_operation, refresh_references, save_config, trial_host_allowed, verify_read_access,
@@ -133,9 +133,11 @@ with get_connection() as conn:
     reminder = conn.execute("SELECT body FROM notification_events WHERE app_user_id=? AND event_type='night_before'", (admin_id,)).fetchone()
 assert reminder is not None and "09:30" in str(reminder["body"]) and "08:45" not in str(reminder["body"])
 
+invite = create_contractor_invite("Restricted Contractor", "Fixture Ltd", admin_id)
 with get_connection() as conn:
-    person_id = int(conn.execute("INSERT INTO crew_people(canonical_display_name,is_active,created_at,updated_at) VALUES('Restricted Contractor',1,?,?)", (datetime.now().isoformat(), datetime.now().isoformat())).lastrowid)
-invite = create_invite(person_id, admin_id)
+    person = conn.execute("SELECT * FROM crew_people WHERE canonical_display_name='Restricted Contractor'").fetchone()
+    assert person and person["deputy_employee_id"] is None and person["person_type"] == "contractor" and person["company"] == "Fixture Ltd"
+    person_id = int(person["id"])
 with get_connection() as conn:
     stored = conn.execute("SELECT token_hash FROM contractor_invites WHERE id=?", (invite["id"],)).fetchone()["token_hash"]
 assert invite["token"] not in stored and invite_details(str(invite["token"]))["available"]
@@ -149,20 +151,35 @@ replacement = create_invite(person_id, admin_id)
 replacement_user = activate_invite(str(replacement["token"]), "6789")
 assert int(replacement_user["id"]) == int(contractor["id"]) and int(authenticate_contractor_link(str(replacement["token"]), "6789")["id"]) == int(contractor["id"])
 with get_connection() as conn:
-    expired_person = int(conn.execute("INSERT INTO crew_people(canonical_display_name,is_active,created_at,updated_at) VALUES('Expired Contractor',1,?,?)", (now := datetime.now().isoformat(), now)).lastrowid)
+    expired_person = int(conn.execute("INSERT INTO crew_people(canonical_display_name,person_type,is_active,created_at,updated_at) VALUES('Expired Contractor','contractor',1,?,?)", (now := datetime.now().isoformat(), now)).lastrowid)
 expired = create_invite(expired_person, admin_id)
 with get_connection() as conn: conn.execute("UPDATE contractor_invites SET expires_at=? WHERE id=?", ((datetime.now().astimezone() - timedelta(days=1)).isoformat(), expired["id"]))
 try: activate_invite(str(expired["token"]), "9876")
 except ValueError: pass
 else: raise AssertionError("Expired contractor invite was accepted")
 with get_connection() as conn:
-    revoked_person = int(conn.execute("INSERT INTO crew_people(canonical_display_name,is_active,created_at,updated_at) VALUES('Revoked Contractor',1,?,?)", (now, now)).lastrowid)
+    revoked_person = int(conn.execute("INSERT INTO crew_people(canonical_display_name,person_type,is_active,created_at,updated_at) VALUES('Revoked Contractor','contractor',1,?,?)", (now, now)).lastrowid)
 revoked = create_invite(revoked_person, admin_id); revoke_invite(int(revoked["id"]))
 try: activate_invite(str(revoked["token"]), "9876")
 except ValueError: pass
 else: raise AssertionError("Revoked contractor invite was accepted")
 
 ordinary = create_app_user(deputy_email="user@example.invalid", display_name="Ordinary", pin_hash=hash_pin("4567"), deputy_web_url="https://example.invalid", encrypted_email="", encrypted_password="")
+# The eleventh valid device succeeds and revokes only the least recently used.
+device_tokens = []
+for index in range(11):
+    raw = f"cap-device-{index}"
+    device_tokens.append(raw)
+    create_trusted_device(user_id=int(ordinary["id"]), token_hash=hash_session_token(raw), expires_at=(datetime.now().astimezone() + timedelta(days=1)).isoformat())
+with get_connection() as conn:
+    active = conn.execute("SELECT COUNT(*) FROM trusted_devices WHERE user_id=? AND revoked_at IS NULL AND expires_at>?", (int(ordinary["id"]), datetime.now().astimezone().isoformat())).fetchone()[0]
+assert active == 10 and get_trusted_device(hash_session_token(device_tokens[0])) is None
+assert all(get_trusted_device(hash_session_token(token)) is not None for token in device_tokens[1:])
+with get_connection() as conn:
+    conn.execute("UPDATE trusted_devices SET revoked_at=NULL WHERE user_id=?", (int(ordinary["id"]),))
+init_db()
+with get_connection() as conn:
+    assert conn.execute("SELECT COUNT(*) FROM trusted_devices WHERE user_id=? AND revoked_at IS NULL AND expires_at>?", (int(ordinary["id"]), datetime.now().astimezone().isoformat())).fetchone()[0] == 10
 def client_for(user_id: int, token: str) -> TestClient:
     create_trusted_device(user_id=user_id, token_hash=hash_session_token(token), expires_at=(datetime.now().astimezone() + timedelta(days=1)).isoformat())
     client = TestClient(app, follow_redirects=False); client.cookies.set(SESSION_COOKIE_NAME, token); return client
@@ -272,6 +289,11 @@ finally:
     main_module.queue_manual_sync = original_queue_manual_sync
 with get_connection() as conn:
     alias_people = conn.execute("SELECT id FROM crew_people WHERE app_user_id IN (?,?) ORDER BY id", (admin_id, int(ordinary["id"]))).fetchall()
+    if not alias_people:
+        now_alias = datetime.now().astimezone().isoformat()
+        conn.execute("INSERT INTO crew_people(canonical_display_name,app_user_id,is_active,created_at,updated_at) VALUES('Admin Crew',?,1,?,?)", (admin_id, now_alias, now_alias))
+        conn.execute("INSERT INTO crew_people(canonical_display_name,app_user_id,is_active,created_at,updated_at) VALUES('Ordinary Crew',?,1,?,?)", (int(ordinary["id"]), now_alias, now_alias))
+        alias_people = conn.execute("SELECT id FROM crew_people WHERE app_user_id IN (?,?) ORDER BY id", (admin_id, int(ordinary["id"]))).fetchall()
     assert len(alias_people) == 2
     first_alias_id, second_alias_id = (int(row["id"]) for row in alias_people)
     now_alias = datetime.now().astimezone().isoformat()

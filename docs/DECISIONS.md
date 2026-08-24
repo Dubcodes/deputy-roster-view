@@ -226,7 +226,14 @@ This remains the governing boundary. Build 2026.08.13.1 implements only the cont
 - Local stable assignment keys and persisted prepared operations are the idempotency boundary because Deputy exposes no reliable create idempotency key.
 - A linked Timesheet (`canEdit=false`, Timesheet ID, or MatchedByTimesheet) is a hard stop. No workaround is offered.
 - Historical Changed-time data is kept as evidence because its start/finish meaning is ambiguous; it is not guessed into the new personal fields.
-- Contractor identity remains the existing canonical crew person plus a restricted app account, never a second crew identity model.
+- Superseded in 0.5.1: contractor invitations create an explicit external canonical person (`person_type=contractor`) with optional company and no Deputy ID. The activated app account remains restricted and linked to that canonical person.
+
+# 0.5.1 identity and release decisions
+
+- App accounts, canonical crew people, and Deputy connections are independent. Account existence is not crew evidence; linking requires authenticated Deputy evidence, an established conservative match, or an explicit Admin choice.
+- External contractors are valid manual-workday people but cannot be mapped to Deputy employees or enter Deputy write preparation.
+- User-facing crew history suppresses initial placeholder population while retaining raw audit evidence, and collapses connected moves to one semantic line.
+- Operator releases are selected by immutable Git tags. `v0.5.1` selects code; a display/environment label does not.
 
 # 2026.08.13.3 release-gate decisions
 

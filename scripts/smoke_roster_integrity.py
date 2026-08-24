@@ -202,6 +202,34 @@ def main() -> None:
     assert conflict_people[0]["employee_name"] == "Other Crew"
     assert "Jayden-lee" in conflict_people[0]["conflict_warning"]
 
+    # 01 September Travel cohort: shared Matt plus authenticated personal Jayden.
+    travel_people = [{
+        "position_label": "Travel then Overnighter", "employee_name": "Matt Blackmore",
+        "employee_id": 501, "placeholder": False, "sort_order": 1,
+    }]
+    travel_evidence = [{
+        "position_label": "Travel then Overnighter", "employee_name": "Jayden-lee",
+        "deputy_employee_id": 685, "canonical_person_id": 2,
+        "start_at": "2026-09-01T08:00:00+12:00", "end_at": "2026-09-01T13:00:00+12:00",
+        "status": "confirmed",
+    }]
+    reconcile_personal_assignment_evidence(
+        travel_people, travel_evidence,
+        event_start_at="2026-09-01T08:00:00+12:00",
+        event_end_at="2026-09-01T13:00:00+12:00",
+        travel_participant_union=True,
+    )
+    assert {row["employee_name"] for row in travel_people} == {"Matt Blackmore", "Jayden-lee"}
+    unrelated = [{**travel_evidence[0], "employee_name": "Unrelated", "deputy_employee_id": 999,
+                  "start_at": "2026-09-01T18:00:00+12:00", "end_at": "2026-09-01T19:00:00+12:00"}]
+    reconcile_personal_assignment_evidence(
+        travel_people, unrelated,
+        event_start_at="2026-09-01T08:00:00+12:00",
+        event_end_at="2026-09-01T13:00:00+12:00",
+        travel_participant_union=True,
+    )
+    assert "Unrelated" not in {row["employee_name"] for row in travel_people}
+
     # One complete absence warns; partial coverage does not advance; the second complete absence retires.
     missing_payload = {
         **payload, "captured_at": (now + timedelta(minutes=2)).isoformat(),

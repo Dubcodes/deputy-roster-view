@@ -481,6 +481,9 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE TABLE IF NOT EXISTS crew_people (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 canonical_display_name TEXT NOT NULL,
+                person_type TEXT NOT NULL DEFAULT 'employee' CHECK (person_type IN ('employee', 'contractor')),
+                company TEXT,
+                identity_source TEXT NOT NULL DEFAULT 'observed',
                 deputy_employee_id INTEGER UNIQUE,
                 current_deputy_name TEXT,
                 app_user_id INTEGER UNIQUE,
@@ -1346,6 +1349,15 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "crew_people", "merged_at", "TEXT")
         _ensure_column(conn, "crew_people", "merged_by_user_id", "INTEGER")
         _ensure_column(conn, "crew_people", "merge_reason", "TEXT")
+        _ensure_column(conn, "crew_people", "person_type", "TEXT NOT NULL DEFAULT 'employee'")
+        _ensure_column(conn, "crew_people", "company", "TEXT")
+        _ensure_column(conn, "crew_people", "identity_source", "TEXT NOT NULL DEFAULT 'observed'")
+        _ensure_column(conn, "account_invitations", "crew_person_id", "INTEGER")
+        conn.execute(
+            """UPDATE crew_people SET person_type='contractor'
+               WHERE id IN (SELECT contractor_person_id FROM app_users WHERE account_type='contractor' AND contractor_person_id IS NOT NULL)
+                  OR id IN (SELECT crew_person_id FROM contractor_invites)"""
+        )
         _ensure_column(conn, "workday_assignments", "assignment_key", "TEXT")
         _ensure_column(conn, "workday_assignments", "vehicle_id", "INTEGER")
         _ensure_column(conn, "workday_assignments", "eligible_team_id", "INTEGER")
@@ -1414,6 +1426,7 @@ def init_db(settings: Settings | None = None) -> None:
         _merge_equivalent_travel_bases(conn)
         _migrate_travel_defaults_to_routes(conn)
         _sync_crew_directory(conn)
+        _enforce_trusted_device_limit_conn(conn)
         _reclassify_legacy_shift_changes(conn)
         _migrate_admin_overrides(conn)
         _seed_workday_role_catalogue(conn)
@@ -2067,7 +2080,7 @@ def _crew_person_candidates(conn: sqlite3.Connection, name: object) -> list[sqli
     if not key:
         return []
     return [
-        row for row in conn.execute("SELECT * FROM crew_people WHERE is_active = 1 AND merged_into_person_id IS NULL").fetchall()
+        row for row in conn.execute("SELECT * FROM crew_people WHERE is_active = 1 AND merged_into_person_id IS NULL AND COALESCE(person_type,'employee')='employee'").fetchall()
         if key in {
             normalise_person_identity(row["canonical_display_name"]),
             normalise_person_identity(row["current_deputy_name"]),
@@ -2147,13 +2160,9 @@ def _sync_crew_directory(conn: sqlite3.Connection) -> None:
         if person_id:
             observed_ids.add(person_id)
 
-    for row in conn.execute(
-        "SELECT id, display_name, deputy_email FROM app_users ORDER BY id"
-    ).fetchall():
-        display_name = str(row["display_name"] or "").strip() or str(row["deputy_email"] or "").split("@", 1)[0]
-        person_id = _insert_observed_person(conn, display_name, app_user_id=int(row["id"]))
-        if person_id:
-            observed_ids.add(person_id)
+    # App accounts are access identities, not evidence that a crew person exists.
+    # Account links are created only by authenticated Deputy identity, an existing
+    # conservative resolver, an explicit Admin link, or the contractor workflow.
 
     manual_names: list[str] = [
         str(row["assignee_label"] or "").strip()
@@ -2656,7 +2665,39 @@ def create_trusted_device(
             """,
             (user_id, token_hash, label, user_agent[:500], now, now, expires_at),
         )
+        # Keep the newly authenticated device, then retain the nine other most
+        # recently active valid devices. Revocation is per-user and idempotent.
+        _enforce_trusted_device_limit_conn(conn, user_id=user_id, now=now)
         return conn.execute("SELECT * FROM trusted_devices WHERE id = ?", (cursor.lastrowid,)).fetchone()
+
+
+def _enforce_trusted_device_limit_conn(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int | None = None,
+    now: str | None = None,
+) -> int:
+    now = now or datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    user_rows = (
+        [{"id": user_id}]
+        if user_id is not None
+        else conn.execute("SELECT DISTINCT user_id AS id FROM trusted_devices").fetchall()
+    )
+    revoked = 0
+    for user in user_rows:
+        target_user_id = int(user["id"])
+        result = conn.execute(
+            """UPDATE trusted_devices SET revoked_at=?
+               WHERE user_id=? AND revoked_at IS NULL AND expires_at>?
+                 AND id NOT IN (
+                   SELECT id FROM trusted_devices
+                   WHERE user_id=? AND revoked_at IS NULL AND expires_at>?
+                   ORDER BY COALESCE(last_seen_at,created_at) DESC,id DESC LIMIT 10
+                 )""",
+            (now, target_user_id, now, target_user_id, now),
+        )
+        revoked += int(result.rowcount or 0)
+    return revoked
 
 
 def get_trusted_device(token_hash: str, now: str | None = None) -> sqlite3.Row | None:
@@ -2992,7 +3033,21 @@ def purge_app_user(user_id: int) -> dict[str, int]:
         conn.execute("UPDATE crew_known_locations SET source_user_id = NULL WHERE source_user_id = ?", (user_id,))
         conn.execute("UPDATE capture_coverage SET source_user_id = NULL WHERE source_user_id = ?", (user_id,))
         deleted_devices = conn.execute("DELETE FROM trusted_devices WHERE user_id = ?", (user_id,)).rowcount
+        synthetic_people = conn.execute(
+            """
+            SELECT id FROM crew_people
+            WHERE app_user_id=? AND deputy_employee_id IS NULL
+              AND identity_source='account_synthetic'
+              AND COALESCE(person_type,'employee')='employee'
+              AND NOT EXISTS (SELECT 1 FROM workday_assignments a WHERE a.person_id=crew_people.id)
+              AND NOT EXISTS (SELECT 1 FROM contractor_invites i WHERE i.crew_person_id=crew_people.id)
+            """,
+            (user_id,),
+        ).fetchall()
+        conn.execute("UPDATE crew_people SET app_user_id=NULL WHERE app_user_id=?", (user_id,))
         deleted_user = conn.execute("DELETE FROM app_users WHERE id = ?", (user_id,)).rowcount
+        for person in synthetic_people:
+            conn.execute("DELETE FROM crew_people WHERE id=? AND deputy_employee_id IS NULL AND app_user_id IS NULL", (int(person["id"]),))
     return {
         "users": deleted_user,
         "devices": deleted_devices,
@@ -3486,6 +3541,7 @@ def crew_picker_records(selected_team_id: int | None = None) -> list[dict[str, o
             ORDER BY LOWER(p.canonical_display_name),p.id
             """
         ).fetchall()]
+        rows = [row for row in rows if not is_placeholder_crew_name(row.get("canonical_display_name"))]
         terms_by_person: dict[int, list[str]] = {}
         for term in conn.execute(
             "SELECT crew_person_id,normalized_term FROM crew_identity_search_terms ORDER BY id"
@@ -5821,7 +5877,12 @@ def identity_link_diagnostics() -> list[dict[str, object]]:
         return _identity_evidence_rows_conn(conn)
 
 
-def list_crew_people(*, include_merged: bool = False) -> list[dict[str, object]]:
+def is_placeholder_crew_name(value: object) -> bool:
+    key = normalise_person_identity(value)
+    return key in {"tbctbc", "tbc2tbc2"}
+
+
+def list_crew_people(*, include_merged: bool = False, include_placeholders: bool = False) -> list[dict[str, object]]:
     refresh_crew_directory()
     with get_connection() as conn:
         people = [dict(row) for row in conn.execute(
@@ -5859,6 +5920,8 @@ def list_crew_people(*, include_merged: bool = False) -> list[dict[str, object]]
               )
             """
         ).fetchall()
+    if not include_placeholders:
+        people = [person for person in people if not is_placeholder_crew_name(person.get("canonical_display_name"))]
     for person in people:
         person_id = int(person["id"])
         person["aliases"] = aliases_by_person.get(person_id, [])
@@ -7401,6 +7464,13 @@ def _event_change_record(
         "new_employee_name": str((new_person or {}).get("employee_name") or ""),
         "display_summary": display_summary,
         "inline_summary": inline_summary,
+        "initial_population": bool(
+            old_person is not None
+            and not (old_person or {}).get("employee_id")
+            and not str((old_person or {}).get("employee_name") or "").strip()
+            and not bool((old_person or {}).get("is_open"))
+            and new_person is not None
+        ),
     }
 
 
@@ -7562,8 +7632,14 @@ def _record_authoritative_event_changes(
                         change["old_employee_id"], change["old_employee_name"],
                         change["new_employee_id"], change["new_employee_name"], captured_at,
                         change["display_summary"], change["inline_summary"], before_hash, after_hash,
-                        0 if _event_lock_row(conn, date_text, location_id) is not None else 1,
-                        "historical_discrepancy" if _event_lock_row(conn, date_text, location_id) is not None else "assignment_change",
+                        0 if _event_lock_row(conn, date_text, location_id) is not None or change.get("initial_population") else 1,
+                        (
+                            "historical_discrepancy"
+                            if _event_lock_row(conn, date_text, location_id) is not None
+                            else "initial_population"
+                            if change.get("initial_population")
+                            else "assignment_change"
+                        ),
                     ),
                 )
                 saved += max(0, int(result.rowcount or 0))

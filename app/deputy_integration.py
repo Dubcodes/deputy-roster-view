@@ -675,7 +675,7 @@ def mapping_snapshot(app_user_id: int) -> dict[str, object]:
     with get_connection() as conn:
         employees = [dict(r) for r in conn.execute("SELECT * FROM deputy_reference_employees WHERE app_user_id=? AND tenant_host=? ORDER BY display_name", (app_user_id, host))]
         units = [dict(r) for r in conn.execute("SELECT * FROM deputy_reference_units WHERE app_user_id=? AND tenant_host=? ORDER BY display_name", (app_user_id, host))]
-        people = [dict(r) for r in conn.execute("SELECT id,canonical_display_name FROM crew_people WHERE is_active=1 AND merged_into_person_id IS NULL ORDER BY canonical_display_name")]
+        people = [dict(r) for r in conn.execute("SELECT id,canonical_display_name FROM crew_people WHERE is_active=1 AND merged_into_person_id IS NULL AND COALESCE(person_type,'employee')='employee' ORDER BY canonical_display_name")]
         person_mappings = {int(r["crew_person_id"]): int(r["deputy_employee_id"]) for r in conn.execute("SELECT * FROM deputy_person_mappings WHERE tenant_host=?", (host,))}
         unit_mappings = {str(r["mapping_key"]): dict(r) for r in conn.execute("SELECT * FROM deputy_unit_mappings WHERE tenant_host=?", (host,))}
     return {"host": host, "employees": employees, "units": units, "people": people, "person_mappings": person_mappings, "unit_mappings": unit_mappings}
@@ -684,6 +684,12 @@ def mapping_snapshot(app_user_id: int) -> dict[str, object]:
 def save_person_mapping(*, app_user_id: int, crew_person_id: int, deputy_employee_id: int) -> None:
     verified = verify_read_access(app_user_id)
     with get_connection() as conn:
+        person = conn.execute(
+            "SELECT person_type FROM crew_people WHERE id=? AND is_active=1 AND merged_into_person_id IS NULL",
+            (crew_person_id,),
+        ).fetchone()
+        if person is None or str(person["person_type"] or "employee") != "employee":
+            raise ValueError("Contractors cannot be mapped to Deputy employees.")
         if conn.execute("SELECT 1 FROM deputy_reference_employees WHERE app_user_id=? AND tenant_host=? AND deputy_employee_id=? AND active=1", (app_user_id, verified["tenant_host"], deputy_employee_id)).fetchone() is None:
             raise ValueError("That Deputy employee is not readable by your connected account.")
         conn.execute("""INSERT INTO deputy_person_mappings(tenant_host,crew_person_id,deputy_employee_id,updated_by_user_id,updated_at) VALUES(?,?,?,?,?)
@@ -714,6 +720,7 @@ def build_trial_preview(app_user_id: int, workday_id: int, *, session: object = 
             WHERE a.roster_day_id=? ORDER BY a.sort_order,a.id""", (workday_id,))]
         people = {int(r["crew_person_id"]): int(r["deputy_employee_id"]) for r in conn.execute("""SELECT m.* FROM deputy_person_mappings m
             JOIN deputy_reference_employees e ON e.app_user_id=? AND e.tenant_host=m.tenant_host AND e.deputy_employee_id=m.deputy_employee_id AND e.active=1
+            JOIN crew_people p ON p.id=m.crew_person_id AND COALESCE(p.person_type,'employee')='employee'
             WHERE m.tenant_host=?""", (app_user_id, host))}
         units = {str(r["mapping_key"]): dict(r) for r in conn.execute("""SELECT m.* FROM deputy_unit_mappings m
             JOIN deputy_reference_units u ON u.app_user_id=? AND u.tenant_host=m.tenant_host AND u.deputy_unit_id=m.deputy_unit_id AND u.active=1
