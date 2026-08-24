@@ -58,15 +58,15 @@
           <form class="settings-form compact-settings-form" action="/settings/pin" method="post">
             <label class="form-row">
               <span>Current PIN</span>
-              <input type="password" name="current_pin" inputmode="numeric" autocomplete="current-password" required>
+              <input type="password" name="current_pin" inputmode="numeric" autocomplete="current-password" maxlength="32" required>
             </label>
             <label class="form-row">
               <span>New PIN</span>
-              <input type="password" name="pin" inputmode="numeric" autocomplete="new-password" required>
+              <input type="password" name="pin" inputmode="numeric" autocomplete="new-password" minlength="4" maxlength="32" pattern="[0-9]+" required>
             </label>
             <label class="form-row">
               <span>Repeat PIN</span>
-              <input type="password" name="pin_confirm" inputmode="numeric" autocomplete="new-password" required>
+              <input type="password" name="pin_confirm" inputmode="numeric" autocomplete="new-password" minlength="4" maxlength="32" pattern="[0-9]+" required>
             </label>
             <button class="button button-secondary" type="submit">Save PIN</button>
           </form>
@@ -78,12 +78,8 @@
           </p>
           <form class="settings-form compact-settings-form" action="/settings/deputy-login" method="post">
             <label class="form-row">
-              <span>Deputy URL</span>
-              <input type="url" name="deputy_web_url" value="{{ account_user.deputy_web_url if account_user else settings.deputy_web_url }}" autocomplete="url" required>
-            </label>
-            <label class="form-row">
               <span>Deputy email</span>
-              <input type="email" name="deputy_email" value="{{ account_user.deputy_email if account_user else current_user.deputy_email }}" autocomplete="username" required>
+              <input type="email" name="deputy_email" value="{{ account_deputy_email }}" autocomplete="username" required>
             </label>
             <label class="form-row">
               <span>Deputy password</span>
@@ -91,7 +87,7 @@
             </label>
             <button class="button button-secondary" type="submit">Save Deputy Login</button>
           </form>
-          <p class="muted">Use this if your Deputy password changed or the original signup details were wrong. Email, URL, and accidental edge spaces are cleaned up before saving. Passwords are encrypted before storage.</p>
+          <p class="muted">Use this if your Deputy login changed. It does not change your Re-Deputy account email. Passwords are encrypted before storage.</p>
         </details>
         <details class="inline-settings-details">
           <summary>Deactivate my account</summary>
@@ -178,8 +174,8 @@
       <div class="section-heading">
         <h2>Roster Update</h2>
       </div>
-      <p class="sync-state" data-sync-status>{{ sync_status.label if can_sync else "Deputy login needed" }}</p>
-      <p class="muted sync-message" data-sync-message>{{ sync_status.message }}</p>
+      <p class="sync-state" data-sync-status>{{ sync_status.label if can_sync else "Deputy roster not connected" }}</p>
+      <p class="muted sync-message" data-sync-message>{{ sync_status.message if can_sync else "Add Deputy login details above when you want to connect your roster." }}</p>
       <div class="sync-progress{% if sync_status.running %} is-active{% endif %}" data-sync-activity {% if not sync_status.running %}hidden{% endif %}>
         <span class="sync-spinner" aria-hidden="true"></span>
         <div class="sync-progress-track" role="progressbar" aria-label="Sync progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{% if sync_status.running %}15{% else %}0{% endif %}" data-sync-progress>
@@ -187,9 +183,9 @@
         </div>
       </div>
       <div class="settings-action-row sync-action-row">
-        <form action="/sync-now" method="post" data-progress-form>
+        {% if can_sync %}<form action="/sync-now" method="post" data-progress-form>
           <button class="button" type="submit" data-progress-button {% if sync_status.running %}disabled{% endif %}>Sync my roster</button>
-        </form>
+        </form>{% endif %}
         <form action="/settings/clear-changed" method="post">
           <button class="button button-secondary" type="submit">Clear changes</button>
         </form>

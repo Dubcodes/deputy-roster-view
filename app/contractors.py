@@ -5,7 +5,7 @@ import secrets
 from datetime import datetime, timedelta
 
 from .database import get_connection
-from .security import hash_pin, verify_pin
+from .security import hash_pin, re_deputy_pin_error, verify_pin
 
 
 def _now() -> datetime:
@@ -46,8 +46,8 @@ def invite_details(token: str) -> dict[str, object] | None:
 
 
 def activate_invite(token: str, pin: str) -> object:
-    if len(pin) < 4 or not pin.isdigit():
-        raise ValueError("Choose a numeric PIN with at least 4 digits.")
+    if error := re_deputy_pin_error(pin):
+        raise ValueError(error)
     now = _now().isoformat(timespec="seconds")
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")

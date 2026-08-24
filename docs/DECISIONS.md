@@ -1,5 +1,14 @@
 # Decisions
 
+## 2026-08-24 — Keep account, crew identity, and Deputy connection independent
+
+- Keep legacy `app_users.deputy_email` as the Re-Deputy login identity; do not rename or duplicate it.
+- Store the actual Deputy email only as encrypted credential data and never change account login identity during credential updates.
+- Re-Deputy PINs are ASCII digits only, 4–32 digits, through one central validator.
+- Ordinary account invitations are separate from contractor authorization and do not create canonical people.
+- No-Deputy ordinary accounts are healthy, do not sync, and keep the existing global Crew view; selected-team management permissions remain deferred.
+- Notification clicks retain safe same-origin targets and fall back to `openWindow` when existing-client navigation/focus fails.
+
 ## Keep The Stack Simple
 
 Use FastAPI, Jinja, SQLite, APScheduler, requests, icalendar, and Playwright only where needed for Deputy web capture. Avoid a heavy frontend framework.

@@ -27,6 +27,7 @@ OFFLINE_SMOKES = (
     "smoke_notifications.py",
     "smoke_roster_integrity.py",
     "smoke_route_flows.py",
+    "smoke_account_onboarding.py",
     "smoke_self_travel.py",
     "smoke_track_map_classification.py",
     "smoke_workday_builder.py",
@@ -53,6 +54,8 @@ def main() -> int:
         "DEPUTY_LOGIN_PASSWORD": "",
     })
     run("Python compilation", [sys.executable, "-m", "compileall", "-q", "app", "scripts"], env)
+    run("service worker syntax", ["node", "--check", "app/static/service-worker.js"], env)
+    run("service worker navigation smoke", ["node", "scripts/smoke_service_worker.js"], env)
     for script in OFFLINE_SMOKES:
         run(script, [sys.executable, str(Path("scripts") / script)], env)
     with tempfile.TemporaryDirectory(prefix="redeputy-release-migration-") as directory:

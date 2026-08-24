@@ -1,5 +1,11 @@
 # Architecture
 
+## Account identity and onboarding (2026.08.21.7)
+
+`app_users.deputy_email` remains the historically named Re-Deputy account/login email. Actual Deputy email and password are optional encrypted values in `deputy_user_secrets`; updating them does not change the Re-Deputy login. An account, canonical `crew_people` identity, and Deputy connection are independent. Ordinary invited management accounts may therefore have no crew link and no Deputy connection while retaining the existing Crew/global view.
+
+`account_invitations` is separate from contractor invitations. It stores only a strong token hash, expires, revokes, and consumes invitations once. Activation creates an ordinary `account_type='user'` account without manufacturing a crew identity; Deputy credentials may be added during activation or later through the normal credential path. Normal UI uses the installation `DEPUTY_WEB_URL`, retaining a valid stored per-user URL as the first compatibility choice.
+
 ## Stack
 
 - FastAPI app in `app/main.py`

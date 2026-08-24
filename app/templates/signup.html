@@ -6,17 +6,13 @@
   <section class="auth-shell">
     <div class="auth-panel">
       <p class="eyebrow">Signup</p>
-      <h1>Connect your Deputy roster</h1>
-      <p class="muted">Enter your Deputy login once, then set a PIN for this roster viewer. This device will stay trusted for a long time.</p>
+      <h1>Create your Re-Deputy account</h1>
+      <p class="muted">Connect your roster, then choose the PIN you will use for Re-Deputy.</p>
 
       <form class="auth-form" action="/signup" method="post">
         <input type="hidden" name="next_url" value="{{ next_url }}">
 
-        <label class="form-row">
-          <span>Deputy URL</span>
-          <input type="url" name="deputy_web_url" value="{{ default_deputy_web_url }}" required>
-        </label>
-
+        <h2>Deputy roster connection</h2>
         <label class="form-row">
           <span>Deputy email</span>
           <input type="email" name="deputy_email" autocomplete="username" required>
@@ -27,14 +23,15 @@
           <input type="password" name="deputy_password" autocomplete="current-password" required>
         </label>
 
+        <h2>Re-Deputy login</h2>
         <div class="form-grid-two">
           <label class="form-row">
-            <span>PIN</span>
-            <input type="password" name="pin" inputmode="numeric" autocomplete="new-password" required>
+            <span>Re-Deputy PIN</span>
+            <input type="password" name="pin" inputmode="numeric" autocomplete="new-password" minlength="4" maxlength="32" pattern="[0-9]+" required>
           </label>
           <label class="form-row">
-            <span>Repeat PIN</span>
-            <input type="password" name="pin_confirm" inputmode="numeric" autocomplete="new-password" required>
+            <span>Repeat Re-Deputy PIN</span>
+            <input type="password" name="pin_confirm" inputmode="numeric" autocomplete="new-password" minlength="4" maxlength="32" pattern="[0-9]+" required>
           </label>
         </div>
 

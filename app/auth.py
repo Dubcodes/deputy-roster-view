@@ -33,6 +33,7 @@ PUBLIC_PATHS = {
 PUBLIC_PREFIXES = (
     "/static/",
     "/contractor/invite/",
+    "/account/invite/",
 )
 
 CONTRACTOR_ALLOWED_PREFIXES = (
@@ -224,6 +225,7 @@ async def trusted_device_middleware(
                 "last_sync_status": device["last_status"],
                 "last_sync_message": device["last_message"],
                 "sync_in_progress": device["sync_in_progress"],
+                "has_deputy_credentials": bool(device["has_deputy_credentials"]),
             }
             _add_sync_notice(request.state.current_user)
             update_trusted_device_seen(int(device["id"]), expires_at)
@@ -269,6 +271,10 @@ def _is_public_path(path: str) -> bool:
 
 def _add_sync_notice(user: dict[str, object]) -> None:
     settings = get_settings()
+    if not bool(user.get("has_deputy_credentials")):
+        user["sync_notice_kind"] = "healthy"
+        user["sync_notice_text"] = "Deputy roster not connected"
+        return
     last_sync_text = str(user.get("last_sync_at") or "").strip()
     status_text = str(user.get("last_sync_status") or "").strip().lower()
     if int(user.get("sync_in_progress") or 0):

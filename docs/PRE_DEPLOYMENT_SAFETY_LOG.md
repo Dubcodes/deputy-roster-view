@@ -1,5 +1,20 @@
 # Re-Deputy Pre-Deployment Safety Log
 
+## 2026.08.21.7 account/onboarding closure
+
+Phase 0 first reran the canonical deterministic offline release gate against the unchanged 2026.08.21.6 state-machine foundation; it passed, including sync generations, integrity settlement/deduplication, production-shaped interpretation fixtures, migration rehearsal, SQLite integrity/foreign keys, and collision audits. Phase 1 then added hash-only ordinary invitations, independent Re-Deputy/Deputy email handling, the central 4–32 digit PIN contract, healthy no-Deputy behavior, installation-level URL forms, and notification navigation fallback. No live Deputy access/write or deployment was performed.
+
+Final review on 2026-08-24 closed these release blockers:
+
+* invitation activation, optional encrypted credentials, sync state, and invite consumption now commit in one `BEGIN IMMEDIATE` transaction; forced credential failure rolls the account back and concurrent use creates exactly one account;
+* invalid, expired, revoked, replayed, and validation-failed invitation POSTs return a private/no-store rendered error without putting the raw token in a redirect `Location`;
+* Admin no longer decrypts every user's Deputy email into the broad page context; one authenticated, private/no-store endpoint loads one selected user's email on demand, while Settings decrypts only the current account's email;
+* a blank or invalid stored Deputy URL falls back to the valid installation URL;
+* null/rejected notification navigation and rejected focus open the safe same-origin target, covered by an executable service-worker smoke;
+* migration rehearsal seeds representative account, encrypted-secret, sync-state, trusted-device, and crew/team data before recreating the invitation table.
+
+Evidence: the canonical offline gate passed; the complete local gate passed at both 320px and 375px; the seeded migration ran twice with `integrity_check=ok`, zero foreign-key rows, write mode `off`, and zero assignment/link collision groups. No live Deputy access or mutation was used. Final status: code-level release blockers are FIXED; commit-SHA CI and production-host deployment checks remain required.
+
 Purpose: maintain a durable record of significant pre-deployment defects, investigation results, attempted fixes, validation evidence, remaining risks, and release decisions so the same work is not repeated.
 
 Do not delete old entries when an issue is fixed. Update its status and add the release/commit that resolved it.

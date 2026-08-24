@@ -6,18 +6,18 @@
   <section class="auth-shell">
     <div class="auth-panel">
       <p class="eyebrow">Trusted device</p>
-      <h1>Open your roster</h1>
-      <p class="muted">Use your Deputy email and roster PIN. This device will stay signed in after login.</p>
+      <h1>Open Re-Deputy</h1>
+      <p class="muted">Your Re-Deputy PIN is separate from your Deputy password.</p>
 
       <form class="auth-form" action="/login" method="post">
         <input type="hidden" name="next_url" value="{{ next_url }}">
         <label class="form-row">
-          <span>Deputy email</span>
+          <span>Email</span>
           <input type="email" name="deputy_email" autocomplete="username" required>
         </label>
         <label class="form-row">
-          <span>PIN</span>
-          <input type="password" name="pin" inputmode="numeric" autocomplete="current-password" required>
+          <span>Re-Deputy PIN</span>
+          <input type="password" name="pin" inputmode="numeric" autocomplete="current-password" minlength="4" maxlength="32" pattern="[0-9]+" required>
         </label>
         <button class="button" type="submit">Trust this device</button>
       </form>

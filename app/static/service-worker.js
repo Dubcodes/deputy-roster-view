@@ -21,15 +21,25 @@ self.addEventListener('push', (event) => {
   }));
 });
 
+const openNotificationTarget = async (windows, target) => {
+  for (const client of windows) {
+    if (new URL(client.url).origin !== self.location.origin) continue;
+    try {
+      const navigated = await client.navigate(target);
+      if (!navigated) return clients.openWindow(target);
+      return await navigated.focus();
+    } catch (_) {
+      return clients.openWindow(target);
+    }
+  }
+  return clients.openWindow(target);
+};
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const target = safeLocalUrl(event.notification?.data?.url);
-  event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (windows) => {
-    for (const client of windows) {
-      if (new URL(client.url).origin !== self.location.origin) continue;
-      await client.navigate(target);
-      return client.focus();
-    }
-    return clients.openWindow(target);
-  }));
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then((windows) => openNotificationTarget(windows, target)),
+  );
 });

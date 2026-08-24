@@ -499,11 +499,24 @@ def main() -> None:
     if member["status"] != "success" or member["message"] != "winner" or generation["status"] != "complete":
         raise AssertionError("Generation terminal transition was not idempotent.")
     serious_alerts = generate_due_notifications(alert_now)
-    if serious_alerts["admin_alerts"] != 3 or generate_due_notifications(alert_now)["admin_alerts"]:
-        raise AssertionError(f"Serious Admin Alerts were not queued and deduped once: {serious_alerts!r}")
+    with get_connection() as conn:
+        immediate_integrity = conn.execute(
+            "SELECT COUNT(*) FROM notification_events WHERE event_type='admin_alert' AND workday_kind='roster_integrity'"
+        ).fetchone()[0]
+    if immediate_integrity:
+        raise AssertionError(f"Integrity alert bypassed its settlement boundary: {serious_alerts!r}")
     settled_alerts = generate_due_notifications(alert_now + timedelta(seconds=91))
-    if settled_alerts["admin_alerts"] != 1 or generate_due_notifications(alert_now + timedelta(seconds=91))["admin_alerts"]:
-        raise AssertionError(f"Integrity warnings did not settle into one durable aggregate: {settled_alerts!r}")
+    with get_connection() as conn:
+        settled_integrity = conn.execute(
+            "SELECT COUNT(*) FROM notification_events WHERE event_type='admin_alert' AND workday_kind='roster_integrity'"
+        ).fetchone()[0]
+    repeated_settled = generate_due_notifications(alert_now + timedelta(seconds=91))
+    with get_connection() as conn:
+        repeated_integrity = conn.execute(
+            "SELECT COUNT(*) FROM notification_events WHERE event_type='admin_alert' AND workday_kind='roster_integrity'"
+        ).fetchone()[0]
+    if settled_integrity != 1 or repeated_integrity != 1:
+        raise AssertionError(f"Integrity warnings did not settle into one durable aggregate: {settled_alerts!r}, {repeated_settled!r}")
     with get_connection() as conn:
         serious_kinds = {
             row["workday_kind"] for row in conn.execute(
@@ -552,6 +565,8 @@ def main() -> None:
     service_worker = (ROOT_DIR / "app" / "static" / "service-worker.js").read_text(encoding="utf-8")
     if "value.startsWith('//')" not in service_worker or "parsed.origin === self.location.origin" not in service_worker:
         raise AssertionError("Service-worker notification links are not restricted to safe local URLs.")
+    if "catch (_)" not in service_worker or service_worker.count("clients.openWindow(target)") < 2:
+        raise AssertionError("Service-worker navigation failure does not fall back to opening Re-Deputy.")
     settings_template = (ROOT_DIR / "app" / "templates" / "settings.html").read_text(encoding="utf-8")
     if "Notification.requestPermission()" not in settings_template.split("data-enable-push", 2)[-1]:
         raise AssertionError("Notification permission is not tied to the explicit Enable action.")

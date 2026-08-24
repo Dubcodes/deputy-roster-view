@@ -16,6 +16,16 @@ from .config import Settings, get_settings
 PIN_HASH_ALGORITHM = "pbkdf2_sha256"
 PIN_HASH_ITERATIONS = 390_000
 SESSION_COOKIE_NAME = "drv_trusted_device"
+PIN_MIN_LENGTH = 4
+PIN_MAX_LENGTH = 32
+
+
+def valid_re_deputy_pin(pin: str) -> bool:
+    return PIN_MIN_LENGTH <= len(pin) <= PIN_MAX_LENGTH and pin.isascii() and pin.isdigit()
+
+
+def re_deputy_pin_error(pin: str) -> str:
+    return "" if valid_re_deputy_pin(pin) else "Re-Deputy PIN must be 4–32 digits."
 
 
 def now_iso() -> str:

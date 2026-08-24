@@ -162,6 +162,21 @@ def init_db(settings: Settings | None = None) -> None:
                 FOREIGN KEY (activated_user_id) REFERENCES app_users(id)
             );
 
+            CREATE TABLE IF NOT EXISTS account_invitations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_hash TEXT NOT NULL UNIQUE,
+                account_email TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                created_by_user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                revoked_at TEXT,
+                activated_user_id INTEGER,
+                FOREIGN KEY (created_by_user_id) REFERENCES app_users(id),
+                FOREIGN KEY (activated_user_id) REFERENCES app_users(id)
+            );
+
             CREATE TABLE IF NOT EXISTS deputy_oauth_config (
                 id INTEGER PRIMARY KEY CHECK (id=1),
                 client_id TEXT,
@@ -2320,6 +2335,59 @@ def update_deputy_user_ical_url(user_id: int, encrypted_ical_url: str) -> None:
         )
 
 
+def persist_deputy_user_credentials(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    deputy_web_url: str,
+    encrypted_email: str,
+    encrypted_password: str,
+    now: str,
+) -> int:
+    deputy_web_url = deputy_web_url.strip()
+    result = conn.execute(
+        """
+            UPDATE app_users
+            SET deputy_web_url = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (deputy_web_url, now, user_id),
+        )
+    if result.rowcount:
+        conn.execute(
+            """
+            INSERT INTO deputy_user_secrets (
+                user_id, encrypted_email, encrypted_password, encrypted_ical_url, encrypted_session_json, updated_at
+            )
+            VALUES (?, ?, ?, '', '', ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                encrypted_email = excluded.encrypted_email,
+                encrypted_password = excluded.encrypted_password,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, encrypted_email, encrypted_password, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO user_sync_state (
+                user_id, last_sync_at, next_sync_after, last_status, last_message,
+                sync_in_progress, last_planned_reason, updated_at
+            )
+            VALUES (?, '', '', 'new', 'Deputy login updated. Run sync to test it.', 0, 'credentials_updated', ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                next_sync_after = '',
+                last_status = 'new',
+                last_message = 'Deputy login updated. Run sync to test it.',
+                sync_in_progress = 0,
+                last_planned_reason = 'credentials_updated',
+                updated_at = excluded.updated_at
+            """,
+            (user_id, now),
+        )
+    return result.rowcount
+
+
 def update_deputy_user_credentials(
     *,
     user_id: int,
@@ -2328,52 +2396,17 @@ def update_deputy_user_credentials(
     encrypted_email: str,
     encrypted_password: str,
 ) -> int:
+    del deputy_email  # Re-Deputy account email and Deputy credential email are deliberately independent.
     now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
-    deputy_email = deputy_email.strip().lower()
-    deputy_web_url = deputy_web_url.strip()
     with get_connection() as conn:
-        result = conn.execute(
-            """
-                UPDATE app_users
-                SET deputy_email = ?,
-                    deputy_web_url = ?,
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (deputy_email, deputy_web_url, now, user_id),
-            )
-        if result.rowcount:
-            conn.execute(
-                """
-                INSERT INTO deputy_user_secrets (
-                    user_id, encrypted_email, encrypted_password, encrypted_ical_url, encrypted_session_json, updated_at
-                )
-                VALUES (?, ?, ?, '', '', ?)
-                ON CONFLICT(user_id) DO UPDATE SET
-                    encrypted_email = excluded.encrypted_email,
-                    encrypted_password = excluded.encrypted_password,
-                    updated_at = excluded.updated_at
-                """,
-                (user_id, encrypted_email, encrypted_password, now),
-            )
-            conn.execute(
-                """
-                INSERT INTO user_sync_state (
-                    user_id, last_sync_at, next_sync_after, last_status, last_message,
-                    sync_in_progress, last_planned_reason, updated_at
-                )
-                VALUES (?, '', '', 'new', 'Deputy login updated. Run sync to test it.', 0, 'credentials_updated', ?)
-                ON CONFLICT(user_id) DO UPDATE SET
-                    next_sync_after = '',
-                    last_status = 'new',
-                    last_message = 'Deputy login updated. Run sync to test it.',
-                    sync_in_progress = 0,
-                    last_planned_reason = 'credentials_updated',
-                    updated_at = excluded.updated_at
-                """,
-                (user_id, now),
-            )
-    return result.rowcount
+        return persist_deputy_user_credentials(
+            conn,
+            user_id=user_id,
+            deputy_web_url=deputy_web_url,
+            encrypted_email=encrypted_email,
+            encrypted_password=encrypted_password,
+            now=now,
+        )
 
 
 def list_syncable_app_users() -> list[sqlite3.Row]:
@@ -2643,10 +2676,12 @@ def get_trusted_device(token_hash: str, now: str | None = None) -> sqlite3.Row |
                 s.last_sync_at,
                 s.last_status,
                 s.last_message,
-                s.sync_in_progress
+                s.sync_in_progress,
+                CASE WHEN TRIM(COALESCE(secret.encrypted_email,'')) != '' AND TRIM(COALESCE(secret.encrypted_password,'')) != '' THEN 1 ELSE 0 END AS has_deputy_credentials
             FROM trusted_devices d
             JOIN app_users u ON u.id = d.user_id
             LEFT JOIN user_sync_state s ON s.user_id = u.id
+            LEFT JOIN deputy_user_secrets secret ON secret.user_id = u.id
             WHERE d.token_hash = ?
               AND d.revoked_at IS NULL
               AND d.expires_at > ?

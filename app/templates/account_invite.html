@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}Activate Re-Deputy{% endblock %}
+
+{% block content %}
+  <section class="auth-shell">
+    <div class="auth-panel">
+      <p class="eyebrow">Invitation</p>
+      <h1>Activate Re-Deputy</h1>
+      {% if not invite or not invite.available %}
+        <p>This invitation is invalid, expired, revoked, or already used.</p>
+      {% else %}
+        <p class="muted">Account: <strong>{{ invite.account_email }}</strong></p>
+        <form class="auth-form" method="post">
+          <label class="form-row"><span>Display name (optional)</span><input name="display_name" value="{{ invite.display_name or '' }}" autocomplete="name"></label>
+          <div class="form-grid-two">
+            <label class="form-row"><span>Re-Deputy PIN</span><input type="password" name="pin" inputmode="numeric" autocomplete="new-password" minlength="4" maxlength="32" pattern="[0-9]+" required></label>
+            <label class="form-row"><span>Repeat Re-Deputy PIN</span><input type="password" name="pin_confirm" inputmode="numeric" autocomplete="new-password" minlength="4" maxlength="32" pattern="[0-9]+" required></label>
+          </div>
+          <h2>Deputy roster connection <small>(optional)</small></h2>
+          <label class="form-row"><span>Deputy email</span><input type="email" name="deputy_email" autocomplete="username"></label>
+          <label class="form-row"><span>Deputy password</span><input type="password" name="deputy_password" autocomplete="current-password"></label>
+          <button class="button" type="submit">Activate account</button>
+        </form>
+      {% endif %}
+    </div>
+  </section>
+{% endblock %}

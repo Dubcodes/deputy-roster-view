@@ -28,13 +28,16 @@ def main() -> None:
         APP_SECRET_KEY="responsive-smoke-secret",
         SIGNUP_ENABLED="true",
         COOKIE_SECURE="false",
+        DEPUTY_WEB_URL="https://fixture.au.deputy.com",
     )
 
     import uvicorn
     from playwright.sync_api import sync_playwright
 
     from app.database import get_connection, get_default_team_id, init_db, save_crew_vehicle, set_crew_person_team
+    import app.main as main_module
     from app.main import app, templates
+    main_module.queue_manual_sync = lambda *args, **kwargs: True
 
     @app.get("/__release_gate_trial_preview")
     def release_gate_trial_preview(request: Request):
@@ -67,9 +70,10 @@ def main() -> None:
             browser = playwright.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1280, "height": 900})
             page.goto(f"http://127.0.0.1:{port}/signup")
+            if page.locator('[name="deputy_web_url"]').count():
+                raise AssertionError("Signup still exposes the installation-level Deputy URL.")
             page.locator('[name="deputy_email"]').fill("responsive@example.com")
             page.locator('[name="deputy_password"]').fill("password")
-            page.locator('[name="deputy_web_url"]').fill("https://example.au.deputy.com/")
             page.locator('[name="pin"]').fill("1234")
             page.locator('[name="pin_confirm"]').fill("1234")
             page.locator('button[type="submit"]').click()

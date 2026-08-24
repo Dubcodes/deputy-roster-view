@@ -39,6 +39,16 @@
 {% block title %}Admin - Re-Deputy{% endblock %}
 
 {% block content %}
+  <section class="table-panel">
+    <h2>Invite Re-Deputy account</h2>
+    {% if new_account_invite_url %}<div class="copy-panel"><label class="form-row"><span>Activation link — copy now</span><input value="{{ new_account_invite_url }}" readonly></label></div>{% endif %}
+    <form class="settings-form" action="/admin/account-invitations" method="post">
+      <label class="form-row"><span>Account email</span><input type="email" name="account_email" required></label>
+      <label class="form-row"><span>Display name (optional)</span><input name="display_name" autocomplete="name"></label>
+      <button class="button" type="submit">Invite Re-Deputy account</button>
+    </form>
+    {% for invite in account_invitations %}<div class="admin-device-row"><span><strong>{{ invite.display_name or invite.account_email }}</strong><small>{{ invite.account_email }} · expires {{ invite.expires_at|datetime }}{% if invite.consumed_at %} · consumed{% elif invite.revoked_at %} · revoked{% endif %}</small></span>{% if not invite.consumed_at and not invite.revoked_at %}<form action="/admin/account-invitations/{{ invite.id }}/revoke" method="post"><button class="button button-secondary button-compact">Revoke</button></form>{% endif %}</div>{% endfor %}
+  </section>
   <section class="page-heading compact-heading">
     <div>
       <p class="eyebrow">Admin</p>
@@ -856,11 +866,11 @@
               <form class="settings-form admin-pin-form" action="/admin/users/{{ user.id }}/pin" method="post">
                 <label class="form-row">
                   <span>New PIN</span>
-                  <input type="password" name="pin" inputmode="numeric" autocomplete="new-password" required>
+                  <input type="password" name="pin" inputmode="numeric" autocomplete="new-password" minlength="4" maxlength="32" pattern="[0-9]+" required>
                 </label>
                 <label class="form-row">
                   <span>Repeat PIN</span>
-                  <input type="password" name="pin_confirm" inputmode="numeric" autocomplete="new-password" required>
+                  <input type="password" name="pin_confirm" inputmode="numeric" autocomplete="new-password" minlength="4" maxlength="32" pattern="[0-9]+" required>
                 </label>
                 <button class="button button-secondary" type="submit">Reset PIN</button>
               </form>
@@ -873,20 +883,22 @@
               </p>
               <form class="settings-form admin-credential-form" action="/admin/users/{{ user.id }}/deputy-login" method="post">
                 <label class="form-row">
-                  <span>Deputy URL</span>
-                  <input type="url" name="deputy_web_url" value="{{ user.deputy_web_url or settings.deputy_web_url }}" autocomplete="url" required>
-                </label>
-                <label class="form-row">
                   <span>Deputy email</span>
-                  <input type="email" name="deputy_email" value="{{ user.deputy_email }}" autocomplete="username" required>
+                  <input id="deputy-email-{{ user.id }}" type="email" name="deputy_email" autocomplete="username" required>
                 </label>
+                {% if user.has_deputy_credentials %}
+                  <div class="button-row">
+                    <button class="button button-secondary" type="button" data-credential-email-load="/admin/users/{{ user.id }}/deputy-credential-email" data-credential-email-target="deputy-email-{{ user.id }}">Load saved email</button>
+                    <span class="muted" data-credential-email-status></span>
+                  </div>
+                {% endif %}
                 <label class="form-row">
                   <span>Deputy password</span>
                   <input type="password" name="deputy_password" autocomplete="current-password" placeholder="Leave blank to keep saved password" {% if not user.has_deputy_credentials %}required{% endif %}>
                 </label>
                 <button class="button button-secondary" type="submit">Save Deputy Login</button>
               </form>
-              <p class="muted">Email, URL, and accidental edge spaces are cleaned up before saving. Blank password keeps the saved encrypted password.</p>
+              <p class="muted">Changing Deputy login details does not change the Re-Deputy account email. Blank password keeps the saved encrypted password.</p>
             </section>
 
             <section>
@@ -1078,6 +1090,32 @@
 
       document.querySelectorAll("[data-diagnostic-load]").forEach((button) => {
         button.addEventListener("click", () => loadDiagnostic(button));
+      });
+
+      document.querySelectorAll("[data-credential-email-load]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const target = document.getElementById(button.dataset.credentialEmailTarget);
+          const status = button.parentElement?.querySelector("[data-credential-email-status]");
+          if (!target) return;
+          button.disabled = true;
+          if (status) status.textContent = "Loading...";
+          try {
+            const response = await fetch(button.dataset.credentialEmailLoad, {
+              credentials: "same-origin",
+              headers: { Accept: "application/json" },
+            });
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload.message || `HTTP ${response.status}`);
+            target.value = payload.deputy_email || "";
+            target.focus();
+            button.textContent = "Reload saved email";
+            if (status) status.textContent = target.value ? "Saved email loaded." : "No saved email.";
+          } catch (error) {
+            if (status) status.textContent = "Could not load saved email.";
+          } finally {
+            button.disabled = false;
+          }
+        });
       });
 
       document.querySelectorAll("[data-copy-target]").forEach((button) => {

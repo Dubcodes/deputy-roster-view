@@ -8,7 +8,11 @@ Run the deterministic offline suite locally and in CI with:
 python scripts\release_gate.py
 ```
 
-The runner compiles Python, renders templates, runs the Deputy/security/integration gates and all committed offline application fixtures, rehearses migration twice, checks SQLite integrity and foreign keys, and audits assignment/link collisions. It never uses live Deputy credentials or a live tenant.
+The runner compiles Python, validates and executes the service-worker navigation smoke, renders templates, runs the Deputy/security/integration gates and all committed offline application fixtures, rehearses migration twice, checks SQLite integrity and foreign keys, and audits assignment/link collisions. It never uses live Deputy credentials or a live tenant.
+
+`scripts/smoke_account_onboarding.py` covers the ASCII-only 4–32 digit PIN contract, Re-Deputy login copy, URL-free signup, hash-only/revocable/expiring/single-use and replacement ordinary invitations, concurrent activation, transactional activation/credential rollback, raw-token-free failure responses, no-crew/no-Deputy management accounts, global-view access, sync exclusion, later credential connection, configured-URL fallback, independent Re-Deputy/Deputy emails, and Admin-only on-demand credential-email disclosure.
+
+`scripts/smoke_service_worker.js` executes notification clicks with same-origin and cross-origin windows, rejected navigation, null navigation, rejected focus, unsafe targets, and no-window fallback. A null `WindowClient.navigate()` result must open the safe target rather than focusing the old page.
 
 The 320px/375px Playwright gate is intentionally local because CI does not install browser binaries solely for this check:
 

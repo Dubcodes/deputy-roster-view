@@ -197,9 +197,10 @@ from .security import (
     hash_session_token,
     new_session_token,
     session_expires_at,
+    re_deputy_pin_error,
     verify_pin,
 )
-from .user_credentials import settings_for_user
+from .user_credentials import deputy_email_for_user, resolve_deputy_web_url, settings_for_user
 from .interpreted_workdays import interpret_deputy_workdays, interpret_deputy_workdays_for_people
 from .roster_note_interpretation import (
     VEHICLE_ALLOCATION_TOKEN_RE,
@@ -245,6 +246,13 @@ from .contractors import (
     invite_details,
     revoke_invite,
 )
+from .account_invitations import (
+    account_invite_admin_rows,
+    account_invite_details,
+    activate_account_invite,
+    create_account_invite,
+    revoke_account_invite,
+)
 from .deputy_integration import (
     begin_oauth,
     build_trial_preview,
@@ -267,7 +275,7 @@ from .deputy_integration import (
 
 APP_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.5.0"
-APP_BUILD = "2026.08.21.6"
+APP_BUILD = "2026.08.21.7"
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -4916,9 +4924,11 @@ def aggregate_global_schedule(rows: list[object]) -> list[dict[str, object]]:
 
 def infer_display_name_from_email(email: str) -> str:
     local_part = email.split("@", 1)[0].strip()
+    if not re.fullmatch(r"[A-Za-z]+(?:[._-][A-Za-z]+)+", local_part):
+        return ""
     local_part = re.sub(r"[._-]+", " ", local_part)
     display_name = " ".join(part.capitalize() for part in local_part.split() if part)
-    return display_name or "Roster User"
+    return display_name
 
 
 def capture_summary(value: str) -> dict[str, object] | None:
@@ -5412,6 +5422,63 @@ async def contractor_invite_activate(request: Request, token: str) -> RedirectRe
     return response
 
 
+@app.get("/account/invite/{token}")
+def account_invite_view(request: Request, token: str, notice: str | None = None) -> object:
+    invite = account_invite_details(token)
+    response = templates.TemplateResponse("account_invite.html", {"request": request, "notice": notice, "invite": invite})
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+def account_invite_error(request: Request, invite: object, notice: str) -> object:
+    response = templates.TemplateResponse(
+        "account_invite.html",
+        {"request": request, "notice": notice, "invite": invite},
+        status_code=400,
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@app.post("/account/invite/{token}")
+async def account_invite_activate(request: Request, token: str) -> object:
+    form = await request.form()
+    invite = account_invite_details(token)
+    if not invite or not invite.get("available"):
+        return account_invite_error(request, invite, "This Re-Deputy invitation is invalid, expired, or already used.")
+    pin = str(form.get("pin") or "")
+    if error := re_deputy_pin_error(pin):
+        return account_invite_error(request, invite, error)
+    if pin != str(form.get("pin_confirm") or ""):
+        return account_invite_error(request, invite, "PIN entries did not match.")
+    deputy_email = str(form.get("deputy_email") or "").strip().lower()
+    deputy_password = str(form.get("deputy_password") or "").strip()
+    if bool(deputy_email) != bool(deputy_password):
+        return account_invite_error(request, invite, "Enter both Deputy email and password, or leave both blank.")
+    settings = get_settings()
+    deputy_web_url = settings.deputy_web_url
+    if deputy_email:
+        error = validate_deputy_credentials(deputy_email=deputy_email, deputy_password=deputy_password, deputy_web_url=deputy_web_url)
+        if error:
+            return account_invite_error(request, invite, error)
+        deputy_web_url = normalize_deputy_web_url(deputy_web_url)
+    display_name = str(form.get("display_name") or invite.get("display_name") or "").strip()
+    try:
+        user = activate_account_invite(
+            token,
+            pin,
+            display_name,
+            deputy_web_url=deputy_web_url if deputy_email else "",
+            encrypted_email=encrypt_text(deputy_email, settings) if deputy_email else "",
+            encrypted_password=encrypt_text(deputy_password, settings) if deputy_email else "",
+        )
+    except ValueError as exc:
+        return account_invite_error(request, account_invite_details(token), str(exc))
+    response = RedirectResponse(url="/month", status_code=303)
+    set_trusted_device_cookie(response, user, request)
+    return response
+
+
 @app.get("/contractor")
 def contractor_home(request: Request, notice: str | None = None) -> object:
     user = current_user(request)
@@ -5468,8 +5535,8 @@ async def signup_submit(request: Request, background_tasks: BackgroundTasks) -> 
         return RedirectResponse(url=notice_url("/signup", "Enter your Deputy email address."), status_code=303)
     if not deputy_password:
         return RedirectResponse(url=notice_url("/signup", "Enter your Deputy password."), status_code=303)
-    if len(pin) < 4 or not pin.isdigit():
-        return RedirectResponse(url=notice_url("/signup", "Choose a numeric PIN with at least 4 digits."), status_code=303)
+    if error := re_deputy_pin_error(pin):
+        return RedirectResponse(url=notice_url("/signup", error), status_code=303)
     if pin != pin_confirm:
         return RedirectResponse(url=notice_url("/signup", "PIN entries did not match."), status_code=303)
     try:
@@ -5477,7 +5544,7 @@ async def signup_submit(request: Request, background_tasks: BackgroundTasks) -> 
     except ValueError as exc:
         return RedirectResponse(url=notice_url("/signup", str(exc)), status_code=303)
     if get_app_user_by_email(deputy_email) is not None:
-        return RedirectResponse(url=notice_url("/login", "That Deputy email is already signed up."), status_code=303)
+        return RedirectResponse(url=notice_url("/login", "That email is already signed up."), status_code=303)
 
     user = create_app_user(
         deputy_email=deputy_email,
@@ -5817,6 +5884,7 @@ def admin_page_context(
     backfill_end: str = "",
     identity_reconciliation_report: dict[str, object] | None = None,
     identity_link_review: dict[str, object] | None = None,
+    new_account_invite_url: str = "",
 ) -> dict[str, object]:
     settings = get_settings()
     today = datetime.now(settings.timezone).date()
@@ -5937,6 +6005,8 @@ def admin_page_context(
         "integrity": get_roster_integrity_diagnostics(),
         "notification_summary": notification_admin_summary(),
         "contractors": contractor_admin_rows(),
+        "account_invitations": account_invite_admin_rows(),
+        "new_account_invite_url": new_account_invite_url,
         "deputy_api_config": load_deputy_api_config(),
         "deputy_api_connection": connection_status(int(user["id"])),
         "deputy_write_audit": write_audit_summary(),
@@ -5993,6 +6063,34 @@ async def admin_create_contractor_invite(request: Request) -> RedirectResponse:
         return RedirectResponse(url=notice_url("/admin", str(exc)), status_code=303)
     origin = str(request.base_url).rstrip("/")
     return RedirectResponse(url=notice_url("/admin", f"Invite (copy now): {origin}/contractor/invite/{invite['token']}"), status_code=303)
+
+
+@app.post("/admin/account-invitations")
+async def admin_create_account_invitation(request: Request) -> RedirectResponse:
+    actor = require_admin_user(request)
+    require_same_origin(request)
+    form = await request.form()
+    email = str(form.get("account_email") or "").strip().lower()
+    display_name = str(form.get("display_name") or "").strip() or infer_display_name_from_email(email)
+    try:
+        invite = create_account_invite(email, display_name, int(actor["id"]))
+    except ValueError as exc:
+        return RedirectResponse(url=notice_url("/admin", str(exc)), status_code=303)
+    origin = str(request.base_url).rstrip("/")
+    response = templates.TemplateResponse(
+        "admin.html",
+        admin_page_context(request, actor, notice="Invitation created. Copy this activation link now.", new_account_invite_url=f"{origin}/account/invite/{invite['token']}"),
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@app.post("/admin/account-invitations/{invite_id}/revoke")
+def admin_revoke_account_invitation(request: Request, invite_id: int) -> RedirectResponse:
+    require_admin_user(request)
+    require_same_origin(request)
+    revoke_account_invite(invite_id)
+    return RedirectResponse(url=notice_url("/admin", "Re-Deputy account invitation revoked."), status_code=303)
 
 
 @app.post("/admin/contractors/invites/{invite_id}/revoke")
@@ -6064,8 +6162,8 @@ async def admin_reset_pin(request: Request, user_id: int) -> RedirectResponse:
     form = await request.form()
     pin = str(form.get("pin") or "")
     pin_confirm = str(form.get("pin_confirm") or "")
-    if len(pin) < 4 or not pin.isdigit():
-        return RedirectResponse(url=notice_url("/admin", "PIN must be at least 4 digits."), status_code=303)
+    if error := re_deputy_pin_error(pin):
+        return RedirectResponse(url=notice_url("/admin", error), status_code=303)
     if pin != pin_confirm:
         return RedirectResponse(url=notice_url("/admin", "PIN entries did not match."), status_code=303)
     updated = update_user_pin_hash(user_id, hash_pin(pin))
@@ -6082,7 +6180,7 @@ async def admin_update_user_deputy_login(request: Request, user_id: int) -> Redi
         stored_user = get_app_user(user_id) or get_app_user_by_email(str(form.get("deputy_email") or ""))
         deputy_email, deputy_password, deputy_web_url = credential_form_values(
             form,
-            str(row_value(stored_user, "deputy_web_url") or settings.deputy_web_url),
+            resolve_deputy_web_url(str(row_value(stored_user, "deputy_web_url") or ""), settings.deputy_web_url),
         )
         encrypted_password, password_changed = encrypted_deputy_password_for_update(
             user_id=user_id,
@@ -6097,9 +6195,6 @@ async def admin_update_user_deputy_login(request: Request, user_id: int) -> Redi
         if error:
             return RedirectResponse(url=notice_url("/admin", error), status_code=303)
         deputy_web_url = normalize_deputy_web_url(deputy_web_url)
-        existing = get_app_user_by_email(deputy_email)
-        if existing and int(existing["id"]) != user_id:
-            return RedirectResponse(url=notice_url("/admin", "That Deputy email belongs to another roster user."), status_code=303)
         updated = update_deputy_user_credentials(
             user_id=user_id,
             deputy_email=deputy_email,
@@ -6115,6 +6210,22 @@ async def admin_update_user_deputy_login(request: Request, user_id: int) -> Redi
         return RedirectResponse(url=notice_url("/admin", message), status_code=303)
     except Exception as exc:
         return credential_save_failed_response("/admin", user_id, exc)
+
+
+@app.get("/admin/users/{user_id}/deputy-credential-email")
+def admin_user_deputy_credential_email(request: Request, user_id: int) -> JSONResponse:
+    require_admin_user(request)
+    if get_app_user(user_id) is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    try:
+        response = JSONResponse({"deputy_email": deputy_email_for_user(user_id)})
+    except Exception:
+        response = JSONResponse(
+            {"deputy_email": "", "message": "Saved Deputy email could not be read."},
+            status_code=409,
+        )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @app.post("/admin/users/{user_id}/deactivate")
@@ -7828,9 +7939,10 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "account_has_deputy_credentials": bool(
                 account_secret and account_secret["encrypted_email"] and account_secret["encrypted_password"]
             ),
+            "account_deputy_email": deputy_email_for_user(owner_user_id) if owner_user_id is not None else "",
             "header_mode": "settings",
             "settings": settings,
-            "can_sync": settings.deputy_login_configured or user_can_sync,
+            "can_sync": user_can_sync,
             "trusted_device_days": settings.trusted_device_days,
             "calendar_url_configured": user_calendar_url_configured or (owner_user_id is None and legacy_calendar_url_configured),
             "calendar_url_source": calendar_url_source,
@@ -8299,8 +8411,8 @@ async def change_own_pin(request: Request) -> RedirectResponse:
     current_pin = str(form.get("current_pin") or "")
     new_pin = str(form.get("pin") or "")
     pin_confirm = str(form.get("pin_confirm") or "")
-    if len(new_pin) < 4 or not new_pin.isdigit():
-        return RedirectResponse(url=notice_url("/settings", "New PIN must be at least 4 digits."), status_code=303)
+    if error := re_deputy_pin_error(new_pin):
+        return RedirectResponse(url=notice_url("/settings", error), status_code=303)
     if new_pin != pin_confirm:
         return RedirectResponse(url=notice_url("/settings", "PIN entries did not match."), status_code=303)
     stored_user = get_app_user(int(user["id"]))
@@ -8322,7 +8434,7 @@ async def update_own_deputy_login(request: Request) -> RedirectResponse:
         form = await request.form()
         deputy_email, deputy_password, deputy_web_url = credential_form_values(
             form,
-            str(row_value(stored_user, "deputy_web_url") or settings.deputy_web_url),
+            resolve_deputy_web_url(str(row_value(stored_user, "deputy_web_url") or ""), settings.deputy_web_url),
         )
         encrypted_password, password_changed = encrypted_deputy_password_for_update(
             user_id=user_id,
@@ -8337,9 +8449,6 @@ async def update_own_deputy_login(request: Request) -> RedirectResponse:
         if error:
             return RedirectResponse(url=notice_url("/settings", error), status_code=303)
         deputy_web_url = normalize_deputy_web_url(deputy_web_url)
-        existing = get_app_user_by_email(deputy_email)
-        if existing and int(existing["id"]) != user_id:
-            return RedirectResponse(url=notice_url("/settings", "That Deputy email belongs to another roster user."), status_code=303)
         updated = update_deputy_user_credentials(
             user_id=user_id,
             deputy_email=deputy_email,
@@ -8449,6 +8558,11 @@ def sync_now(request: Request, background_tasks: BackgroundTasks, next: str | No
     require_same_origin(request)
     user = current_user(request)
     user_id = int(user["id"]) if user and user.get("id") is not None else None
+    if user_id is None or not user_has_deputy_credentials(user_id):
+        wants_json = request.headers.get("x-requested-with") == "fetch" or "application/json" in request.headers.get("accept", "")
+        if wants_json:
+            return JSONResponse({"started": False, "running": False, "label": "Deputy roster not connected", "message": "Add Deputy login details in Settings."}, status_code=409)
+        return RedirectResponse(url=notice_url("/settings", "Deputy roster not connected. Add Deputy login details first."), status_code=303)
     started = queue_manual_sync(background_tasks, user_id=user_id)
     status = get_manual_sync_status(user_id)
     wants_json = request.headers.get("x-requested-with") == "fetch" or "application/json" in request.headers.get("accept", "")
