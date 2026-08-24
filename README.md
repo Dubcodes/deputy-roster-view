@@ -32,6 +32,7 @@ Unknown or ambiguous results are never blindly retried. Externally created match
 
    ```env
    TRUSTED_DEVICE_DAYS=730
+   TRUSTED_DEVICE_LIMIT=10
    SIGNUP_ENABLED=false
    COOKIE_SECURE=false
    TRUSTED_PROXY_SOURCES=deputy-roster-tunnel
@@ -84,7 +85,7 @@ If you changed `APP_PORT`, use that port instead.
 
 ## Portainer
 
-Use the Git-backed stack definition at `production/docker-compose.portainer.yml` and an immutable release Reference such as `v0.5.1`. It intentionally publishes no host application port, binds `/data/compose/22/data:/app/data`, and exposes port 8000 only on `deputy-roster-multi_default` for the separately running Cloudflare tunnel. Preserve every existing secret value, especially `APP_SECRET_KEY`; no secret belongs in Git.
+Use the Git-backed stack definition at `production/docker-compose.portainer.yml` and an immutable release Reference such as `v0.5.2`. It intentionally publishes no host application port, binds `/data/compose/22/data:/app/data`, and exposes port 8000 only on `deputy-roster-multi_default` for the separately running Cloudflare tunnel. Preserve every existing secret value, especially `APP_SECRET_KEY`; no secret belongs in Git.
 
 This production definition deliberately defaults `SIGNUP_ENABLED=true` and `COOKIE_SECURE=true` for the current HTTPS-only installation. Change policy only through an explicit reviewed operator decision.
 
@@ -144,6 +145,8 @@ The app redacts calendar details by design and does not display the configured c
 ## Trusted Devices
 
 `TRUSTED_DEVICE_DAYS` controls how long a device/browser is trusted after activity. The default is `730`.
+
+`TRUSTED_DEVICE_LIMIT` controls the maximum active trusted devices per account. It accepts 1 through 100 and defaults safely to `10` when missing, blank, invalid, or outside that range. Signing in always succeeds when authentication is valid; the least recently used active device above the limit is revoked.
 
 The app refreshes the trusted-device expiry on each authenticated request, so the timer effectively resets while the user keeps using the app. Admin revocation, logout, clearing browser cookies, changing the app secret, or browser cookie limits can still require login again.
 

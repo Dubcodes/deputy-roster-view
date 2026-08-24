@@ -516,3 +516,22 @@ Final status: PARTIAL — current tenant default fixed; operational fallback mig
 The Playwright 320px/375px check is explicitly classified and documented as a local browser gate.
 
 Final status: FIXED in `2026.08.13.5`.
+
+---
+
+## 0.5.2 trusted-device and contractor atomicity patch
+
+Starting release: immutable `v0.5.1` at `a6d24758ff0a2a63ee7ce6134c4e690677a60cab`.
+
+This narrow patch replaces the hard-coded trusted-device cap with bounded `TRUSTED_DEVICE_LIMIT` configuration and makes new-contractor identity plus initial-invitation creation one SQLite transaction. Deterministic failure coverage uses a disposable-database trigger to fail invitation insertion after the person insert and proves that neither row remains. Replacement invitation and activation behavior remain covered.
+
+Validation evidence:
+
+* Focused 0.5.2 trusted-device/contractor smoke: PASS.
+* Existing authentication, onboarding, and release-integration smokes: PASS.
+* Canonical deterministic offline release gate, including migration rehearsal twice, SQLite integrity, zero foreign-key violations, and effective Deputy write mode `off`: PASS.
+* Local responsive release gate at 375px and 320px: PASS.
+* Python compilation, service-worker JavaScript syntax, production Compose render, and `git diff --check`: PASS.
+* Rendered production Compose retains no host application port, `/data/compose/22/data:/app/data`, `SIGNUP_ENABLED=true`, `COOKIE_SECURE=true`, and `deputy-roster-multi_default` while adding `TRUSTED_DEVICE_LIMIT=10`.
+
+No production deployment, Portainer interaction, live Deputy access, or Deputy write occurred during this patch.

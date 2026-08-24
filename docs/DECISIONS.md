@@ -235,6 +235,11 @@ This remains the governing boundary. Build 2026.08.13.1 implements only the cont
 - User-facing crew history suppresses initial placeholder population while retaining raw audit evidence, and collapses connected moves to one semantic line.
 - Operator releases are selected by immutable Git tags. `v0.5.1` selects code; a display/environment label does not.
 
+# 0.5.2 trusted-device and contractor decisions
+
+- The active trusted-device cap is deployment configuration, bounded to 1–100 with a fail-safe default of 10. Login remains successful and enforcement revokes only the account's least-recently-used valid devices above the cap.
+- New contractor identity creation and initial invitation insertion share one SQLite transaction. Replacement invitations reuse the same connection-scoped validation and insertion path so a failure cannot strand a synthetic contractor identity or commit an invite revocation by itself.
+
 # 2026.08.13.3 release-gate decisions
 
 - Re-Deputy uses Deputy's general/multi-install OAuth flow. Ordinary users do not type a token recipient; initial authorization and code exchange are pinned to `once.deputy.com`, and the returned regional Deputy endpoint becomes the exact tenant binding.

@@ -19,6 +19,7 @@ class Settings:
     deputy_display_name: str
     app_secret_key: str
     trusted_device_days: int
+    trusted_device_limit: int
     signup_enabled: bool
     cookie_secure: bool
     trusted_proxy_sources: tuple[str, ...]
@@ -70,6 +71,11 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    value = _int_env(name, default)
+    return value if minimum <= value <= maximum else default
+
+
 def _bool_env(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None or value == "":
@@ -91,6 +97,7 @@ def get_settings() -> Settings:
         deputy_display_name=os.getenv("DEPUTY_DISPLAY_NAME", "").strip(),
         app_secret_key=os.getenv("APP_SECRET_KEY", ""),
         trusted_device_days=_int_env("TRUSTED_DEVICE_DAYS", 730),
+        trusted_device_limit=_bounded_int_env("TRUSTED_DEVICE_LIMIT", 10, 1, 100),
         signup_enabled=_bool_env("SIGNUP_ENABLED", False),
         cookie_secure=_bool_env("COOKIE_SECURE", False),
         trusted_proxy_sources=tuple(

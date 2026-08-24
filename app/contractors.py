@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import sqlite3
 from datetime import datetime, timedelta
 
 from .database import get_connection
@@ -31,26 +32,35 @@ def create_contractor_invite(name: str, company: str, created_by: int, days: int
             (display_name, organisation, now, now),
         )
         person_id = int(cursor.lastrowid)
-    return create_invite(person_id, created_by, days)
+        return _create_invite_conn(conn, person_id, created_by, days)
 
 
 def create_invite(person_id: int, created_by: int, days: int = 7) -> dict[str, object]:
+    with get_connection() as conn:
+        return _create_invite_conn(conn, person_id, created_by, days)
+
+
+def _create_invite_conn(
+    conn: sqlite3.Connection,
+    person_id: int,
+    created_by: int,
+    days: int = 7,
+) -> dict[str, object]:
     token = secrets.token_urlsafe(40)
     now = _now()
     expires = now + timedelta(days=max(1, min(days, 30)))
-    with get_connection() as conn:
-        person = conn.execute("SELECT id,canonical_display_name,app_user_id,person_type FROM crew_people WHERE id=? AND is_active=1 AND merged_into_person_id IS NULL", (person_id,)).fetchone()
-        if person is None:
-            raise ValueError("Select an active canonical crew person.")
-        if str(person["person_type"] or "employee") != "contractor":
-            raise ValueError("Replacement invitations are available only for contractor identities.")
-        if person["app_user_id"]:
-            existing = conn.execute("SELECT account_type FROM app_users WHERE id=?", (person["app_user_id"],)).fetchone()
-            if existing is None or str(existing["account_type"] or "user") != "contractor":
-                raise ValueError("That crew person already has an ordinary app account.")
-        conn.execute("UPDATE contractor_invites SET revoked_at=? WHERE crew_person_id=? AND revoked_at IS NULL", (now.isoformat(timespec="seconds"), person_id))
-        cursor = conn.execute("INSERT INTO contractor_invites(token_hash,crew_person_id,created_by_user_id,created_at,expires_at) VALUES(?,?,?,?,?)",
-                              (_token_hash(token), person_id, created_by, now.isoformat(timespec="seconds"), expires.isoformat(timespec="seconds")))
+    person = conn.execute("SELECT id,canonical_display_name,app_user_id,person_type FROM crew_people WHERE id=? AND is_active=1 AND merged_into_person_id IS NULL", (person_id,)).fetchone()
+    if person is None:
+        raise ValueError("Select an active canonical crew person.")
+    if str(person["person_type"] or "employee") != "contractor":
+        raise ValueError("Replacement invitations are available only for contractor identities.")
+    if person["app_user_id"]:
+        existing = conn.execute("SELECT account_type FROM app_users WHERE id=?", (person["app_user_id"],)).fetchone()
+        if existing is None or str(existing["account_type"] or "user") != "contractor":
+            raise ValueError("That crew person already has an ordinary app account.")
+    conn.execute("UPDATE contractor_invites SET revoked_at=? WHERE crew_person_id=? AND revoked_at IS NULL", (now.isoformat(timespec="seconds"), person_id))
+    cursor = conn.execute("INSERT INTO contractor_invites(token_hash,crew_person_id,created_by_user_id,created_at,expires_at) VALUES(?,?,?,?,?)",
+                          (_token_hash(token), person_id, created_by, now.isoformat(timespec="seconds"), expires.isoformat(timespec="seconds")))
     return {"id": int(cursor.lastrowid), "token": token, "person_name": str(person["canonical_display_name"]), "expires_at": expires.isoformat(timespec="seconds")}
 
 

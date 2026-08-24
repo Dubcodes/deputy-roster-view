@@ -2665,8 +2665,8 @@ def create_trusted_device(
             """,
             (user_id, token_hash, label, user_agent[:500], now, now, expires_at),
         )
-        # Keep the newly authenticated device, then retain the nine other most
-        # recently active valid devices. Revocation is per-user and idempotent.
+        # Keep the newly authenticated device within the configured total of
+        # most-recently-active valid devices. Revocation is per-user and idempotent.
         _enforce_trusted_device_limit_conn(conn, user_id=user_id, now=now)
         return conn.execute("SELECT * FROM trusted_devices WHERE id = ?", (cursor.lastrowid,)).fetchone()
 
@@ -2677,7 +2677,9 @@ def _enforce_trusted_device_limit_conn(
     user_id: int | None = None,
     now: str | None = None,
 ) -> int:
-    now = now or datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    settings = get_settings()
+    now = now or datetime.now(settings.timezone).isoformat(timespec="seconds")
+    device_limit = settings.trusted_device_limit
     user_rows = (
         [{"id": user_id}]
         if user_id is not None
@@ -2692,9 +2694,9 @@ def _enforce_trusted_device_limit_conn(
                  AND id NOT IN (
                    SELECT id FROM trusted_devices
                    WHERE user_id=? AND revoked_at IS NULL AND expires_at>?
-                   ORDER BY COALESCE(last_seen_at,created_at) DESC,id DESC LIMIT 10
+                   ORDER BY COALESCE(last_seen_at,created_at) DESC,id DESC LIMIT ?
                  )""",
-            (now, target_user_id, now, target_user_id, now),
+            (now, target_user_id, now, target_user_id, now, device_limit),
         )
         revoked += int(result.rowcount or 0)
     return revoked

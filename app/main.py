@@ -278,7 +278,7 @@ from .deputy_integration import (
 
 
 APP_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.5.2"
 APP_BUILD = (os.getenv("GIT_SHA", "").strip()[:12] or APP_VERSION)
 MARK_FIELDS = (
     ("checked", "Checked"),
@@ -5530,6 +5530,7 @@ def help_view(request: Request, notice: str | None = None) -> object:
             "current_user": current_user(request),
             "header_mode": "settings",
             "admin_contacts": admin_contact_rows(),
+            "trusted_device_limit": get_settings().trusted_device_limit,
         },
     )
 

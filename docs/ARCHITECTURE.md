@@ -6,6 +6,8 @@
 
 `account_invitations` is separate from contractor invitations. It stores only a strong token hash, expires, revokes, and consumes invitations once. Activation creates an ordinary `account_type='user'` account without manufacturing a crew identity; Deputy credentials may be added during activation or later through the normal credential path. Normal UI uses the installation `DEPUTY_WEB_URL`, retaining a valid stored per-user URL as the first compatibility choice.
 
+`TRUSTED_DEVICE_LIMIT` is the single device-cap policy for login-time enforcement and idempotent startup cleanup. It accepts 1 through 100, defaults safely to 10, and retains each account's most-recently-active valid devices without crossing user boundaries.
+
 ## Stack
 
 - FastAPI app in `app/main.py`
@@ -259,7 +261,7 @@ The manual workday builder keeps its existing draft/version/publication boundary
 
 The trial sync is deliberately separate from normal Re-Deputy publishing. It previews CREATE/UPDATE/UNCHANGED/LOCAL ONLY, requires an explicit monitored confirmation including the tenant, writes via v2 single-shift endpoints, and publishes verified IDs with legacy mode 4. Existing external/observed rosters are not adopted automatically. Deputy Open, confirmation mode 5, claims/offers, and Timesheets have no write path.
 
-`app/contractors.py` manages seven-day hash-only invites, one-time activation, PIN hashing, canonical-person linkage, restricted re-login, revocation, and 180-day inactivity deactivation. Middleware and route checks constrain contractor sessions to My work, logout, and their own assigned-day personal time/self-travel operations.
+`app/contractors.py` manages seven-day hash-only invites, one-time activation, PIN hashing, canonical-person linkage, restricted re-login, revocation, and 180-day inactivity deactivation. A new contractor identity and its initial invitation are inserted through one connection-scoped transaction; replacement invitations reuse the same validated insertion helper. Middleware and route checks constrain contractor sessions to My work, logout, and their own assigned-day personal time/self-travel operations.
 
 The authoritative experimental evidence is retained in `DEPUTY_API_LAB_REPORT.md` and `DEPUTY_API_LAB_ROUND2.md`.
 # Deputy protocol release gate (2026.08.13.3)
