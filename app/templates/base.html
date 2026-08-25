@@ -84,10 +84,11 @@
         <p class="sync-notice sync-notice-{{ current_user.sync_notice_kind or 'stale' }}">{{ current_user.sync_notice_text or 'Deputy roster status unavailable' }}</p>
       {% endif %}
       {% if notice %}
-        <div class="notice">{{ notice }}</div>
+        <div class="notice" data-one-shot-notice>{{ notice }}</div>
       {% endif %}
       {% block content %}{% endblock %}
     </main>
     {% block scripts %}{% endblock %}
+    {% if notice %}<script src="/static/one-shot-notice.js?v={{ app_build }}"></script>{% endif %}
   </body>
 </html>

@@ -278,7 +278,7 @@ from .deputy_integration import (
 
 
 APP_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.5.2"
+APP_VERSION = "0.5.3"
 APP_BUILD = (os.getenv("GIT_SHA", "").strip()[:12] or APP_VERSION)
 MARK_FIELDS = (
     ("checked", "Checked"),
@@ -6316,11 +6316,10 @@ def admin_purge_user(request: Request, user_id: int) -> RedirectResponse:
     if int(admin["id"]) == user_id:
         return RedirectResponse(url=notice_url("/admin", "You cannot purge your own admin account."), status_code=303)
     result = purge_app_user(user_id)
-    message = (
-        f"Purged inactive user data: {result['shifts']} shifts, {result['devices']} devices."
-        if result.get("users")
-        else "Only inactive users can be purged."
-    )
+    if result.get("status") == "purged":
+        message = f"Purged inactive user data: {result['shifts']} shifts, {result['devices']} devices."
+    else:
+        message = str(result.get("reason") or "User could not be purged.")
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
@@ -6328,8 +6327,9 @@ def admin_purge_user(request: Request, user_id: int) -> RedirectResponse:
 def admin_cleanup_old_records(request: Request) -> RedirectResponse:
     require_admin_user(request)
     result = purge_old_inactive_records(days=30)
+    blocked = f" {result['blocked']} inactive users were retained because of audit history." if result.get("blocked") else ""
     return RedirectResponse(
-        url=notice_url("/admin", f"Cleanup complete: purged {result['users']} inactive users and {result['devices']} old revoked devices."),
+        url=notice_url("/admin", f"Cleanup complete: purged {result['users']} inactive users and {result['devices']} old revoked devices.{blocked}"),
         status_code=303,
     )
 

@@ -15,6 +15,7 @@ OFFLINE_SMOKES = (
     "smoke_closure_20260820_2.py",
     "smoke_auth_basics.py",
     "smoke_patch_052.py",
+    "smoke_patch_053.py",
     "smoke_release_integration.py",
     "smoke_deployment_continuity.py",
     "smoke_admin_overrides.py",
@@ -56,7 +57,9 @@ def main() -> int:
     })
     run("Python compilation", [sys.executable, "-m", "compileall", "-q", "app", "scripts"], env)
     run("service worker syntax", ["node", "--check", "app/static/service-worker.js"], env)
+    run("one-shot notice syntax", ["node", "--check", "app/static/one-shot-notice.js"], env)
     run("service worker navigation smoke", ["node", "scripts/smoke_service_worker.js"], env)
+    run("one-shot notice cleanup smoke", ["node", "scripts/smoke_notice_cleanup.js"], env)
     for script in OFFLINE_SMOKES:
         run(script, [sys.executable, str(Path("scripts") / script)], env)
     with tempfile.TemporaryDirectory(prefix="redeputy-release-migration-") as directory:

@@ -240,6 +240,11 @@ This remains the governing boundary. Build 2026.08.13.1 implements only the cont
 - The active trusted-device cap is deployment configuration, bounded to 1–100 with a fail-safe default of 10. Login remains successful and enforcement revokes only the account's least-recently-used valid devices above the cap.
 - New contractor identity creation and initial invitation insertion share one SQLite transaction. Replacement invitations reuse the same connection-scoped validation and insertion path so a failure cannot strand a synthetic contractor identity or commit an invite revocation by itself.
 
+# 0.5.3 purge and notice decisions
+
+- Inactive-user purge is transactional and schema-driven. Self-related activation/role rows may be removed, nullable evidence remains detached, and audit history for actions on other persistent records blocks purge rather than being destroyed or broadly migrated.
+- Browser-visible redirect notices remain query-based for simple server actions, but the shared base template removes only `notice` with `history.replaceState` immediately after first render. Other query parameters and the hash remain intact.
+
 # 2026.08.13.3 release-gate decisions
 
 - Re-Deputy uses Deputy's general/multi-install OAuth flow. Ordinary users do not type a token recipient; initial authorization and code exchange are pinned to `once.deputy.com`, and the returned regional Deputy endpoint becomes the exact tenant binding.

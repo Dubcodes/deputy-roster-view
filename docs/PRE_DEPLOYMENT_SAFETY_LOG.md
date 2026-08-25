@@ -535,3 +535,29 @@ Validation evidence:
 * Rendered production Compose retains no host application port, `/data/compose/22/data:/app/data`, `SIGNUP_ENABLED=true`, `COOKIE_SECURE=true`, and `deputy-roster-multi_default` while adding `TRUSTED_DEVICE_LIMIT=10`.
 
 No production deployment, Portainer interaction, live Deputy access, or Deputy write occurred during this patch.
+
+---
+
+## 0.5.3 safe user-purge and one-shot notices patch
+
+Starting release: immutable `v0.5.2` at `a605455384dda048a555a8d9858589a5f888677c`.
+
+The invited → activated → promoted Admin → demoted → deactivated → purged lifecycle was reproduced before editing. The purge failed with `FOREIGN KEY constraint failed` because the activated invitation and target-side role-audit rows still referenced the inactive account. The failed transaction left both references and the account intact, with zero foreign-key violations.
+
+This patch gives user purge an explicit policy for every one of the 51 schema foreign keys to `app_users`: owned account state cascades, shared operational records detach, self-only activation/target history is deleted, and retention-critical authorship or Deputy write/configuration history blocks purge before mutation. Legacy user-like columns without foreign keys are handled explicitly. Purge runs under one immediate SQLite transaction, never disables foreign-key enforcement, and returns safe structured outcomes instead of exposing database errors. See `docs/USER_PURGE_POLICY.md` for the complete table-by-table classification.
+
+Regression evidence:
+
+* Plain inactive accounts and trusted devices purge successfully.
+* The complete invitation, activation, Admin promotion/demotion, deactivation, and purge route lifecycle succeeds.
+* Account-owned synthetic people are removed; Deputy-backed, manual, and contractor identities are preserved and detached according to policy.
+* Active and nonexistent accounts return structured non-destructive outcomes.
+* Retention-critical Deputy write history blocks purge cleanly and preserves the user, device, shift, and audit row.
+* SQLite `integrity_check` returns `ok` and `foreign_key_check` returns no rows after every destructive fixture.
+* Shared notice banners render on the first response, then remove only the `notice` query parameter with `history.replaceState`, preserving other query parameters and the URL fragment without navigation or reload.
+* The existing Admin account/invitation/contractor layout remains covered by regression assertions.
+* Canonical deterministic offline release gate and the 375px/320px responsive browser gate: PASS.
+* Python and JavaScript syntax checks, migration rehearsal twice, production Compose render, and `git diff --check`: PASS.
+* Rendered production Compose remains unchanged: no host application port, `/data/compose/22/data:/app/data`, `SIGNUP_ENABLED=true`, `COOKIE_SECURE=true`, `TRUSTED_DEVICE_LIMIT=10`, and the shared `deputy-roster-multi_default` network.
+
+No production deployment, restart, Portainer interaction, live Deputy access, or Deputy write occurred during this patch. Deputy write mode remains off by default.

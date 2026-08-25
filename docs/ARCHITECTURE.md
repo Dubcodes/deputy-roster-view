@@ -131,6 +131,8 @@ Admins should prefer deactivating a user over hard deletion when someone leaves.
 
 Deactivated accounts and revoked trusted devices are purged after 30 days. Users can deactivate themselves from Settings; admins can deactivate/reactivate users and can manually run the cleanup or purge an already deactivated user. Active users are not purged by this cleanup.
 
+User purge is an immediate all-or-nothing SQLite transaction. Self-owned rows cascade or are explicitly removed, retained evidence detaches nullable actor/source references, and important cross-user/Deputy audit references block purge with a normal Admin notice. The complete foreign-key classification lives in `docs/USER_PURGE_POLICY.md`.
+
 Track travel defaults live in `travel_time_defaults`. Admin-entered defaults are `manual`; learned defaults are inferred from previous saved roster notes that had both base and on-track times. An explicit preceding `Travel then Overnighter` shift can also teach the office-to-track journey for the next day's race location. `Office` and `Clow Place` are stored as one canonical base, while named hotels remain separate bases. Race-day maths uses these only when a note is missing either base or on-track timing.
 
 Directed copies live in `travel_routes`. A race day can therefore use `Beachfront Motel -> Ruakaka` for its morning leg and `Ruakaka -> Office / Clow Place` for its return. Published roster days may save explicit `start_origin` and `finish_destination` values without changing the user's account schema.

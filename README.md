@@ -85,7 +85,7 @@ If you changed `APP_PORT`, use that port instead.
 
 ## Portainer
 
-Use the Git-backed stack definition at `production/docker-compose.portainer.yml` and an immutable release Reference such as `v0.5.2`. It intentionally publishes no host application port, binds `/data/compose/22/data:/app/data`, and exposes port 8000 only on `deputy-roster-multi_default` for the separately running Cloudflare tunnel. Preserve every existing secret value, especially `APP_SECRET_KEY`; no secret belongs in Git.
+Use the Git-backed stack definition at `production/docker-compose.portainer.yml` and an immutable release Reference such as `v0.5.3`. It intentionally publishes no host application port, binds `/data/compose/22/data:/app/data`, and exposes port 8000 only on `deputy-roster-multi_default` for the separately running Cloudflare tunnel. Preserve every existing secret value, especially `APP_SECRET_KEY`; no secret belongs in Git.
 
 This production definition deliberately defaults `SIGNUP_ENABLED=true` and `COOKIE_SECURE=true` for the current HTTPS-only installation. Change policy only through an explicit reviewed operator decision.
 

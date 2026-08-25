@@ -4,7 +4,7 @@ Use this immediately before and after a production redeploy. Do not put secrets 
 
 ## Before
 
-- Confirm the intended immutable Git tag (for this release, `v0.5.2`) and its commit SHA.
+- Confirm the intended immutable Git tag (for this release, `v0.5.3`) and its commit SHA.
 - Stop the existing app and make one timestamped backup of its complete persistent data directory, or use SQLite's online backup API before copying other runtime files.
 - Verify the backup includes the SQLite database, `app_secret.key` when used, `web_push_vapid_private.pem`, `track_maps/`, and every other runtime file in the data directory.
 - **Preserve the existing `APP_SECRET_KEY`.** If the deployment uses `data/app_secret.key`, preserve that file instead. Never generate a replacement for an existing database.
@@ -29,8 +29,8 @@ Use this immediately before and after a production redeploy. Do not put secrets 
 
 ## Release and rollback
 
-Normal release: review code, run `python scripts/release_gate.py`, push the release commit, wait for exact-SHA CI success, and create immutable tag `v0.5.2`. In Portainer set the Git Reference to `v0.5.2`, then Pull and redeploy and smoke HTTPS, version, and database integrity.
+Normal release: review code, run `python scripts/release_gate.py`, push the release commit, wait for exact-SHA CI success, and create immutable tag `v0.5.3`. In Portainer set the Git Reference to `v0.5.3`, then Pull and redeploy and smoke HTTPS, version, and database integrity.
 
-Rollback: choose a previous approved immutable tag such as `v0.5.1`, change the Portainer Git Reference, Pull and redeploy, then verify HTTPS and the database. Restore the timestamped persistent-data backup only when a database migration rollback actually requires it; changing code cannot reverse migrated data.
+Rollback: choose a previous approved immutable tag such as `v0.5.2`, change the Portainer Git Reference, Pull and redeploy, then verify HTTPS and the database. Restore the timestamped persistent-data backup only when a database migration rollback actually requires it; changing code cannot reverse migrated data.
 
 Changing an environment/display version label alone never changes application code. The Git tag/reference selects the code.

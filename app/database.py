@@ -3004,64 +3004,129 @@ def set_app_user_active(user_id: int, is_active: bool) -> int:
     return result.rowcount
 
 
-def purge_app_user(user_id: int) -> dict[str, int]:
-    with get_connection() as conn:
-        user = conn.execute(
-            "SELECT * FROM app_users WHERE id = ?",
-            (user_id,),
-        ).fetchone()
-        if user is None:
-            return {"users": 0, "devices": 0, "shifts": 0, "marks": 0, "changes": 0}
-        if int(user["is_active"] or 0):
-            return {"users": 0, "devices": 0, "shifts": 0, "marks": 0, "changes": 0}
-
-        deleted_marks = conn.execute(
-            "DELETE FROM shift_marks WHERE shift_id IN (SELECT id FROM shifts WHERE owner_user_id = ?)",
-            (user_id,),
-        ).rowcount
-        deleted_changes = conn.execute(
-            "DELETE FROM shift_changes WHERE shift_id IN (SELECT id FROM shifts WHERE owner_user_id = ?)",
-            (user_id,),
-        ).rowcount
-        deleted_shifts = conn.execute(
-            "DELETE FROM shifts WHERE owner_user_id = ?",
-            (user_id,),
-        ).rowcount
-        conn.execute("DELETE FROM deputy_user_secrets WHERE user_id = ?", (user_id,))
-        conn.execute("DELETE FROM user_sync_state WHERE user_id = ?", (user_id,))
-        conn.execute("DELETE FROM user_crew_memberships WHERE user_id = ?", (user_id,))
-        conn.execute("UPDATE error_reports SET user_id = NULL WHERE user_id = ?", (user_id,))
-        conn.execute("UPDATE deputy_web_captures SET owner_user_id = NULL WHERE owner_user_id = ?", (user_id,))
-        conn.execute("UPDATE crew_known_locations SET source_user_id = NULL WHERE source_user_id = ?", (user_id,))
-        conn.execute("UPDATE capture_coverage SET source_user_id = NULL WHERE source_user_id = ?", (user_id,))
-        deleted_devices = conn.execute("DELETE FROM trusted_devices WHERE user_id = ?", (user_id,)).rowcount
-        synthetic_people = conn.execute(
-            """
-            SELECT id FROM crew_people
-            WHERE app_user_id=? AND deputy_employee_id IS NULL
-              AND identity_source='account_synthetic'
-              AND COALESCE(person_type,'employee')='employee'
-              AND NOT EXISTS (SELECT 1 FROM workday_assignments a WHERE a.person_id=crew_people.id)
-              AND NOT EXISTS (SELECT 1 FROM contractor_invites i WHERE i.crew_person_id=crew_people.id)
-            """,
-            (user_id,),
-        ).fetchall()
-        conn.execute("UPDATE crew_people SET app_user_id=NULL WHERE app_user_id=?", (user_id,))
-        deleted_user = conn.execute("DELETE FROM app_users WHERE id = ?", (user_id,)).rowcount
-        for person in synthetic_people:
-            conn.execute("DELETE FROM crew_people WHERE id=? AND deputy_employee_id IS NULL AND app_user_id IS NULL", (int(person["id"]),))
+def _purge_result(status: str, reason: str = "", **counts: int) -> dict[str, object]:
     return {
-        "users": deleted_user,
-        "devices": deleted_devices,
-        "shifts": deleted_shifts,
-        "marks": deleted_marks,
-        "changes": deleted_changes,
+        "status": status,
+        "purged": status == "purged",
+        "reason": reason,
+        "users": int(counts.get("users", 0)),
+        "devices": int(counts.get("devices", 0)),
+        "shifts": int(counts.get("shifts", 0)),
+        "marks": int(counts.get("marks", 0)),
+        "changes": int(counts.get("changes", 0)),
     }
+
+
+def _retained_user_purge_blockers(conn: sqlite3.Connection, user_id: int) -> list[str]:
+    checks = (
+        ("Deputy write audit history", "SELECT 1 FROM deputy_write_operations WHERE app_user_id=? LIMIT 1", (user_id,)),
+        ("Deputy OAuth configuration audit history", "SELECT 1 FROM deputy_oauth_config WHERE updated_by_user_id=? LIMIT 1", (user_id,)),
+        ("Deputy person-mapping audit history", "SELECT 1 FROM deputy_person_mappings WHERE updated_by_user_id=? LIMIT 1", (user_id,)),
+        ("Deputy unit-mapping audit history", "SELECT 1 FROM deputy_unit_mappings WHERE updated_by_user_id=? LIMIT 1", (user_id,)),
+        (
+            "Re-Deputy invitations created for other accounts",
+            """SELECT 1 FROM account_invitations
+               WHERE created_by_user_id=? AND COALESCE(activated_user_id,-1)<>? LIMIT 1""",
+            (user_id, user_id),
+        ),
+        (
+            "contractor invitations created for other accounts",
+            "SELECT 1 FROM contractor_invites WHERE created_by_user_id=? LIMIT 1",
+            (user_id,),
+        ),
+        (
+            "Admin role changes performed on other accounts",
+            "SELECT 1 FROM app_role_audit WHERE actor_user_id=? AND target_user_id<>? LIMIT 1",
+            (user_id, user_id),
+        ),
+    )
+    return [label for label, sql, params in checks if conn.execute(sql, params).fetchone()]
+
+
+def purge_app_user(user_id: int) -> dict[str, object]:
+    try:
+        with get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            user = conn.execute(
+                "SELECT * FROM app_users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            if user is None:
+                return _purge_result("not_found", "User not found.")
+            if int(user["is_active"] or 0):
+                return _purge_result("still_active", "Only inactive users can be purged.")
+
+            blockers = _retained_user_purge_blockers(conn, user_id)
+            if blockers:
+                return _purge_result(
+                    "blocked",
+                    "User cannot be purged because retained audit history references this account: "
+                    + "; ".join(blockers)
+                    + ".",
+                )
+
+            deleted_marks = conn.execute(
+                "DELETE FROM shift_marks WHERE shift_id IN (SELECT id FROM shifts WHERE owner_user_id = ?)",
+                (user_id,),
+            ).rowcount
+            deleted_changes = conn.execute(
+                "DELETE FROM shift_changes WHERE shift_id IN (SELECT id FROM shifts WHERE owner_user_id = ?)",
+                (user_id,),
+            ).rowcount
+            deleted_shifts = conn.execute(
+                "DELETE FROM shifts WHERE owner_user_id = ?",
+                (user_id,),
+            ).rowcount
+            conn.execute("DELETE FROM account_invitations WHERE activated_user_id=?", (user_id,))
+            conn.execute("DELETE FROM app_role_audit WHERE target_user_id=?", (user_id,))
+            conn.execute("UPDATE contractor_invites SET activated_user_id=NULL WHERE activated_user_id=?", (user_id,))
+            conn.execute("DELETE FROM deputy_user_secrets WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM user_sync_state WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM user_crew_memberships WHERE user_id = ?", (user_id,))
+            conn.execute("UPDATE error_reports SET user_id = NULL WHERE user_id = ?", (user_id,))
+            conn.execute("UPDATE deputy_web_captures SET owner_user_id = NULL WHERE owner_user_id = ?", (user_id,))
+            conn.execute("UPDATE crew_known_locations SET source_user_id = NULL WHERE source_user_id = ?", (user_id,))
+            conn.execute("UPDATE capture_coverage SET source_user_id = NULL WHERE source_user_id = ?", (user_id,))
+            conn.execute("UPDATE admin_overrides SET disabled_by_user_id=NULL WHERE disabled_by_user_id=?", (user_id,))
+            conn.execute("UPDATE crew_people SET merged_by_user_id=NULL WHERE merged_by_user_id=?", (user_id,))
+            deleted_devices = conn.execute("DELETE FROM trusted_devices WHERE user_id = ?", (user_id,)).rowcount
+            synthetic_people = conn.execute(
+                """
+                SELECT id FROM crew_people
+                WHERE app_user_id=? AND deputy_employee_id IS NULL
+                  AND identity_source='account_synthetic'
+                  AND COALESCE(person_type,'employee')='employee'
+                  AND NOT EXISTS (SELECT 1 FROM workday_assignments a WHERE a.person_id=crew_people.id)
+                  AND NOT EXISTS (SELECT 1 FROM contractor_invites i WHERE i.crew_person_id=crew_people.id)
+                """,
+                (user_id,),
+            ).fetchall()
+            conn.execute("UPDATE crew_people SET app_user_id=NULL WHERE app_user_id=?", (user_id,))
+            deleted_user = conn.execute("DELETE FROM app_users WHERE id = ?", (user_id,)).rowcount
+            for person in synthetic_people:
+                conn.execute(
+                    "DELETE FROM crew_people WHERE id=? AND deputy_employee_id IS NULL AND app_user_id IS NULL",
+                    (int(person["id"]),),
+                )
+        return _purge_result(
+            "purged",
+            users=deleted_user,
+            devices=deleted_devices,
+            shifts=deleted_shifts,
+            marks=deleted_marks,
+            changes=deleted_changes,
+        )
+    except sqlite3.IntegrityError:
+        return _purge_result(
+            "blocked",
+            "User cannot be purged because retained audit history still references this account.",
+        )
 
 
 def purge_old_inactive_records(days: int = 30) -> dict[str, int]:
     cutoff = (datetime.now(get_settings().timezone) - timedelta(days=max(1, int(days)))).isoformat(timespec="seconds")
     purged_users = 0
+    blocked_users = 0
     with get_connection() as conn:
         revoked_devices = conn.execute(
             """
@@ -3083,7 +3148,8 @@ def purge_old_inactive_records(days: int = 30) -> dict[str, int]:
     for user in inactive_users:
         result = purge_app_user(int(user["id"]))
         purged_users += int(result.get("users", 0))
-    return {"users": purged_users, "devices": revoked_devices}
+        blocked_users += 1 if result.get("status") == "blocked" else 0
+    return {"users": purged_users, "devices": revoked_devices, "blocked": blocked_users}
 
 
 def reset_user_roster_data(user_id: int) -> dict[str, int]:
