@@ -1093,6 +1093,42 @@
   </details>
     </div>
   </details>
+
+  <details class="table-panel safety-recovery-panel" data-admin-disclosure-key="safety-recovery">
+    <summary class="management-panel-summary">
+      <span><strong>Safety &amp; recovery</strong><small>{% if backup_status.enabled %}Automatic {{ backup_status.schedule }} backup{% else %}Automatic backups disabled{% endif %}</small></span>
+      <span>{% if backup_status.latest_success %}Latest backup {{ backup_status.latest_success.completed_at|datetime }}{% else %}No successful backup recorded{% endif %}</span>
+    </summary>
+    <div class="management-panel-body">
+      <dl class="race-day-rows compact-audit-summary">
+        <div><dt>Backups</dt><dd>{% if backup_status.enabled %}Enabled · daily {{ backup_status.schedule }}{% else %}Disabled{% endif %}</dd></div>
+        <div><dt>Retention</dt><dd>{{ backup_status.retention_days }} days · managed backups only</dd></div>
+        <div><dt>Directory</dt><dd>{% if backup_status.directory_exists %}Available{% else %}Created on next successful backup{% endif %}</dd></div>
+        <div><dt>Latest successful</dt><dd>{% if backup_status.latest_success %}{{ backup_status.latest_success.reason }} · {{ backup_status.latest_success.backup_size_bytes }} bytes · {{ backup_status.latest_success.integrity_result|upper }}{% else %}None{% endif %}</dd></div>
+        {% if backup_status.latest_failure %}<div><dt>Latest failed attempt</dt><dd class="warning-text">{{ backup_status.latest_failure.attempted_at|datetime }} · {{ backup_status.latest_failure.failure_reason }}</dd></div>{% endif %}
+      </dl>
+      <form action="/admin/backups/create" method="post" class="settings-action-row"><button class="button" type="submit">Create backup now</button><small class="muted">Private server-side backup only. Recovery is deliberately an offline operator procedure.</small></form>
+    </div>
+  </details>
+
+  <details class="table-panel admin-audit-panel" data-admin-disclosure-key="admin-audit">
+    <summary class="management-panel-summary"><span><strong>Admin audit</strong><small>{{ admin_audit_count }} recorded Admin actions</small></span><span>Recent safe history</span></summary>
+    <div class="management-panel-body">
+      <form method="get" action="/admin" class="compact-audit-filters">
+        <label><span>Category</span><select name="audit_category"><option value="">All</option>{% for value in ['account_access','contractors','crew_identity','workdays','locations_travel','racing_maps','application_config','safety_recovery','admin_operations'] %}<option value="{{ value }}"{% if audit_category == value %} selected{% endif %}>{{ value|replace('_',' ')|title }}</option>{% endfor %}</select></label>
+        <label><span>Result</span><select name="audit_outcome"><option value="">All</option>{% for value in ['completed','rejected','blocked'] %}<option value="{{ value }}"{% if audit_outcome == value %} selected{% endif %}>{{ value|title }}</option>{% endfor %}</select></label>
+        <button class="button button-secondary button-compact" type="submit">Filter</button>
+      </form>
+      {% if admin_audit_rows %}
+      <div class="admin-audit-table" role="table" aria-label="Recent Admin actions">
+        <div class="admin-audit-head" role="row"><span>When</span><span>Admin</span><span>Action</span><span>Target</span><span>Result</span></div>
+        {% for item in admin_audit_rows %}
+        <details class="admin-audit-row" role="row"><summary><span>{{ item.created_at|datetime }}</span><span>{{ item.actor_display_snapshot or 'Former account' }}</span><span>{{ item.action_key|replace('route.','')|replace('.',' ')|title }}</span><span>{{ item.target_label or item.target_type ~ ((' #' ~ item.target_id) if item.target_id else '') }}</span><span>{{ item.outcome|title }}</span></summary><div class="admin-audit-detail"><dl><div><dt>Before</dt><dd><code>{{ item.before_json }}</code></dd></div><div><dt>After</dt><dd><code>{{ item.after_json }}</code></dd></div>{% if item.related_audit_type %}<div><dt>Specialist history</dt><dd>{{ item.related_audit_type }} {{ item.related_audit_id }}</dd></div>{% endif %}{% if item.safe_note %}<div><dt>Note</dt><dd>{{ item.safe_note }}</dd></div>{% endif %}</dl></div></details>
+        {% endfor %}
+      </div>
+      {% else %}<p class="muted">No Admin audit entries match this filter yet.</p>{% endif %}
+    </div>
+  </details>
 {% endblock %}
 
 {% block scripts %}

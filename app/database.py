@@ -1214,6 +1214,44 @@ def init_db(settings: Settings | None = None) -> None:
                 FOREIGN KEY (canonical_person_id) REFERENCES crew_people(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS backup_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                attempted_at TEXT NOT NULL,
+                completed_at TEXT,
+                reason TEXT NOT NULL,
+                requested_by_user_id INTEGER,
+                backup_id TEXT,
+                status TEXT NOT NULL,
+                backup_path TEXT,
+                backup_size_bytes INTEGER,
+                backup_sha256 TEXT,
+                integrity_result TEXT,
+                foreign_key_check_count INTEGER,
+                failure_reason TEXT,
+                FOREIGN KEY (requested_by_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_action_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                actor_user_id INTEGER,
+                actor_display_snapshot TEXT NOT NULL DEFAULT '',
+                actor_account_snapshot TEXT NOT NULL DEFAULT '',
+                action_key TEXT NOT NULL,
+                action_category TEXT NOT NULL,
+                target_type TEXT NOT NULL DEFAULT '',
+                target_id TEXT NOT NULL DEFAULT '',
+                target_label TEXT NOT NULL DEFAULT '',
+                outcome TEXT NOT NULL,
+                before_json TEXT NOT NULL DEFAULT '{}',
+                after_json TEXT NOT NULL DEFAULT '{}',
+                related_audit_type TEXT NOT NULL DEFAULT '',
+                related_audit_id TEXT NOT NULL DEFAULT '',
+                request_path TEXT NOT NULL DEFAULT '',
+                safe_note TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (actor_user_id) REFERENCES app_users(id) ON DELETE SET NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_shifts_date ON shifts(date);
             CREATE INDEX IF NOT EXISTS idx_shifts_start_at ON shifts(start_at);
             CREATE INDEX IF NOT EXISTS idx_shifts_changed ON shifts(changed_since_viewed);
@@ -1258,6 +1296,9 @@ def init_db(settings: Settings | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_notification_events_due ON notification_events(status, scheduled_at);
             CREATE INDEX IF NOT EXISTS idx_notification_events_user_type ON notification_events(app_user_id, event_type, event_date);
             CREATE INDEX IF NOT EXISTS idx_identity_deputy_employee ON app_user_deputy_identity(deputy_employee_id);
+            CREATE INDEX IF NOT EXISTS idx_backup_runs_completed ON backup_runs(status, completed_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_admin_action_audit_recent ON admin_action_audit(created_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_admin_action_audit_actor ON admin_action_audit(actor_user_id, created_at DESC);
             """
         )
         _ensure_default_crew_pool(conn)
@@ -2296,6 +2337,12 @@ def get_app_user(user_id: int) -> sqlite3.Row | None:
             "SELECT * FROM app_users WHERE id = ? AND is_active = 1",
             (user_id,),
         ).fetchone()
+
+
+def get_app_user_any_status(user_id: int) -> sqlite3.Row | None:
+    """Return an account for retention/safety operations, including inactive users."""
+    with get_connection() as conn:
+        return conn.execute("SELECT * FROM app_users WHERE id = ?", (user_id,)).fetchone()
 
 
 def get_app_user_by_email(email: str) -> sqlite3.Row | None:

@@ -36,6 +36,7 @@ def main() -> None:
     from playwright.sync_api import sync_playwright
 
     from app.account_invitations import create_account_invite
+    from app.admin_audit import record_admin_action
     from app.database import (
         create_admin_override,
         create_app_user,
@@ -58,6 +59,11 @@ def main() -> None:
         encrypted_password="",
     )
     admin_id = int(admin["id"])
+    record_admin_action(
+        actor={"id": admin_id, "display_name": "Responsive Admin", "deputy_email": "responsive-admin@example.invalid"},
+        action_key="fixture.audit", action_category="safety_recovery", target_type="backup", target_id="fixture",
+        before={"status": "none"}, after={"status": "ok"}, request_path="/admin/backups/create",
+    )
     session_token = "responsive-054-admin-device"
     expires = (datetime.now().astimezone() + timedelta(days=30)).isoformat(timespec="seconds")
     create_trusted_device(
@@ -168,6 +174,15 @@ def main() -> None:
             locations = page.locator('[data-admin-disclosure-key="locations"]')
             overrides = page.locator('[data-admin-disclosure-key="manual-overrides"]')
             assert not accounts.get_attribute("open") and not locations.get_attribute("open") and not overrides.get_attribute("open")
+            safety = page.locator('[data-admin-disclosure-key="safety-recovery"]')
+            audit = page.locator('[data-admin-disclosure-key="admin-audit"]')
+            assert safety.get_attribute("open") is None and audit.get_attribute("open") is None
+            safety.locator(":scope > summary").click()
+            assert "Create backup now" in safety.inner_text()
+            audit.locator(":scope > summary").click()
+            assert audit.locator(".admin-audit-row").count() >= 1
+            audit.locator('select[name="audit_category"]').select_option("safety_recovery")
+            page.screenshot(path=str(VISUAL_DIR / "safety-audit-1280.png"), full_page=True)
             page.screenshot(path=str(VISUAL_DIR / "admin-collapsed-1280.png"), full_page=True)
 
             accounts.locator("summary").first.click()
@@ -257,6 +272,10 @@ def main() -> None:
                 mobile_columns = page.locator(".location-management-row").first.evaluate("element => getComputedStyle(element).gridTemplateColumns.split(' ').filter(Boolean).length")
                 assert mobile_columns == 1
                 page.screenshot(path=str(VISUAL_DIR / f"locations-{width}.png"), full_page=True)
+                page.goto(f"{base_url}/admin")
+                page.locator('[data-admin-disclosure-key="admin-audit"] > summary').click()
+                assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
+                page.screenshot(path=str(VISUAL_DIR / f"audit-{width}.png"), full_page=True)
                 page.goto(f"{base_url}/help")
                 assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
                 page.screenshot(path=str(VISUAL_DIR / f"help-{width}.png"), full_page=True)

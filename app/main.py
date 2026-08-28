@@ -25,6 +25,8 @@ from .auth import (
     require_admin_user, trusted_device_middleware,
 )
 from .config import get_settings
+from .backup_service import backup_status, create_backup
+from .admin_audit import admin_audit_count, finalize_admin_action, list_admin_action_audit, record_admin_action
 from .database import (
     calendar_location_key,
     active_sync_generation_for_user,
@@ -67,6 +69,7 @@ from .database import (
     get_deputy_user_secret,
     get_deputy_schedule_snapshot,
     get_app_user,
+    get_app_user_any_status,
     get_app_user_by_email,
     get_shift_changes_for_date,
     get_latest_deputy_web_capture_for_user,
@@ -283,7 +286,7 @@ from .deputy_integration import (
 
 
 APP_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.5.4"
+APP_VERSION = "0.5.5"
 APP_BUILD = (os.getenv("GIT_SHA", "").strip()[:12] or APP_VERSION)
 MARK_FIELDS = (
     ("checked", "Checked"),
@@ -665,7 +668,6 @@ app = FastAPI(
     title="Re-Deputy",
 )
 app.add_middleware(GZipMiddleware, minimum_size=500)
-app.middleware("http")(trusted_device_middleware)
 
 
 @app.middleware("http")
@@ -703,6 +705,120 @@ async def static_cache_middleware(request: Request, call_next):
     if request.url.path.startswith("/static/"):
         response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
     return response
+
+
+def _admin_audit_category(path: str) -> str:
+    if "/deputy-api/" in path:
+        return "application_config"
+    if "/contractors/" in path:
+        return "contractors"
+    if "/account-invitations" in path or "/users/" in path:
+        return "account_access"
+    if "/identity-" in path or "/crew-link/" in path or "/crew/" in path or "/teams/" in path or "/vehicles/" in path:
+        return "crew_identity"
+    if "/roster-days/" in path or "/workday-" in path:
+        return "workdays"
+    if "/travel-" in path or "/location-team" in path or "/planning-locations" in path:
+        return "locations_travel"
+    if "/track-map" in path or "/love-racing" in path:
+        return "racing_maps"
+    if "/backups/" in path:
+        return "safety_recovery"
+    return "admin_operations"
+
+
+def _admin_specialist_history(path: str) -> str:
+    """Name retained domain history without copying its potentially rich payload."""
+    if path.endswith("/role"):
+        return "app_role_audit"
+    if "/account-invitations" in path:
+        return "account_invitations"
+    if "/contractors/" in path:
+        return "contractor_invites"
+    if "/deputy-trial/execute" in path:
+        return "deputy_write_operations"
+    if "/deputy-api/" in path:
+        return "deputy_configuration_or_mapping"
+    if "/identity-" in path or "/crew-link/" in path:
+        return "crew_identity_merge_audit"
+    if "/teams/" in path or path.endswith("/teams"):
+        return "crew_team_audit"
+    if "/vehicles/" in path:
+        return "crew_vehicle_audit"
+    if "/overrides" in path:
+        return "admin_overrides"
+    if "/roster-days/" in path and path.endswith("/publish"):
+        return "roster_day_versions"
+    if "/workday-applications/" in path:
+        return "workday_audit_events"
+    if "/backups/" in path:
+        return "backup_runs"
+    return ""
+
+
+@app.middleware("http")
+async def central_admin_action_audit_middleware(request: Request, call_next):
+    """Write-ahead audit prevents an Admin mutation without an audit record."""
+    path = request.url.path
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"} or not path.startswith("/admin/"):
+        return await call_next(request)
+    actor = current_user(request)
+    if not actor or not int(actor.get("is_admin") or 0):
+        return await call_next(request)
+    segments = [part for part in path.split("/") if part]
+    target_id = next((part for part in reversed(segments) if part.isdigit()), "")
+    try:
+        audit_id = record_admin_action(
+            actor=actor, action_key="route." + ".".join(segments[1:]),
+            action_category=_admin_audit_category(path),
+            target_type=segments[1] if len(segments) > 1 else "admin", target_id=target_id,
+            outcome="started", request_path=path,
+            related_audit_type=_admin_specialist_history(path),
+            safe_note="Write-ahead central route audit; awaiting request result.",
+        )
+    except Exception:
+        # Do not invoke a mutating handler if its durable audit row cannot be
+        # created. This is especially important for destructive Admin actions.
+        return PlainTextResponse("Admin action was not started because its audit record could not be created.", status_code=503)
+    try:
+        response = await call_next(request)
+    except Exception:
+        try:
+            finalize_admin_action(
+                audit_id, action_key="route." + ".".join(segments[1:]), action_category=_admin_audit_category(path),
+                target_type=segments[1] if len(segments) > 1 else "admin", target_id=target_id,
+                outcome="failed", related_audit_type=_admin_specialist_history(path), request_path=path,
+                safe_note="Handler raised before completing the Admin action.",
+            )
+        except Exception:
+            pass
+        raise
+    try:
+        context = getattr(request.state, "admin_audit_context", {})
+        if not isinstance(context, dict):
+            context = {}
+        finalize_admin_action(
+            audit_id,
+            action_key=str(context.get("action_key") or "route." + ".".join(segments[1:])),
+            action_category=str(context.get("action_category") or _admin_audit_category(path)),
+            target_type=str(context.get("target_type") or (segments[1] if len(segments) > 1 else "admin")),
+            target_id=context.get("target_id", target_id),
+            target_label=str(context.get("target_label") or ""),
+            outcome=str(context.get("outcome") or ("completed" if response.status_code < 400 else "rejected")),
+            before=context.get("before"), after=context.get("after"),
+            related_audit_type=str(context.get("related_audit_type") or _admin_specialist_history(path)),
+            related_audit_id=context.get("related_audit_id", target_id),
+            request_path=path,
+            safe_note=str(context.get("safe_note") or "Central route audit. Specialist history remains authoritative where present."),
+        )
+    except Exception:
+        # The pre-existing row remains "started", never a false completed row.
+        # A future operator can distinguish it from a completed mutation.
+        pass
+    return response
+
+
+app.middleware("http")(trusted_device_middleware)
 
 
 @app.get("/manifest.webmanifest", include_in_schema=False)
@@ -6025,6 +6141,9 @@ def admin_page_context(
     roster_day_rows = [dict(item) for item in list_roster_days()]
     for roster_day in roster_day_rows:
         roster_day["draft_deletion"] = never_published_draft_deletion_status(int(roster_day["id"]))
+    audit_category = str(request.query_params.get("audit_category") or "")
+    audit_outcome = str(request.query_params.get("audit_outcome") or "")
+    audit_rows = list_admin_action_audit(category=audit_category, outcome=audit_outcome)
     return {
         "request": request,
         "notice": notice,
@@ -6090,6 +6209,11 @@ def admin_page_context(
         "deputy_api_connection": connection_status(int(user["id"])),
         "deputy_write_audit": write_audit_summary(),
         "deputy_mappings": mapping_snapshot(int(user["id"])),
+        "backup_status": backup_status(),
+        "admin_audit_rows": audit_rows,
+        "admin_audit_count": admin_audit_count(),
+        "audit_category": audit_category,
+        "audit_outcome": audit_outcome,
     }
 
 
@@ -6100,6 +6224,35 @@ def admin_view(request: Request, notice: str | None = None) -> object:
         "admin.html",
         admin_page_context(request, user, notice=notice),
     )
+
+
+def _required_safety_backup(request: Request, actor: dict[str, object], reason: str, target_label: str) -> dict[str, object]:
+    return create_backup(
+        reason=reason,
+        requested_by_user_id=int(actor["id"]),
+        app_version=APP_VERSION,
+        app_build=APP_BUILD,
+    )
+
+
+@app.post("/admin/backups/create")
+def admin_create_backup(request: Request) -> RedirectResponse:
+    actor = require_admin_user(request)
+    require_same_origin(request)
+    result = create_backup(
+        reason="manual_admin", requested_by_user_id=int(actor["id"]),
+        app_version=APP_VERSION, app_build=APP_BUILD,
+    )
+    if result.get("status") == "success":
+        message = f"Backup {result['backup_id']} completed and passed SQLite validation."
+    else:
+        message = "Backup failed; the previous successful backup was retained. Check Safety & recovery."
+    request.state.admin_audit_context = {
+        "action_key": "backup.create_manual", "action_category": "safety_recovery", "target_type": "backup",
+        "target_id": result.get("backup_id", ""), "outcome": result.get("status", "failed"),
+        "after": {"reason": "manual_admin", "status": result.get("status"), "integrity": result.get("integrity_result")},
+    }
+    return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
 @app.post("/admin/users/{user_id}/devices/{device_id}/revoke")
@@ -6379,7 +6532,21 @@ def admin_purge_user(request: Request, user_id: int) -> RedirectResponse:
     admin = require_admin_user(request)
     if int(admin["id"]) == user_id:
         return RedirectResponse(url=notice_url("/admin", "You cannot purge your own admin account."), status_code=303)
+    target = get_app_user_any_status(user_id)
+    if target is not None:
+        request.state.admin_audit_context = {
+            "action_key": "user.purge", "action_category": "account_access", "target_type": "app_user",
+            "target_id": user_id, "target_label": str(target["display_name"] or target["deputy_email"] or user_id),
+            "before": {"active": bool(target["is_active"]), "account_type": str(target["account_type"] or "user")},
+        }
+    if target is not None and not int(target["is_active"] or 0):
+        backup = _required_safety_backup(request, admin, "before_user_purge", str(target["display_name"] or target["deputy_email"] or user_id))
+        if backup.get("status") != "success":
+            request.state.admin_audit_context.update(outcome="blocked", after={"deleted": False, "reason": "required backup failed"})
+            return RedirectResponse(url=notice_url("/admin", "User data was not purged because the required safety backup failed."), status_code=303)
     result = purge_app_user(user_id)
+    if hasattr(request.state, "admin_audit_context"):
+        request.state.admin_audit_context.update(outcome=str(result.get("status") or "blocked"), after={"deleted": bool(result.get("purged")), "shifts": result.get("shifts", 0), "devices": result.get("devices", 0)})
     if result.get("status") == "purged":
         message = f"Purged inactive user data: {result['shifts']} shifts, {result['devices']} devices."
     else:
@@ -7495,10 +7662,23 @@ def admin_edit_roster_day(request: Request, roster_day_id: int, notice: str | No
 
 @app.post("/admin/roster-days/{roster_day_id}/delete")
 def admin_delete_roster_day_draft(request: Request, roster_day_id: int) -> RedirectResponse:
-    require_admin_user(request)
+    actor = require_admin_user(request)
     require_same_origin(request)
     row = get_roster_day(roster_day_id)
+    label = str((row["title"] or row["track_label"] or "Workday") if row is not None else "Workday")
+    request.state.admin_audit_context = {
+        "action_key": "workday.delete_unpublished_draft", "action_category": "workdays", "target_type": "roster_day",
+        "target_id": roster_day_id, "target_label": label,
+        "before": {"title": label, "status": str(row["status"] or "") if row is not None else "missing"},
+    }
+    preflight = never_published_draft_deletion_status(roster_day_id)
+    if preflight.get("allowed"):
+        backup = _required_safety_backup(request, actor, "before_unpublished_workday_delete", label)
+        if backup.get("status") != "success":
+            request.state.admin_audit_context.update(outcome="blocked", after={"deleted": False, "reason": "required backup failed"})
+            return RedirectResponse(url=notice_url("/admin", "Workday draft was not deleted because the required safety backup failed.") + "#manual-work-days", status_code=303)
     result = delete_never_published_roster_day(roster_day_id)
+    request.state.admin_audit_context.update(outcome=str(result.get("status") or "blocked"), after={"deleted": bool(result.get("deleted")), "assignments": result.get("assignments", 0)})
     if result.get("deleted"):
         label = str((row["title"] or row["track_label"] or "Workday") if row is not None else "Workday")
         message = f"Deleted unpublished {label} draft."

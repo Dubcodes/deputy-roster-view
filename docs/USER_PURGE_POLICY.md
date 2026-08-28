@@ -54,8 +54,12 @@ These audit/evidence records use `ON DELETE SET NULL` and remain in place:
 - `workday_assignments.user_id`
 - `workday_audit_events.actor_user_id`
 - `workday_open_position_applications.reviewed_by_user_id`
+- `backup_runs.requested_by_user_id`
+- `admin_action_audit.actor_user_id`
 
 `contractor_invites.activated_user_id` is explicitly detached while retaining the contractor-person invitation history. The non-FK audit columns `admin_overrides.disabled_by_user_id` and `crew_people.merged_by_user_id` are also nulled.
+
+`admin_action_audit` also stores actor display/account snapshots, so its history remains intelligible after `actor_user_id` is detached. It never stores credentials, PINs, tokens, or raw invitation links.
 
 ## Delete only self-related records
 

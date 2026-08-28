@@ -8,6 +8,7 @@ services:
     restart: unless-stopped
     volumes:
       - /data/compose/22/data:/app/data
+      - /data/compose/22/backups:/app/backups
     environment:
       TZ: ${TZ:-Pacific/Auckland}
       APP_SECRET_KEY: ${APP_SECRET_KEY:?Preserve the existing Portainer secret value}
@@ -27,6 +28,11 @@ services:
       OWN_ROSTER_LOOKBACK_DAYS: ${OWN_ROSTER_LOOKBACK_DAYS:-35}
       OWN_ROSTER_LOOKAHEAD_DAYS: ${OWN_ROSTER_LOOKAHEAD_DAYS:-56}
       NZ_HOLIDAY_REGION: ${NZ_HOLIDAY_REGION:-}
+      BACKUP_ENABLED: ${BACKUP_ENABLED:-true}
+      BACKUP_DIR: ${BACKUP_DIR:-/app/backups}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      BACKUP_HOUR: ${BACKUP_HOUR:-3}
+      BACKUP_MINUTE: ${BACKUP_MINUTE:-30}
     expose:
       - "8000"
     networks:

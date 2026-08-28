@@ -17,6 +17,7 @@ OFFLINE_SMOKES = (
     "smoke_patch_052.py",
     "smoke_patch_053.py",
     "smoke_patch_054.py",
+    "smoke_patch_055.py",
     "smoke_release_integration.py",
     "smoke_deployment_continuity.py",
     "smoke_admin_overrides.py",

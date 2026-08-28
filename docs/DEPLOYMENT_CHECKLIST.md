@@ -1,36 +1,43 @@
 # Re-Deputy Deployment Checklist
 
-Use this immediately before and after a production redeploy. Do not put secrets in this file or deployment logs.
+Use this immediately before and after a production redeploy. Do not put secrets in this file or deployment logs. Production backups are private server files, never app downloads.
 
 ## Before
 
-- Confirm the intended immutable Git tag (for this release, `v0.5.4`) and its commit SHA.
-- Stop the existing app and make one timestamped backup of its complete persistent data directory, or use SQLite's online backup API before copying other runtime files.
-- Verify the backup includes the SQLite database, `app_secret.key` when used, `web_push_vapid_private.pem`, `track_maps/`, and every other runtime file in the data directory.
-- **Preserve the existing `APP_SECRET_KEY`.** If the deployment uses `data/app_secret.key`, preserve that file instead. Never generate a replacement for an existing database.
-- Use `production/docker-compose.portainer.yml`; preserve `/data/compose/22/data:/app/data`, the `deputy-roster-multi_default` network, Cloudflare routing, and existing environment values.
-- Confirm there is no published host application port. Cloudflare reaches `deputy-roster-view:8000` privately on the shared Docker network.
-- Keep this installation's intentional `SIGNUP_ENABLED=true` and `COOKIE_SECURE=true` HTTPS-only settings.
-- Confirm Deputy trial-write mode is OFF.
+1. Identify the running immutable tag and SHA, and record both.
+2. Create a fresh production backup from **Safety & recovery** (or the same offline backup engine) and record its backup ID/path.
+3. Verify the backup completed with `integrity_check=ok` and zero `foreign_key_check` rows.
+4. Confirm the target immutable tag and its exact commit SHA.
+5. Preserve `/data/compose/22/data:/app/data`, `/data/compose/22/backups:/app/backups`, and the existing `APP_SECRET_KEY`. If the deployment instead uses `data/app_secret.key`, preserve it as private recovery material.
+6. Use `production/docker-compose.portainer.yml`; retain the `deputy-roster-multi_default` network and Cloudflare routing. There must be no published host application port: Cloudflare reaches `deputy-roster-view:8000` privately.
+7. Keep `SIGNUP_ENABLED=true`, `COOKIE_SECURE=true`, `TRUSTED_DEVICE_LIMIT`, and Deputy trial-write mode **OFF**.
 
 ## Deploy
 
-- Set the Portainer Git stack Reference to the approved immutable tag, then Pull and redeploy without altering the existing deployment environment.
-- Do not replace, clear, or remount the persistent data directory.
-- Do not enable Deputy trial writes as part of a normal redeploy.
+Set the Portainer Git stack Reference to the approved immutable tag, then Pull and redeploy without changing existing deployment environment values or remounting persistent data. Do not enable Deputy writes during a normal deployment.
 
 ## After
 
-- Confirm the container remains running without a restart loop and shows the intended build.
-- Check login, month, a representative day, Settings, Admin, notification status, sync status, maps, and the contractor route when used.
-- Check the manifest, service worker, favicon, and CSS load. An ordinary refresh should be sufficient; no service-worker unregister is expected.
-- Check the UI at 320px and 375px widths.
-- Confirm Deputy trial-write mode remains OFF and no background Deputy mutation occurred.
+1. Confirm the container stays running and reports the intended build/tag.
+2. Run SQLite integrity/FK checks and record the deployed tag paired with the pre-deploy backup ID.
+3. Smoke HTTPS login, month, a representative day, Settings, Admin, notifications, maps, and contractor flow when used.
+4. Confirm static assets and responsive views at 320px and 375px.
+5. Confirm Deputy write mode remains **OFF** and no background Deputy mutation occurred.
 
-## Release and rollback
+## Recovery and rollback
 
-Normal release: review code, run `python scripts/release_gate.py`, push the release commit, wait for exact-SHA CI success, and create immutable tag `v0.5.4`. In Portainer set the Git Reference to `v0.5.4`, then Pull and redeploy and smoke HTTPS, version, and database integrity.
+**Code rollback** means selecting the previous immutable Git tag in Portainer and redeploying that code. Changing a displayed version string never rolls code back.
 
-Rollback: choose the previous approved immutable tag `v0.5.3`, change the Portainer Git Reference, Pull and redeploy, then verify HTTPS and the database. Restore the timestamped persistent-data backup only when a database migration rollback actually requires it; changing code cannot reverse migrated data.
+**Database rollback** is separate and exceptional. Stop the stack/app, validate the specifically paired backup with:
 
-Changing an environment/display version label alone never changes application code. The Git tag/reference selects the code.
+```powershell
+python scripts/restore_backup.py --backup /app/backups/<backup-id> --dry-run
+```
+
+Only after review, with the app stopped, run:
+
+```powershell
+python scripts/restore_backup.py --backup /app/backups/<backup-id> --app-stopped --confirm RESTORE
+```
+
+The restore tool validates manifest/SHA/SQLite, creates an emergency copy of the current DB, restores the database and backed-up persistent files, then rechecks integrity/FKs. Start the app only after it succeeds, then repeat authentication/version/HTTPS smoke checks. `APP_SECRET_KEY` supplied by the deployment environment must be preserved separately; it is never written into a backup manifest or Git.

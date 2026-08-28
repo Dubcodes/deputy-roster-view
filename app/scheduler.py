@@ -37,6 +37,7 @@ from .sync_ics import sync_deputy_calendar
 from .track_maps import refresh_track_maps_if_due
 from .notifications import run_notification_pass
 from .user_credentials import settings_for_user
+from .backup_service import create_backup
 
 
 _scheduler: BackgroundScheduler | None = None
@@ -64,6 +65,15 @@ def start_scheduler(settings: Settings | None = None) -> BackgroundScheduler:
         max_instances=1,
         coalesce=True,
     )
+    if settings.backup_enabled:
+        scheduler.add_job(
+            run_scheduled_backup,
+            trigger=CronTrigger(hour=settings.backup_hour, minute=settings.backup_minute, timezone=settings.timezone),
+            id="daily_database_backup",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
     scheduler.add_job(
         check_pre_shift_sync,
         trigger=IntervalTrigger(minutes=10, timezone=settings.timezone),
@@ -124,6 +134,15 @@ def start_scheduler(settings: Settings | None = None) -> BackgroundScheduler:
     plan_staggered_user_syncs(settings, reason="startup", start_at=_now(settings) + timedelta(minutes=1))
     _scheduler = scheduler
     return scheduler
+
+
+def run_scheduled_backup(settings: Settings | None = None) -> dict[str, object]:
+    settings = settings or get_settings()
+    if not settings.backup_enabled:
+        return {"status": "disabled"}
+    # create_backup absorbs failures into durable sanitized history so a
+    # scheduler exception cannot take down the web application.
+    return create_backup(reason="scheduled", settings=settings, app_version="0.5.5")
 
 
 def shutdown_scheduler() -> None:

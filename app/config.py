@@ -36,6 +36,11 @@ class Settings:
     holiday_region: str
     data_dir: str
     db_path: str
+    backup_enabled: bool
+    backup_dir: str
+    backup_retention_days: int
+    backup_hour: int
+    backup_minute: int
 
     @property
     def timezone(self) -> ZoneInfo:
@@ -116,4 +121,9 @@ def get_settings() -> Settings:
         holiday_region=os.getenv("NZ_HOLIDAY_REGION", "").strip(),
         data_dir=data_dir,
         db_path=db_path,
+        backup_enabled=_bool_env("BACKUP_ENABLED", True),
+        backup_dir=os.getenv("BACKUP_DIR", str(Path(data_dir).parent / "backups")).strip() or str(Path(data_dir).parent / "backups"),
+        backup_retention_days=_bounded_int_env("BACKUP_RETENTION_DAYS", 30, 1, 3650),
+        backup_hour=_bounded_int_env("BACKUP_HOUR", 3, 0, 23),
+        backup_minute=_bounded_int_env("BACKUP_MINUTE", 30, 0, 59),
     )

@@ -27,6 +27,13 @@ The user does not have an official API token. The app uses logged-in web capture
 
 Deputy's production, Travel, and vehicle context are not mutually exclusive categories in Re-Deputy. The normal roster representation remains separate compatible Travel/vehicle and production rows. As defensive compatibility for an unusual entry, a production row with an explicitly recorded normalized `vehicle_label` may also contribute its vehicle fact; this is not raw-schema extraction, and the real 28 August Deputy property name remains unproven. The interpreter must collect explicit current vehicle facts from all compatible rows for the same canonical person, not only rows whose Area looks like a vehicle. Equal duplicates are one fact; different current values are shown as a conflict unless a higher-priority explicit current roster note allocates the person. Authenticated personal evidence may fill only that person's matching shared blank and never silently replaces a different explicit shared value.
 
+## 0.5.5 Recovery and audit boundaries
+
+- Backups use SQLite's online backup API, never a live-file copy. A safe manifest is the completion marker; malformed and historical directories are preserved rather than guessed away.
+- The deployment environment and `APP_SECRET_KEY` are a separate recovery prerequisite. Secret values are neither put in Git nor a manifest; file-backed fallback key/VAPID material is private backup content only when it exists.
+- Purge and unpublished-draft deletion require a fresh successful snapshot before their destructive transaction. There is no normal UI bypass.
+- Central Admin audit creates a write-ahead `started` row before every `/admin` mutation; an unavailable audit store stops the handler. The same row is finalized after the response, and an interrupted finalization remains visibly `started`, never a false success. Specialist audits retain their domain authority. There is deliberately no generic Undo or web Restore action.
+
 ## Personal Roster Capture Uses Weekly Windows
 
 Deputy's logged-in shift endpoint can return only the first page/chunk when asked for one very wide date range. The app still keeps the configurable lookback/lookahead window, but fetches the user's own roster in weekly slices and merges the rows locally so future roster weeks are not silently missed.
