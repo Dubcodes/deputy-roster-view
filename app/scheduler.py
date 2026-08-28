@@ -38,6 +38,7 @@ from .track_maps import refresh_track_maps_if_due
 from .notifications import run_notification_pass
 from .user_credentials import settings_for_user
 from .backup_service import create_backup
+from .version import APP_BUILD, APP_VERSION
 
 
 _scheduler: BackgroundScheduler | None = None
@@ -142,7 +143,7 @@ def run_scheduled_backup(settings: Settings | None = None) -> dict[str, object]:
         return {"status": "disabled"}
     # create_backup absorbs failures into durable sanitized history so a
     # scheduler exception cannot take down the web application.
-    return create_backup(reason="scheduled", settings=settings, app_version="0.5.5")
+    return create_backup(reason="scheduled", settings=settings, app_version=APP_VERSION, app_build=APP_BUILD)
 
 
 def shutdown_scheduler() -> None:

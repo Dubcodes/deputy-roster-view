@@ -589,3 +589,11 @@ This release adds a private SQLite-online-backup service, tagged validation mani
 Central Admin audit uses a write-ahead durable `started` row before every mutating `/admin` handler. If that write cannot begin, the handler is not called. Completed/rejected/blocked/failed result metadata finalizes the same safe/redacted row; a finalization fault leaves `started`, never a false completed record. Inactive account purge and unpublished workday-draft deletion require a fresh successful snapshot before their destructive database transaction.
 
 The complete local deterministic release gate (including 320px/375px and Admin responsive checks), focused backup/recovery/audit smoke, migration rehearsal twice, SQLite integrity/FK checks, JavaScript/Python syntax, Compose render with a process-local placeholder, and `git diff --check` passed. Docker Desktop's Linux engine was unavailable on this workstation, so the requested disposable Linux-container backup proof could not run; the portable online-backup, promotion, retention, consecutive-backup, failure-preservation, and restore-dry-run fixture evidence is retained in `smoke_patch_055.py`. Exact-SHA CI and immutable tag evidence are still required. No production deployment, restart, Portainer interaction, live Deputy access, or Deputy write is authorized by this release.
+
+---
+
+## 0.5.6 operational safety correctness closure
+
+Starting release: immutable `v0.5.5` at `20d65d99f09ef1d70cd94079d742c040f9abf677`.
+
+Startup no longer calls hard inactive-account purge. Deliberate inactive cleanup, roster reset, individual purge, and unpublished-draft deletion require a fresh successful safety backup before their destructive transaction. Central Admin auditing now treats redirect-only results as neutral `request_finished` until a handler has supplied a verified outcome, and adds compact recovery snapshots where specialist history is insufficient. Scheduled backups take the shared application version/build source. Pending final validation and exact-SHA CI/tag evidence; no production deployment or Deputy write is authorized.

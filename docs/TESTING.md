@@ -151,6 +151,10 @@ The self-travel smoke confirms owner-only today/future authorization, stable ide
 ## 0.5.5 focused checks
 
 `python scripts\smoke_patch_055.py` creates disposable data only. It proves SQLite online-backup validation and SHA manifests, safe private persistent-file inventory, failed-attempt preservation, retention of only managed successful backups, historical-directory preservation, write-ahead central Admin-audit redaction, scheduler idempotency, required safety backups before purge and unpublished-draft deletion, audit-store fail-closed behavior, and restore dry-run/tamper rejection. The responsive gate opens the new Safety & recovery and Admin audit panels at 1280px, 375px, and 320px without horizontal overflow.
+
+## 0.5.6 focused checks
+
+`python scripts\smoke_patch_056.py` proves startup retains old inactive accounts, batch cleanup and roster reset fail closed before their one required backup, safe reset counts, no-op/blocked/invalid redirects are not marked completed, valid travel changes are, scheduled manifests use the shared running version, and a newer successful backup clears an older failure from the current Safety & recovery warning.
 # 2026.08.13.1 focused checks
 
 `python scripts/smoke_release_integration.py` uses a disposable SQLite database and mocked Deputy HTTP. It covers idempotent migration, personal start/finish and notification payloads, hash-only contractor invites, activation/replay/expiry/revocation/PIN login, contractor route and own-day authorization, OAuth state hashing/replay, encrypted tokens/secrets, own-user readiness, one POST plus GET verification, durable Roster linking, and duplicate-create prevention.

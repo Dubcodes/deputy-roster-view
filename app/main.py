@@ -25,6 +25,7 @@ from .auth import (
     require_admin_user, trusted_device_middleware,
 )
 from .config import get_settings
+from .version import APP_BUILD, APP_VERSION
 from .backup_service import backup_status, create_backup
 from .admin_audit import admin_audit_count, finalize_admin_action, list_admin_action_audit, record_admin_action
 from .database import (
@@ -286,8 +287,6 @@ from .deputy_integration import (
 
 
 APP_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.5.5"
-APP_BUILD = (os.getenv("GIT_SHA", "").strip()[:12] or APP_VERSION)
 MARK_FIELDS = (
     ("checked", "Checked"),
     ("confirmed", "Confirmed"),
@@ -804,7 +803,9 @@ async def central_admin_action_audit_middleware(request: Request, call_next):
             target_type=str(context.get("target_type") or (segments[1] if len(segments) > 1 else "admin")),
             target_id=context.get("target_id", target_id),
             target_label=str(context.get("target_label") or ""),
-            outcome=str(context.get("outcome") or ("completed" if response.status_code < 400 else "rejected")),
+            # A redirect is a transport result, not proof that a database
+            # mutation committed. Routes opt into completed/unchanged/etc.
+            outcome=str(context.get("outcome") or "request_finished"),
             before=context.get("before"), after=context.get("after"),
             related_audit_type=str(context.get("related_audit_type") or _admin_specialist_history(path)),
             related_audit_id=context.get("related_audit_id", target_id),
@@ -5544,7 +5545,9 @@ def on_startup() -> None:
     init_db()
     ensure_push_identity()
     migrate_existing_track_map_aliases()
-    purge_old_inactive_records(days=30)
+    # Startup recovery must never make an irreversible retention decision.
+    # Old inactive accounts are deliberately retained until an Admin confirms
+    # the safety-backed cleanup action.
     deactivate_inactive_contractors()
     reset_incomplete_user_syncs()
     recover_incomplete_sync_generations(datetime.now(get_settings().timezone).isoformat(timespec="seconds"))
@@ -6235,6 +6238,49 @@ def _required_safety_backup(request: Request, actor: dict[str, object], reason: 
     )
 
 
+def _set_admin_audit(
+    request: Request,
+    *,
+    action_key: str,
+    category: str,
+    target_type: str,
+    target_id: object = "",
+    target_label: str = "",
+    outcome: str,
+    before: object | None = None,
+    after: object | None = None,
+    safe_note: str = "",
+) -> None:
+    request.state.admin_audit_context = {
+        "action_key": action_key, "action_category": category,
+        "target_type": target_type, "target_id": target_id,
+        "target_label": target_label, "outcome": outcome,
+        "before": before or {}, "after": after or {}, "safe_note": safe_note,
+    }
+
+
+def _safe_row(row: object, fields: tuple[str, ...]) -> dict[str, object]:
+    if row is None:
+        return {}
+    return {field: row_value(row, field) for field in fields}
+
+
+def _roster_reset_counts(user_id: int) -> dict[str, int]:
+    with get_connection() as conn:
+        shifts = int(conn.execute("SELECT COUNT(*) FROM shifts WHERE owner_user_id=?", (user_id,)).fetchone()[0])
+        changes = int(conn.execute("SELECT COUNT(*) FROM shift_changes WHERE shift_id IN (SELECT id FROM shifts WHERE owner_user_id=?)", (user_id,)).fetchone()[0])
+        marks = int(conn.execute("SELECT COUNT(*) FROM shift_marks WHERE shift_id IN (SELECT id FROM shifts WHERE owner_user_id=?)", (user_id,)).fetchone()[0])
+    return {"shifts": shifts, "changes": changes, "marks": marks}
+
+
+def _inactive_cleanup_counts(days: int = 30) -> dict[str, int]:
+    cutoff = (datetime.now(get_settings().timezone) - timedelta(days=max(1, int(days)))).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        users = int(conn.execute("SELECT COUNT(*) FROM app_users WHERE is_active=0 AND COALESCE(deactivated_at,updated_at,created_at) < ?", (cutoff,)).fetchone()[0])
+        devices = int(conn.execute("SELECT COUNT(*) FROM trusted_devices WHERE revoked_at IS NOT NULL AND revoked_at < ?", (cutoff,)).fetchone()[0])
+    return {"eligible_users": users, "eligible_devices": devices}
+
+
 @app.post("/admin/backups/create")
 def admin_create_backup(request: Request) -> RedirectResponse:
     actor = require_admin_user(request)
@@ -6258,7 +6304,14 @@ def admin_create_backup(request: Request) -> RedirectResponse:
 @app.post("/admin/users/{user_id}/devices/{device_id}/revoke")
 def admin_revoke_device(request: Request, user_id: int, device_id: int) -> RedirectResponse:
     require_admin_user(request); require_same_origin(request)
+    with get_connection() as conn:
+        device = conn.execute("SELECT id,revoked_at FROM trusted_devices WHERE id=? AND user_id=?", (device_id, user_id)).fetchone()
     revoked = revoke_trusted_device_for_user(user_id, device_id)
+    _set_admin_audit(
+        request, action_key="trusted_device.revoke", category="account_access", target_type="trusted_device",
+        target_id=device_id, outcome="completed" if revoked else ("unchanged" if device else "not_found"),
+        before={"revoked": bool(device and device["revoked_at"])}, after={"revoked": bool(revoked or (device and device["revoked_at"]))},
+    )
     message = "Trusted device revoked." if revoked else "That device was already revoked or could not be found."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
@@ -6271,16 +6324,20 @@ async def admin_change_role(request: Request, user_id: int) -> RedirectResponse:
     make_admin = str(form.get("is_admin") or "") == "1"
     target = get_app_user(user_id)
     if target is None:
+        _set_admin_audit(request, action_key="user.role", category="account_access", target_type="app_user", target_id=user_id, outcome="not_found")
         return RedirectResponse(url=notice_url("/admin", "User not found."), status_code=303)
     if str(target["account_type"] or "user") == "contractor" and make_admin:
+        _set_admin_audit(request, action_key="user.role", category="account_access", target_type="app_user", target_id=user_id, outcome="blocked")
         return RedirectResponse(url=notice_url("/admin", "Contractors cannot become Admins."), status_code=303)
     if not make_admin and int(target["is_admin"] or 0) and count_active_admins(excluding_user_id=user_id) < 1:
+        _set_admin_audit(request, action_key="user.role", category="account_access", target_type="app_user", target_id=user_id, outcome="blocked", before={"is_admin": True}, after={"is_admin": True})
         return RedirectResponse(url=notice_url("/admin", "Keep at least one active Admin account."), status_code=303)
     now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
     with get_connection() as conn:
         conn.execute("UPDATE app_users SET is_admin=?,updated_at=? WHERE id=? AND is_active=1", (1 if make_admin else 0, now, user_id))
         conn.execute("INSERT INTO app_role_audit(actor_user_id,target_user_id,old_is_admin,new_is_admin,created_at) VALUES(?,?,?,?,?)",
                      (int(actor["id"]), user_id, int(target["is_admin"] or 0), 1 if make_admin else 0, now))
+    _set_admin_audit(request, action_key="user.role", category="account_access", target_type="app_user", target_id=user_id, outcome="completed", before={"is_admin": bool(target["is_admin"])}, after={"is_admin": make_admin}, safe_note="app_role_audit is authoritative.")
     return RedirectResponse(url=notice_url("/admin", "Admin permission updated."), status_code=303)
 
 
@@ -6379,7 +6436,9 @@ async def admin_save_deputy_api(request: Request) -> RedirectResponse:
                                callback_origin=str(form.get("callback_origin") or ""), write_mode=str(form.get("write_mode") or "off"),
                                actor_user_id=int(actor["id"]))
     except ValueError as exc:
+        _set_admin_audit(request, action_key="deputy_config.save", category="application_config", target_type="deputy_configuration", outcome="invalid", after={"write_mode": str(form.get("write_mode") or "off")})
         return RedirectResponse(url=notice_url("/admin", str(exc)), status_code=303)
+    _set_admin_audit(request, action_key="deputy_config.save", category="application_config", target_type="deputy_configuration", outcome="completed", after={"client_id_configured": bool(str(form.get("client_id") or "")), "callback_origin_configured": bool(str(form.get("callback_origin") or "")), "write_mode": str(form.get("write_mode") or "off")}, safe_note="OAuth secret values are never recorded.")
     return RedirectResponse(url=notice_url("/admin", "Deputy API configuration saved."), status_code=303)
 
 
@@ -6389,7 +6448,9 @@ async def admin_save_person_mapping(request: Request) -> RedirectResponse:
     try:
         save_person_mapping(app_user_id=int(actor["id"]), crew_person_id=int(form.get("crew_person_id") or 0), deputy_employee_id=int(form.get("deputy_employee_id") or 0))
         message = "Deputy employee mapping saved."
-    except (ValueError, PermissionError) as exc: message = str(exc)
+        outcome = "completed"
+    except (ValueError, PermissionError) as exc: message = str(exc); outcome = "invalid"
+    _set_admin_audit(request, action_key="deputy_mapping.person", category="application_config", target_type="deputy_person_mapping", target_id=str(form.get("crew_person_id") or ""), outcome=outcome, after={"crew_person_id": str(form.get("crew_person_id") or ""), "deputy_employee_id": str(form.get("deputy_employee_id") or "")}, safe_note="Mapping IDs only; no OAuth credentials are recorded.")
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
@@ -6399,7 +6460,9 @@ async def admin_save_unit_mapping(request: Request) -> RedirectResponse:
     try:
         save_unit_mapping(app_user_id=int(actor["id"]), mapping_key=str(form.get("mapping_key") or ""), context_type=str(form.get("context_type") or "production_role"), deputy_unit_id=int(form.get("deputy_unit_id") or 0))
         message = "Deputy Operational Unit mapping saved."
-    except (ValueError, PermissionError) as exc: message = str(exc)
+        outcome = "completed"
+    except (ValueError, PermissionError) as exc: message = str(exc); outcome = "invalid"
+    _set_admin_audit(request, action_key="deputy_mapping.unit", category="application_config", target_type="deputy_unit_mapping", target_id=str(form.get("mapping_key") or ""), outcome=outcome, after={"mapping_key": str(form.get("mapping_key") or ""), "context_type": str(form.get("context_type") or ""), "deputy_unit_id": str(form.get("deputy_unit_id") or "")}, safe_note="Mapping IDs only; no OAuth credentials are recorded.")
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
@@ -6502,11 +6565,14 @@ def admin_user_deputy_credential_email(request: Request, user_id: int) -> JSONRe
 def admin_deactivate_user(request: Request, user_id: int) -> RedirectResponse:
     admin = require_admin_user(request)
     if int(admin["id"]) == user_id:
+        _set_admin_audit(request, action_key="user.deactivate", category="account_access", target_type="app_user", target_id=user_id, outcome="blocked")
         return RedirectResponse(url=notice_url("/admin", "You cannot deactivate your own admin account."), status_code=303)
     target = get_app_user(user_id)
     if target and int(target["is_admin"] or 0) and count_active_admins(excluding_user_id=user_id) < 1:
+        _set_admin_audit(request, action_key="user.deactivate", category="account_access", target_type="app_user", target_id=user_id, outcome="blocked")
         return RedirectResponse(url=notice_url("/admin", "Keep at least one active admin account."), status_code=303)
     updated = set_app_user_active(user_id, False)
+    _set_admin_audit(request, action_key="user.deactivate", category="account_access", target_type="app_user", target_id=user_id, target_label=str(row_value(target, "display_name") or ""), outcome="completed" if updated else "not_found", before={"is_active": bool(target and target["is_active"])}, after={"is_active": False})
     message = "User deactivated and trusted devices revoked." if updated else "User not found."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
@@ -6514,15 +6580,27 @@ def admin_deactivate_user(request: Request, user_id: int) -> RedirectResponse:
 @app.post("/admin/users/{user_id}/reactivate")
 def admin_reactivate_user(request: Request, user_id: int) -> RedirectResponse:
     require_admin_user(request)
+    target = get_app_user_any_status(user_id)
     updated = set_app_user_active(user_id, True)
+    _set_admin_audit(request, action_key="user.reactivate", category="account_access", target_type="app_user", target_id=user_id, target_label=str(row_value(target, "display_name") or ""), outcome="completed" if updated else "not_found", before={"is_active": bool(target and target["is_active"])}, after={"is_active": True})
     message = "User reactivated. Ask them to log in again, then sync." if updated else "User not found."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
 @app.post("/admin/users/{user_id}/reset-roster")
 def admin_reset_user_roster(request: Request, user_id: int) -> RedirectResponse:
-    require_admin_user(request)
+    actor = require_admin_user(request); require_same_origin(request)
+    target = get_app_user_any_status(user_id)
+    before = _roster_reset_counts(user_id) if target is not None else {}
+    if target is None:
+        _set_admin_audit(request, action_key="user.reset_roster", category="account_access", target_type="app_user", target_id=user_id, outcome="not_found")
+        return RedirectResponse(url=notice_url("/admin", "User not found."), status_code=303)
+    backup = _required_safety_backup(request, actor, "before_roster_reset", str(target["display_name"] or target["deputy_email"] or user_id))
+    if backup.get("status") != "success":
+        _set_admin_audit(request, action_key="user.reset_roster", category="account_access", target_type="app_user", target_id=user_id, outcome="blocked", before=before, after=before, safe_note="Required safety backup failed; roster data was unchanged.")
+        return RedirectResponse(url=notice_url("/admin", "Roster data was not reset because the required safety backup failed."), status_code=303)
     result = reset_user_roster_data(user_id)
+    _set_admin_audit(request, action_key="user.reset_roster", category="account_access", target_type="app_user", target_id=user_id, outcome="completed", before=before, after={"deleted_shifts": result["shifts"], "deleted_changes": result["changes"], "deleted_marks": result["marks"]})
     message = f"Roster reset: {result['shifts']} shifts, {result['changes']} changes, {result['marks']} marks cleared."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
@@ -6556,8 +6634,14 @@ def admin_purge_user(request: Request, user_id: int) -> RedirectResponse:
 
 @app.post("/admin/cleanup")
 def admin_cleanup_old_records(request: Request) -> RedirectResponse:
-    require_admin_user(request)
+    actor = require_admin_user(request); require_same_origin(request)
+    before = _inactive_cleanup_counts()
+    backup = _required_safety_backup(request, actor, "before_inactive_cleanup", "Inactive-account cleanup")
+    if backup.get("status") != "success":
+        _set_admin_audit(request, action_key="inactive_cleanup.purge", category="account_access", target_type="inactive_accounts", outcome="blocked", before=before, after=before, safe_note="Required batch safety backup failed; cleanup was not started.")
+        return RedirectResponse(url=notice_url("/admin", "Inactive cleanup was not run because the required safety backup failed."), status_code=303)
     result = purge_old_inactive_records(days=30)
+    _set_admin_audit(request, action_key="inactive_cleanup.purge", category="account_access", target_type="inactive_accounts", outcome="completed" if result["users"] or result["devices"] else "unchanged", before=before, after={"purged_users": result["users"], "purged_devices": result["devices"], "blocked_users": result.get("blocked", 0)})
     blocked = f" {result['blocked']} inactive users were retained because of audit history." if result.get("blocked") else ""
     return RedirectResponse(
         url=notice_url("/admin", f"Cleanup complete: purged {result['users']} inactive users and {result['devices']} old revoked devices.{blocked}"),
@@ -6587,7 +6671,7 @@ def admin_clear_changed(request: Request) -> RedirectResponse:
 
 @app.post("/admin/travel-defaults")
 async def admin_save_travel_default(request: Request) -> RedirectResponse:
-    require_admin_user(request)
+    require_admin_user(request); require_same_origin(request)
     form = await request.form()
     track_label = str(form.get("track_label") or "").strip()
     base_label = canonical_travel_base_label(form.get("base_label"))
@@ -6598,7 +6682,10 @@ async def admin_save_travel_default(request: Request) -> RedirectResponse:
     except ValueError:
         travel_minutes = 0
     if not track_label or travel_minutes <= 0:
+        _set_admin_audit(request, action_key="travel_default.save", category="locations_travel", target_type="travel_default", outcome="invalid")
         return RedirectResponse(url=notice_url("/admin", "Track and travel minutes are required."), status_code=303)
+    key = travel_default_key(track_label)
+    before_row = next((row for row in list_travel_time_defaults() if str(row["track_key"]) == key and str(row["base_label"]).casefold() == base_label.casefold()), None)
     upsert_travel_time_default(
         track_key=travel_default_key(track_label),
         track_label=track_label,
@@ -6608,20 +6695,25 @@ async def admin_save_travel_default(request: Request) -> RedirectResponse:
         sample_count=0,
         note=note,
     )
+    after_row = next((row for row in list_travel_time_defaults() if str(row["track_key"]) == key and str(row["base_label"]).casefold() == base_label.casefold()), None)
+    _set_admin_audit(request, action_key="travel_default.save", category="locations_travel", target_type="travel_default", target_id=row_value(after_row, "id"), target_label=track_label, outcome="completed", before=_safe_row(before_row, ("track_label", "base_label", "travel_minutes", "source")), after=_safe_row(after_row, ("track_label", "base_label", "travel_minutes", "source")))
     return RedirectResponse(url=notice_url("/admin", "Travel default saved."), status_code=303)
 
 
 @app.post("/admin/travel-defaults/{default_id}/delete")
 def admin_delete_travel_default(request: Request, default_id: int) -> RedirectResponse:
-    require_admin_user(request)
+    require_admin_user(request); require_same_origin(request)
+    before = next((row for row in list_travel_time_defaults() if int(row["id"]) == default_id), None)
     deleted = delete_travel_time_default(default_id)
+    _set_admin_audit(request, action_key="travel_default.delete", category="locations_travel", target_type="travel_default", target_id=default_id, target_label=str(row_value(before, "track_label") or ""), outcome="completed" if deleted else "not_found", before=_safe_row(before, ("track_label", "base_label", "travel_minutes", "source")), after={"deleted": bool(deleted)})
     message = "Travel default deleted." if deleted else "Travel default not found."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
 @app.post("/admin/travel-defaults/{default_id}/edit")
 async def admin_edit_travel_default(request: Request, default_id: int) -> RedirectResponse:
-    require_admin_user(request)
+    require_admin_user(request); require_same_origin(request)
+    before_row = next((row for row in list_travel_time_defaults() if int(row["id"]) == default_id), None)
     form = await request.form()
     track_label = str(form.get("track_label") or "").strip()
     base_label = canonical_travel_base_label(form.get("base_label"))
@@ -6632,6 +6724,7 @@ async def admin_edit_travel_default(request: Request, default_id: int) -> Redire
     except ValueError:
         travel_minutes = 0
     if not track_label or travel_minutes <= 0:
+        _set_admin_audit(request, action_key="travel_default.edit", category="locations_travel", target_type="travel_default", target_id=default_id, outcome="invalid", before=_safe_row(before_row, ("track_label", "base_label", "travel_minutes", "source")))
         return RedirectResponse(url=notice_url("/admin", "Track and travel minutes are required."), status_code=303)
     updated = update_travel_time_default(
         default_id,
@@ -6641,13 +6734,15 @@ async def admin_edit_travel_default(request: Request, default_id: int) -> Redire
         travel_minutes=travel_minutes,
         note=note,
     )
+    after_row = next((row for row in list_travel_time_defaults() if int(row["id"]) == default_id), None)
+    _set_admin_audit(request, action_key="travel_default.edit", category="locations_travel", target_type="travel_default", target_id=default_id, target_label=track_label, outcome="completed" if updated else "not_found", before=_safe_row(before_row, ("track_label", "base_label", "travel_minutes", "source")), after=_safe_row(after_row, ("track_label", "base_label", "travel_minutes", "source")))
     message = "Travel default updated." if updated else "Travel default not found."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
 @app.post("/admin/travel-routes")
 async def admin_save_travel_route(request: Request) -> RedirectResponse:
-    require_admin_user(request)
+    require_admin_user(request); require_same_origin(request)
     form = await request.form()
     origin = str(form.get("origin_label") or "").strip()
     destination = str(form.get("destination_label") or "").strip()
@@ -6655,6 +6750,7 @@ async def admin_save_travel_route(request: Request) -> RedirectResponse:
         minutes = int(str(form.get("travel_minutes") or "0"))
     except ValueError:
         minutes = 0
+    before_row = get_travel_route(origin, destination)
     saved = upsert_travel_route(
         origin_label=origin,
         destination_label=destination,
@@ -6663,14 +6759,18 @@ async def admin_save_travel_route(request: Request) -> RedirectResponse:
         source="manual",
         also_reverse=bool(form.get("also_reverse")),
     )
+    after_row = get_travel_route(origin, destination)
+    _set_admin_audit(request, action_key="travel_route.save", category="locations_travel", target_type="travel_route", target_id=row_value(after_row, "id"), target_label=f"{origin} → {destination}", outcome="completed" if saved else "invalid", before=_safe_row(before_row, ("origin_label", "destination_label", "travel_minutes", "source", "reverse_is_shared")), after=_safe_row(after_row, ("origin_label", "destination_label", "travel_minutes", "source", "reverse_is_shared")))
     message = "Directed travel route saved." if saved else "Origin, destination, and travel minutes are required."
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 
 @app.post("/admin/travel-routes/{route_id}/delete")
 def admin_delete_travel_route(request: Request, route_id: int) -> RedirectResponse:
-    require_admin_user(request)
+    require_admin_user(request); require_same_origin(request)
+    before = next((row for row in list_travel_routes() if int(row["id"]) == route_id), None)
     deleted = delete_travel_route(route_id)
+    _set_admin_audit(request, action_key="travel_route.delete", category="locations_travel", target_type="travel_route", target_id=route_id, target_label=f"{row_value(before, 'origin_label') or ''} → {row_value(before, 'destination_label') or ''}", outcome="completed" if deleted else "not_found", before=_safe_row(before, ("origin_label", "destination_label", "travel_minutes", "source", "reverse_is_shared")), after={"deleted": bool(deleted)})
     return RedirectResponse(
         url=notice_url("/admin", "Travel route deleted." if deleted else "Travel route not found."),
         status_code=303,
@@ -7106,11 +7206,13 @@ def admin_reset_track_map(request: Request, track_key: str) -> RedirectResponse:
 
 @app.post("/admin/track-map-locations/{location_key}/classify")
 async def admin_classify_track_map_location(request: Request, location_key: str) -> RedirectResponse:
-    require_admin_user(request)
+    require_admin_user(request); require_same_origin(request)
+    before_rule = next((row for row in list_track_map_location_rules() if str(row["location_key"]) == location_key), None)
     form = await request.form()
     location_label = str(form.get("location_label") or "").strip()
     classification = str(form.get("classification") or "").strip().lower()
     if not location_label or calendar_location_key(location_label) != location_key:
+        _set_admin_audit(request, action_key="track_map_location.classify", category="racing_maps", target_type="track_map_location", target_id=location_key, outcome="invalid")
         return RedirectResponse(
             url=notice_url("/admin", "That location no longer matches the classification request."),
             status_code=303,
@@ -7132,6 +7234,7 @@ async def admin_classify_track_map_location(request: Request, location_key: str)
         canonical_key = requested_key
         canonical_label = str(target["track_label"])
     elif classification != "excluded":
+        _set_admin_audit(request, action_key="track_map_location.classify", category="racing_maps", target_type="track_map_location", target_id=location_key, outcome="invalid")
         return RedirectResponse(url=notice_url("/admin", "Choose a location classification."), status_code=303)
     upsert_track_map_location_rule(
         location_key=location_key,
@@ -7142,6 +7245,8 @@ async def admin_classify_track_map_location(request: Request, location_key: str)
         source="admin",
     )
     migrate_existing_track_map_aliases()
+    after_rule = next((row for row in list_track_map_location_rules() if str(row["location_key"]) == location_key), None)
+    _set_admin_audit(request, action_key="track_map_location.classify", category="racing_maps", target_type="track_map_location", target_id=location_key, target_label=location_label, outcome="completed", before=_safe_row(before_rule, ("classification", "canonical_venue_key", "canonical_venue_label")), after=_safe_row(after_rule, ("classification", "canonical_venue_key", "canonical_venue_label")))
     message = {
         "venue": f"{location_label} is now a racing venue.",
         "alias": f"{location_label} now uses the {canonical_label} track map.",
@@ -7152,8 +7257,10 @@ async def admin_classify_track_map_location(request: Request, location_key: str)
 
 @app.post("/admin/track-map-locations/{location_key}/reset")
 def admin_reset_track_map_location_classification(request: Request, location_key: str) -> RedirectResponse:
-    require_admin_user(request)
+    require_admin_user(request); require_same_origin(request)
+    before_rule = next((row for row in list_track_map_location_rules() if str(row["location_key"]) == location_key), None)
     delete_track_map_location_rule(location_key)
+    _set_admin_audit(request, action_key="track_map_location.reset", category="racing_maps", target_type="track_map_location", target_id=location_key, target_label=str(row_value(before_rule, "location_label") or location_key), outcome="completed" if before_rule else "unchanged", before=_safe_row(before_rule, ("classification", "canonical_venue_key", "canonical_venue_label")), after={"classification": "automatic"})
     return RedirectResponse(
         url=notice_url("/admin", "Location classification reset to automatic."),
         status_code=303,
@@ -7695,6 +7802,7 @@ async def admin_save_workday_role(request: Request) -> object:
     role_key = str(form.get("role_key") or display_label).strip()
     aliases = [value.strip() for value in str(form.get("aliases") or "").split(",") if value.strip()]
     order_text = str(form.get("display_order") or "999999").strip()
+    before = next((row for row in list_workday_roles(include_disabled=True) if str(row["role_key"]) == role_key), None)
     try:
         saved_key = save_workday_role(
             role_key=role_key,
@@ -7707,6 +7815,8 @@ async def admin_save_workday_role(request: Request) -> object:
     except ValueError as exc:
         message = str(exc)
         saved_key = ""
+    after = next((row for row in list_workday_roles(include_disabled=True) if str(row["role_key"]) == saved_key), None)
+    _set_admin_audit(request, action_key="workday_role.save", category="workdays", target_type="workday_role", target_id=saved_key or role_key, target_label=display_label, outcome="completed" if saved_key else "invalid", before=_safe_row(before, ("display_label", "role_key", "display_order", "is_active")), after=_safe_row(after, ("display_label", "role_key", "display_order", "is_active")))
     if request.headers.get("x-requested-with") == "fetch":
         roles = [dict(item) for item in list_workday_roles(include_disabled=True)]
         return JSONResponse(
@@ -7840,12 +7950,16 @@ async def admin_save_location_team(request: Request) -> RedirectResponse:
     user = require_admin_user(request)
     form = await request.form()
     team_id_text = str(form.get("team_id") or "").strip()
+    location_key = str(form.get("location_key") or "")
+    before = list_location_team_mappings().get(calendar_location_key(location_key), {})
     ok = set_location_primary_team(
-        location_key=str(form.get("location_key") or ""),
+        location_key=location_key,
         location_label=str(form.get("location_label") or ""),
         team_id=int(team_id_text) if team_id_text.isdigit() else None,
         actor_user_id=int(user["id"]),
     )
+    after = list_location_team_mappings().get(calendar_location_key(location_key), {})
+    _set_admin_audit(request, action_key="location.primary_team", category="locations_travel", target_type="planning_location", target_id=calendar_location_key(location_key), target_label=str(form.get("location_label") or location_key), outcome="completed" if ok else "not_found", before={"team_id": before.get("primary_team_id"), "team_name": before.get("team_name")}, after={"team_id": after.get("primary_team_id"), "team_name": after.get("team_name")})
     return RedirectResponse(url=notice_url("/admin", "Location team saved." if ok else "Location team could not be saved."), status_code=303)
 
 
@@ -7855,6 +7969,7 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
     form = await request.form()
     roster_day_id_text = str(form.get("roster_day_id") or "").strip()
     roster_day_id = int(roster_day_id_text) if roster_day_id_text.isdigit() else None
+    before_day = get_roster_day(roster_day_id) if roster_day_id else None
     roster_date = str(form.get("roster_date") or "").strip()
     try:
         date.fromisoformat(roster_date)
@@ -8057,6 +8172,13 @@ async def admin_save_roster_day(request: Request) -> RedirectResponse:
         updated_by_user_id=int(user["id"]),
         assignments=assignments,
     )
+    after_day = get_roster_day(saved_id)
+    before_snapshot = _safe_row(before_day, ("roster_date", "track_label", "title", "day_type", "status", "race_type", "office_start", "end_time"))
+    if before_day is not None:
+        before_snapshot["assignment_count"] = len(get_roster_day_assignments(int(before_day["id"])))
+    after_snapshot = _safe_row(after_day, ("roster_date", "track_label", "title", "day_type", "status", "race_type", "office_start", "end_time"))
+    after_snapshot["assignment_count"] = len(get_roster_day_assignments(saved_id))
+    _set_admin_audit(request, action_key="workday_draft.save", category="workdays", target_type="roster_day", target_id=saved_id, target_label=str(row_value(after_day, "title") or row_value(after_day, "track_label") or "Workday"), outcome="completed", before=before_snapshot, after=after_snapshot, safe_note="Published versions remain in roster_day_versions; assignment notes are intentionally excluded.")
     return RedirectResponse(url=notice_url(f"/admin/roster-days/{saved_id}?mode=review", "Draft saved. Review it, then publish when ready."), status_code=303)
 
 
@@ -8696,14 +8818,19 @@ def admin_refresh_track_maps(request: Request) -> RedirectResponse:
 
 @app.post("/admin/planning-locations")
 async def admin_update_planning_location(request: Request) -> RedirectResponse:
-    require_admin_user(request)
+    require_admin_user(request); require_same_origin(request)
     form = await request.form()
     location_key = str(form.get("location_key") or "").strip()
     enabled = str(form.get("enabled") or "").strip() == "1"
+    before_row = next((row for row in list_planning_locations() if str(row.get("racecourse_key") or "") == location_key), {})
     if not set_planning_location_enabled(location_key, enabled):
         message = "Planning location could not be found. Refresh the planning calendar and try again."
+        outcome = "not_found"
     else:
         message = "Planning location included." if enabled else "Planning location ignored."
+        outcome = "completed"
+    after_row = next((row for row in list_planning_locations() if str(row.get("racecourse_key") or "") == location_key), {})
+    _set_admin_audit(request, action_key="planning_location.enabled", category="locations_travel", target_type="planning_location", target_id=location_key, target_label=str(before_row.get("racecourse") or location_key), outcome=outcome, before={"enabled": bool(before_row.get("is_enabled", True))}, after={"enabled": bool(after_row.get("is_enabled", enabled))})
     return RedirectResponse(url=notice_url("/admin", message), status_code=303)
 
 

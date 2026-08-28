@@ -179,11 +179,11 @@
       <form action="/admin/clear-changed" method="post">
         <button class="button button-secondary" type="submit">Clear All Changed Flags</button>
       </form>
-      <form action="/admin/cleanup" method="post">
+      <form action="/admin/cleanup" method="post" onsubmit="return confirm('Purge inactive accounts and old revoked devices? A safety backup will be created first.');">
         <button class="button button-secondary" type="submit">Purge Old Inactive Data</button>
       </form>
     </div>
-    <p class="muted">Deactivated accounts and untrusted devices are automatically purged after 30 days. Active users are not purged. This runs the same cleanup now.</p>
+    <p class="muted">Startup never purges accounts. This deliberate cleanup removes eligible inactive accounts and old revoked devices only after one successful safety backup. Active users are not purged.</p>
   </section>
 
   <details class="table-panel integrity-panel">
@@ -966,7 +966,7 @@
                   </form>
                 {% endif %}
                 <form action="/admin/users/{{ user.id }}/reset-roster" method="post">
-                  <button class="button button-secondary" type="submit" onclick="return confirm('Clear pulled shifts, marks, and change history for this user?');">Reset Roster Data</button>
+                  <button class="button button-secondary" type="submit" onclick="return confirm('Clear pulled shifts, marks, and change history for this user? A safety backup will be created first.');">Reset Roster Data</button>
                 </form>
               </div>
               <p class="muted">Deactivate removes access without deleting history. Reset roster data clears this user's local roster copy so the next sync can rebuild it.</p>
@@ -1097,14 +1097,14 @@
   <details class="table-panel safety-recovery-panel" data-admin-disclosure-key="safety-recovery">
     <summary class="management-panel-summary">
       <span><strong>Safety &amp; recovery</strong><small>{% if backup_status.enabled %}Automatic {{ backup_status.schedule }} backup{% else %}Automatic backups disabled{% endif %}</small></span>
-      <span>{% if backup_status.latest_success %}Latest backup {{ backup_status.latest_success.completed_at|datetime }}{% else %}No successful backup recorded{% endif %}</span>
+      <span>{% if backup_status.latest_success %}Last good {{ backup_status.latest_success.completed_at|datetime }} · OK{% else %}No successful backup recorded{% endif %}</span>
     </summary>
     <div class="management-panel-body">
       <dl class="race-day-rows compact-audit-summary">
         <div><dt>Backups</dt><dd>{% if backup_status.enabled %}Enabled · daily {{ backup_status.schedule }}{% else %}Disabled{% endif %}</dd></div>
         <div><dt>Retention</dt><dd>{{ backup_status.retention_days }} days · managed backups only</dd></div>
         <div><dt>Directory</dt><dd>{% if backup_status.directory_exists %}Available{% else %}Created on next successful backup{% endif %}</dd></div>
-        <div><dt>Latest successful</dt><dd>{% if backup_status.latest_success %}{{ backup_status.latest_success.reason }} · {{ backup_status.latest_success.backup_size_bytes }} bytes · {{ backup_status.latest_success.integrity_result|upper }}{% else %}None{% endif %}</dd></div>
+        <div><dt>Latest successful</dt><dd>{% if backup_status.latest_success %}{{ backup_status.latest_success.completed_at|datetime }} · {{ backup_status.latest_success.reason }} · {{ backup_status.latest_success.backup_size_bytes }} bytes · {{ backup_status.latest_success.integrity_result|upper }}{% else %}None{% endif %}</dd></div>
         {% if backup_status.latest_failure %}<div><dt>Latest failed attempt</dt><dd class="warning-text">{{ backup_status.latest_failure.attempted_at|datetime }} · {{ backup_status.latest_failure.failure_reason }}</dd></div>{% endif %}
       </dl>
       <form action="/admin/backups/create" method="post" class="settings-action-row"><button class="button" type="submit">Create backup now</button><small class="muted">Private server-side backup only. Recovery is deliberately an offline operator procedure.</small></form>

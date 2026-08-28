@@ -319,12 +319,22 @@ def backup_status(settings: Settings | None = None) -> dict[str, object]:
         latest_failure = conn.execute(
             "SELECT * FROM backup_runs WHERE status='failed' ORDER BY attempted_at DESC,id DESC LIMIT 1"
         ).fetchone()
+    success_data = dict(latest_success) if latest_success else None
+    failure_data = dict(latest_failure) if latest_failure else None
+    unresolved_failure = bool(
+        failure_data and (
+            not success_data or str(failure_data.get("attempted_at") or "") > str(success_data.get("completed_at") or "")
+        )
+    )
     return {
         "enabled": settings.backup_enabled,
         "directory": settings.backup_dir,
         "directory_exists": Path(settings.backup_dir).is_dir(),
         "retention_days": settings.backup_retention_days,
         "schedule": f"{settings.backup_hour:02d}:{settings.backup_minute:02d}",
-        "latest_success": dict(latest_success) if latest_success else None,
-        "latest_failure": dict(latest_failure) if latest_failure else None,
+        "latest_success": success_data,
+        # Historical failures are retained in backup_runs but are not a current
+        # warning after a later successful backup has recovered service.
+        "latest_failure": failure_data if unresolved_failure else None,
+        "unresolved_failure": unresolved_failure,
     }
