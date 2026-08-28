@@ -42,6 +42,7 @@
                   {% if person.provenance_label %}<small>{{ person.provenance_label }}</small>{% endif %}
                   {% if person.possibly_missing %}<small class="warning-text">Possibly missing from latest capture</small>{% endif %}
                   {% if person.conflict_warning %}<small class="warning-text">{{ person.conflict_warning }}</small>{% endif %}
+                  {% if person.vehicle_conflict_warning %}<small class="warning-text">{{ person.vehicle_conflict_warning }}</small>{% endif %}
                 </strong>
                 <span role="cell">{{ person.vehicle_label or "-" }}</span>
               </div>
@@ -285,6 +286,7 @@
                     {% if person.provenance_label %}<small>{{ person.provenance_label }}</small>{% endif %}
                     {% if person.possibly_missing %}<small class="warning-text">Possibly missing from latest capture</small>{% endif %}
                     {% if person.conflict_warning %}<small class="warning-text">{{ person.conflict_warning }}</small>{% endif %}
+                    {% if person.vehicle_conflict_warning %}<small class="warning-text">{{ person.vehicle_conflict_warning }}</small>{% endif %}
                     {% if person.changed %}
                       <details class="crew-change-details">
                         <summary class="badge badge-warn crew-change-badge">Changed{% if person.change_time_label %} · {{ person.change_time_label }}{% endif %}</summary>
@@ -396,7 +398,7 @@
 
         {% if can_change_self_travel %}
           <section class="self-travel-control">
-            <div><strong>Travel</strong><span>{% if shift.self_travel %}Making your own way{% else %}{{ shift.underlying_vehicle_label or shift.header_vehicle_label or 'Crew transport TBC' }}{% endif %}</span></div>
+            <div><strong>Travel</strong><span>{% if shift.self_travel %}Making your own way{% else %}{{ shift.underlying_vehicle_label or shift.header_vehicle_label or 'Crew transport TBC' }}{% endif %}{% if shift.vehicle_conflict_warning and not shift.self_travel %}<small class="warning-text">{{ shift.vehicle_conflict_warning }}</small>{% endif %}</span></div>
             <form action="/day/{{ date_text }}/self-travel" method="post">
               <input type="hidden" name="event_kind" value="deputy_shift">
               <input type="hidden" name="event_id" value="{{ shift.id }}">

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import sqlite3
 from datetime import datetime, timedelta
 
 from .database import get_connection, persist_deputy_user_credentials
@@ -20,7 +21,27 @@ def create_account_invite(
     account_email: str,
     display_name: str,
     created_by: int,
-    days: int = 7,
+    days: int = 1,
+    *,
+    crew_person_id: int | None = None,
+) -> dict[str, object]:
+    with get_connection() as conn:
+        return _create_account_invite_conn(
+            conn,
+            account_email,
+            display_name,
+            created_by,
+            days,
+            crew_person_id=crew_person_id,
+        )
+
+
+def _create_account_invite_conn(
+    conn: sqlite3.Connection,
+    account_email: str,
+    display_name: str,
+    created_by: int,
+    days: int = 1,
     *,
     crew_person_id: int | None = None,
 ) -> dict[str, object]:
@@ -30,25 +51,42 @@ def create_account_invite(
     token = secrets.token_urlsafe(40)
     now = _now()
     expires = now + timedelta(days=max(1, min(days, 30)))
-    with get_connection() as conn:
-        if conn.execute("SELECT 1 FROM app_users WHERE LOWER(deputy_email)=LOWER(?)", (email,)).fetchone():
-            raise ValueError("That Re-Deputy account email is already in use.")
-        conn.execute(
-            "UPDATE account_invitations SET revoked_at=? WHERE LOWER(account_email)=LOWER(?) AND consumed_at IS NULL AND revoked_at IS NULL",
-            (now.isoformat(timespec="seconds"), email),
-        )
-        if crew_person_id is not None:
-            person = conn.execute(
-                "SELECT id,app_user_id,person_type FROM crew_people WHERE id=? AND is_active=1 AND merged_into_person_id IS NULL",
-                (crew_person_id,),
-            ).fetchone()
-            if person is None or person["app_user_id"] is not None or str(person["person_type"] or "employee") != "employee":
-                raise ValueError("Select an active, unlinked canonical crew person.")
-        cursor = conn.execute(
-            "INSERT INTO account_invitations(token_hash,account_email,display_name,created_by_user_id,created_at,expires_at,crew_person_id) VALUES(?,?,?,?,?,?,?)",
-            (_token_hash(token), email, display_name.strip(), created_by, now.isoformat(timespec="seconds"), expires.isoformat(timespec="seconds"), crew_person_id),
-        )
+    if conn.execute("SELECT 1 FROM app_users WHERE LOWER(deputy_email)=LOWER(?)", (email,)).fetchone():
+        raise ValueError("That Re-Deputy account email is already in use.")
+    conn.execute(
+        "UPDATE account_invitations SET revoked_at=? WHERE LOWER(account_email)=LOWER(?) AND consumed_at IS NULL AND revoked_at IS NULL",
+        (now.isoformat(timespec="seconds"), email),
+    )
+    if crew_person_id is not None:
+        person = conn.execute(
+            "SELECT id,app_user_id,person_type FROM crew_people WHERE id=? AND is_active=1 AND merged_into_person_id IS NULL",
+            (crew_person_id,),
+        ).fetchone()
+        if person is None or person["app_user_id"] is not None or str(person["person_type"] or "employee") != "employee":
+            raise ValueError("Select an active, unlinked canonical crew person.")
+    cursor = conn.execute(
+        "INSERT INTO account_invitations(token_hash,account_email,display_name,created_by_user_id,created_at,expires_at,crew_person_id) VALUES(?,?,?,?,?,?,?)",
+        (_token_hash(token), email, display_name.strip(), created_by, now.isoformat(timespec="seconds"), expires.isoformat(timespec="seconds"), crew_person_id),
+    )
     return {"id": int(cursor.lastrowid), "token": token, "account_email": email, "display_name": display_name.strip(), "expires_at": expires.isoformat(timespec="seconds")}
+
+
+def reissue_account_invite(invite_id: int, created_by: int) -> dict[str, object]:
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        invite = conn.execute(
+            "SELECT account_email,display_name,crew_person_id FROM account_invitations WHERE id=?",
+            (invite_id,),
+        ).fetchone()
+        if invite is None:
+            raise ValueError("Invitation not found.")
+        return _create_account_invite_conn(
+            conn,
+            str(invite["account_email"] or ""),
+            str(invite["display_name"] or ""),
+            created_by,
+            crew_person_id=int(invite["crew_person_id"]) if invite["crew_person_id"] is not None else None,
+        )
 
 
 def account_invite_details(token: str) -> dict[str, object] | None:
@@ -133,7 +171,11 @@ def delete_terminal_account_invite(invite_id: int) -> bool:
 
 
 def account_invite_admin_rows() -> list[dict[str, object]]:
+    now = _now().isoformat(timespec="seconds")
     with get_connection() as conn:
-        return [dict(row) for row in conn.execute(
+        rows = [dict(row) for row in conn.execute(
             "SELECT id,account_email,display_name,created_at,expires_at,consumed_at,revoked_at,crew_person_id FROM account_invitations ORDER BY id DESC LIMIT 30"
         )]
+    for item in rows:
+        item["available"] = not item.get("consumed_at") and not item.get("revoked_at") and str(item["expires_at"]) > now
+    return rows

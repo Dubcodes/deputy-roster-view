@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_icons.html" import ui_icon %}
 
 {% block title %}Help - Re-Deputy{% endblock %}
 
@@ -32,19 +33,19 @@
           <dd>The calendar shows Deputy shifts that belong to you and work days an admin has published to you. Available shifts are shown separately, so they should not be mistaken for work you have already been rostered for.</dd>
         </div>
         <div>
-          <dt>Calendar or list</dt>
+          <dt><span class="help-term">{{ ui_icon("month") }}{{ ui_icon("list") }}<span>Calendar / List</span></span></dt>
           <dd>The first button in the top-right corner switches between the month calendar and the month list. Its icon changes to show the view you can switch to.</dd>
         </div>
         <div>
-          <dt>Globe</dt>
+          <dt><span class="help-term">{{ ui_icon("shared") }}<span>Shared crew</span></span></dt>
           <dd>For ordinary crew and Admin accounts, opens the shared crew calendar. Contractor accounts stay personal-only and do not show this control.</dd>
         </div>
         <div>
-          <dt>Person icon</dt>
+          <dt><span class="help-term">{{ ui_icon("person") }}<span>My roster</span></span></dt>
           <dd>Appears while you are looking at the shared calendar. Tap it to return to your own roster.</dd>
         </div>
         <div>
-          <dt>Previous and next</dt>
+          <dt><span class="help-term">{{ ui_icon("previous") }}{{ ui_icon("next") }}<span>Previous / Next</span></span></dt>
           <dd>Move backward or forward by one month. You can also swipe across the calendar on a phone.</dd>
         </div>
         <div>
@@ -52,7 +53,7 @@
           <dd>Colours are based on the location, so the same track keeps the same colour within your chosen theme.</dd>
         </div>
         <div>
-          <dt>Holiday star</dt>
+          <dt><span class="help-term">{{ ui_icon("holiday") }}<span>Holiday indicator</span></span></dt>
           <dd>A star beside a date marks a New Zealand public holiday. Tap or focus it to read the holiday name. It is date information only and does not change roster hours or calculate holiday pay.</dd>
         </div>
       </dl>
@@ -82,7 +83,7 @@
           <dd>Shows the positions, people, and vehicles for that location. A muted TBC means Deputy has a position for the day but has not given us a name. On matching Travel days, the participant list combines the shared schedule with linked users whose authenticated personal roster confirms the same Travel allocation.</dd>
         </div>
         <div>
-          <dt>Changed</dt>
+          <dt><span class="badge badge-warn">Changed</span></dt>
           <dd>Means something has changed since an earlier sync. Open Change History to see the old and new details. Reading it does not clear the badge.</dd>
         </div>
         <div>
@@ -112,7 +113,7 @@
       <h2>Planning and open shifts</h2>
       <dl class="help-list">
         <div>
-          <dt>Open</dt>
+          <dt><span class="available-shift-dot help-badge-example">Open</span></dt>
           <dd>An outlined Open badge is not a confirmed shift. It may be a Deputy open shift, or a Re-Deputy open position added by an admin. A Re-Deputy position shows Apply when it is offered to your team and you are not already rostered.</dd>
         </div>
         <div>
@@ -131,13 +132,13 @@
     </article>
 
     <article class="table-panel help-panel">
-      <h2>Timesheets</h2>
+      <h2 class="help-heading-term">{{ ui_icon("timesheet") }}<span>Timesheets</span></h2>
       <p>The small clock on a Sunday opens the fortnight summary. Days you did not work stay compact, while worked days show their hours and location.</p>
       <p>Tap a day to open its full page, or open Calculation to check the hours without leaving the timesheet. Manual office and training days show their start, finish, break, and total without race-day calculations. Any private note you saved for that day is shown there too.</p>
     </article>
 
     <article class="table-panel help-panel">
-      <h2>Settings</h2>
+      <h2 class="help-heading-term">{{ ui_icon("settings") }}<span>Settings</span></h2>
       <p>Settings is intentionally kept compact. Most options stay collapsed until you open them, while roster sync status and the main sync controls remain easy to reach. Advanced Diagnostics is mainly for troubleshooting bad imports, missing Deputy data, or login problems.</p>
       <dl class="help-list">
         <div>
@@ -165,7 +166,11 @@
           <dd>An optional Deputy calendar feed that can add fallback details when a normal sync is missing something.</dd>
         </div>
         <div>
-          <dt>Logout icon</dt>
+          <dt><span class="help-term">{{ ui_icon("help") }}<span>Help</span></span></dt>
+          <dd>Opens this guide from the calendar or Settings without changing your roster.</dd>
+        </div>
+        <div>
+          <dt><span class="help-term">{{ ui_icon("logout") }}<span>Log out this device</span></span></dt>
           <dd>Removes trust from this device after you confirm. You will need your email and roster PIN to sign in again.</dd>
         </div>
       </dl>
@@ -209,7 +214,7 @@
             <div class="admin-contact-row">
               <strong>{{ admin.display_name }}</strong>
               <span>{{ admin.deputy_email }}</span>
-              <small>Last seen {{ admin.last_seen_at|datetime if admin.last_seen_at else "Never" }}</small>
+              <small>Last active {{ admin.last_seen_at|datetime("%a %d %b") if admin.last_seen_at else "Never" }}</small>
             </div>
           {% endfor %}
         </div>

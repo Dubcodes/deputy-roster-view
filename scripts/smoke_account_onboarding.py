@@ -6,6 +6,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR))
@@ -186,8 +187,21 @@ with get_connection() as conn:
 worker_login = client.post("/login", data={"deputy_email": "worker.first@example.invalid", "pin": "1234", "next_url": "/month"}, follow_redirects=False)
 assert worker_login.status_code == 303
 admin_invite = client.post("/admin/account-invitations", data={"account_email": "route.invite@company.example", "display_name": ""}, follow_redirects=False)
-assert admin_invite.status_code == 200 and "Activation link — copy now" in admin_invite.text
-assert admin_invite.headers.get("cache-control") == "private, no-store" and "location" not in admin_invite.headers
+assert admin_invite.status_code == 303
+invite_location = urlsplit(admin_invite.headers["location"])
+assert invite_location.path == "/admin" and invite_location.fragment.startswith("redeputy-invite=")
+assert "notice=" in invite_location.query and "/account/invite/" not in invite_location.query
+with get_connection() as conn:
+    route_invite_before = dict(conn.execute(
+        "SELECT * FROM account_invitations WHERE account_email='route.invite@company.example'"
+    ).fetchone())
+assert client.get(invite_location.path + "?" + invite_location.query).status_code == 200
+assert client.get(invite_location.path + "?" + invite_location.query).status_code == 200
+with get_connection() as conn:
+    route_invite_after = dict(conn.execute(
+        "SELECT * FROM account_invitations WHERE account_email='route.invite@company.example'"
+    ).fetchone())
+assert route_invite_after == route_invite_before and not route_invite_after["revoked_at"]
 invalid_reset = client.post(f"/admin/users/{manager_id}/pin", data={"pin": "1" * 33, "pin_confirm": "1" * 33}, follow_redirects=False)
 assert invalid_reset.status_code == 303 and "4%E2%80%9332" in invalid_reset.headers["location"]
 print("account onboarding smoke ok")

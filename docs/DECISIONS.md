@@ -23,6 +23,10 @@ Deputy web capture runs first. iCal then fills missing shifts for the same accou
 
 The user does not have an official API token. The app uses logged-in web capture to read the same schedule data Deputy shows in the browser. This remains read-only.
 
+## Vehicle Is An Independent Roster Fact
+
+Deputy's production, Travel, and vehicle context are not mutually exclusive categories in Re-Deputy. The normal roster representation remains separate compatible Travel/vehicle and production rows. As defensive compatibility for an unusual entry, a production row with an explicitly recorded normalized `vehicle_label` may also contribute its vehicle fact; this is not raw-schema extraction, and the real 28 August Deputy property name remains unproven. The interpreter must collect explicit current vehicle facts from all compatible rows for the same canonical person, not only rows whose Area looks like a vehicle. Equal duplicates are one fact; different current values are shown as a conflict unless a higher-priority explicit current roster note allocates the person. Authenticated personal evidence may fill only that person's matching shared blank and never silently replaces a different explicit shared value.
+
 ## Personal Roster Capture Uses Weekly Windows
 
 Deputy's logged-in shift endpoint can return only the first page/chunk when asked for one very wide date range. The app still keeps the configurable lookback/lookahead window, but fetches the user's own roster in weekly slices and merges the rows locally so future roster weeks are not silently missed.
@@ -244,6 +248,13 @@ This remains the governing boundary. Build 2026.08.13.1 implements only the cont
 
 - Inactive-user purge is transactional and schema-driven. Self-related activation/role rows may be removed, nullable evidence remains detached, and audit history for actions on other persistent records blocks purge rather than being destroyed or broadly migrated.
 - Browser-visible redirect notices remain query-based for simple server actions, but the shared base template removes only `notice` with `history.replaceState` immediately after first render. Other query parameters and the hash remain intact.
+
+# 0.5.4 Admin and invitation decisions
+
+- Admin context restoration is short-lived, tab-scoped, and one-shot. Stable disclosure keys preserve nested working context across ordinary same-page POST redirects, while fresh visits keep the normal collapsed defaults.
+- New account and contractor invitations expire after 24 hours. Refresh, GET, HEAD, or preview never replaces or consumes an invitation. Replacement requires an explicit create/reissue action, and only successful activation consumes it.
+- Plaintext invitation tokens remain client-only after creation: the redirect fragment is cleaned immediately and the link survives only in that tab's `sessionStorage`. Losing the tab does not silently reissue; the Admin must choose Reissue link.
+- Permanent workday deletion is limited to records proven never published and disposable. Retention-bearing publication, Deputy, application, visibility, personal-overlay, and notification relationships block the whole transaction.
 
 # 2026.08.13.3 release-gate decisions
 

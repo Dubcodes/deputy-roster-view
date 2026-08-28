@@ -33,6 +33,26 @@ def _payload(row: dict[str, object]) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
 
+def _explicit_vehicle_from_row(row: dict[str, object]) -> str:
+    """Read recorded normalized vehicle evidence without classifying a row.
+
+    This deliberately supports only the stable normalized compatibility keys.
+    It does not infer a value from arbitrary raw Deputy payload fields.
+    """
+    payload = _payload(row)
+    normalised = payload.get("normalised")
+    values = (
+        row.get("vehicle_label"),
+        payload.get("vehicle_label"),
+        payload.get("vehicle"),  # legacy already-normalized persisted payload
+        normalised.get("vehicle_label") if isinstance(normalised, dict) else None,
+    )
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return canonical_vehicle_label(value)
+    return ""
+
+
 def _title_parts(value: object) -> tuple[str, str]:
     text = str(value or "").strip()
     match = re.match(r"^\[([^]]+)]\s*(.*)$", text)
@@ -43,10 +63,9 @@ def _vehicle_from_row(row: dict[str, object]) -> str:
     explicit = str(row.get("resolved_vehicle") or "").strip()
     if explicit:
         return canonical_vehicle_label(explicit)
-    payload = _payload(row)
-    explicit = str(payload.get("vehicle_label") or payload.get("vehicle") or "").strip()
+    explicit = _explicit_vehicle_from_row(row)
     if explicit:
-        return canonical_vehicle_label(explicit)
+        return explicit
     _, title_role = _title_parts(row.get("title"))
     role = str(row.get("role_label") or row.get("area_name") or title_role or "").strip()
     return canonical_vehicle_label(role) if VEHICLE_RE.fullmatch(role) else ""
@@ -56,6 +75,38 @@ def _row_is_vehicle(row: dict[str, object]) -> bool:
     _, title_role = _title_parts(row.get("title"))
     role = str(row.get("role_label") or row.get("area_name") or title_role or "").strip()
     return bool(VEHICLE_RE.fullmatch(role) or re.fullmatch(r"(?:Travel|Vehicles?)", role, re.I))
+
+
+def _current_vehicle_candidates(
+    evidence: list[dict[str, object]], target_structured: list[dict[str, object]], *, owns_raw_evidence: bool,
+) -> tuple[list[str], list[dict[str, object]]]:
+    """Collect every explicit current vehicle fact for one person/workday.
+
+    Vehicle-only and production rows remain independent dimensions: a direct
+    vehicle value on a CCU1 row is just as structured as a separate Travel
+    companion.  Raw personal rows are included only for their owning identity.
+    """
+    candidates: list[tuple[str, dict[str, object]]] = []
+    for row in target_structured:
+        value = _explicit_vehicle_from_row(row)
+        if not value and _row_is_vehicle(row):
+            value = _vehicle_from_row(row)
+        if value:
+            candidates.append((value, row))
+    if owns_raw_evidence:
+        for row in evidence:
+            value = _explicit_vehicle_from_row(row)
+            if not value and _row_is_vehicle(row):
+                value = _vehicle_from_row(row)
+            if value:
+                candidates.append((value, row))
+    values: list[str] = []
+    rows: list[dict[str, object]] = []
+    for value, row in candidates:
+        if value not in values:
+            values.append(value)
+        rows.append(row)
+    return values, rows
 
 
 def _moment(value: object) -> datetime | None:
@@ -284,14 +335,11 @@ def interpret_deputy_workdays(
         owns_raw_evidence = raw_evidence_owner_identity is None or bool(
             raw_owner and _target_indexes([raw_owner], person)
         )
-        structured_vehicle = next(
-            (_vehicle_from_row(row) for row in target_structured if _row_is_vehicle(row) and _vehicle_from_row(row)), "",
+        structured_values, structured_value_rows = _current_vehicle_candidates(
+            evidence, target_structured, owns_raw_evidence=owns_raw_evidence,
         )
-        resolved_vehicle = next(
-            (str(row.get("resolved_vehicle") or "") for row in evidence if owns_raw_evidence and row.get("resolved_vehicle")), "",
-        )
-        if not structured_vehicle and owns_raw_evidence:
-            structured_vehicle = next((_vehicle_from_row(row) for row in evidence if _vehicle_from_row(row)), "")
+        structured_vehicle = structured_values[0] if len(structured_values) == 1 else ""
+        structured_conflict = len(structured_values) > 1
         resolution_people = _cohort_people(connected_structured, identities, person)
         target_indexes = _target_indexes(resolution_people, person)
         note_resolution = resolve_note_allocations(allocations_from_shifts(evidence), resolution_people)
@@ -306,11 +354,12 @@ def interpret_deputy_workdays(
         prior_vehicle, prior_source, prior_rows, prior_note_only = _preceding_vehicle(
             preceding, preceding_structured, identities, person, date_text,
         )
-        vehicle = canonical_vehicle_label(note_vehicle or resolved_vehicle or structured_vehicle or prior_vehicle)
-        vehicle_source = "current_roster_note" if note_vehicle else next(
-            (str(row.get("resolved_vehicle_provenance") or "") for row in evidence
-             if owns_raw_evidence and row.get("resolved_vehicle_provenance")),
-            "structured_deputy" if structured_vehicle else prior_source,
+        vehicle = canonical_vehicle_label(note_vehicle or structured_vehicle or prior_vehicle)
+        vehicle_source = (
+            "current_roster_note" if note_vehicle
+            else "structured_deputy_conflict" if structured_conflict
+            else "structured_deputy" if structured_vehicle
+            else prior_source
         )
         source_ids = list(dict.fromkeys(
             row.get("source_shift_id", row.get("id")) for row in evidence
@@ -327,6 +376,8 @@ def interpret_deputy_workdays(
             "vehicle": vehicle,
             "vehicle_provenance": vehicle_source,
             "structured_vehicle": structured_vehicle,
+            "vehicle_conflict": structured_conflict,
+            "vehicle_conflict_values": structured_values if structured_conflict else [],
             "roster_note_vehicle": note_vehicle,
             "rostered_start": start,
             "rostered_finish": finish,
@@ -337,7 +388,10 @@ def interpret_deputy_workdays(
             },
             "vehicle_evidence": {
                 "final": vehicle, "final_source": vehicle_source,
-                "structured_value": structured_vehicle, "structured_rows": target_structured,
+                "structured_value": structured_vehicle,
+                "structured_values": structured_values,
+                "structured_conflict": structured_conflict,
+                "structured_rows": structured_value_rows,
                 "roster_note_value": note_vehicle, "roster_note_rows": note_evidence,
                 "linked_travel_rows": [row for row in evidence + target_structured if _row_is_vehicle(row)],
                 "preceding_travel_value": prior_vehicle, "preceding_travel_rows": prior_rows,

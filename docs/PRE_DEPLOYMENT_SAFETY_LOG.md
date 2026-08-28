@@ -561,3 +561,19 @@ Regression evidence:
 * Rendered production Compose remains unchanged: no host application port, `/data/compose/22/data:/app/data`, `SIGNUP_ENABLED=true`, `COOKIE_SECURE=true`, `TRUSTED_DEVICE_LIMIT=10`, and the shared `deputy-roster-multi_default` network.
 
 No production deployment, restart, Portainer interaction, live Deputy access, or Deputy write occurred during this patch. Deputy write mode remains off by default.
+
+---
+
+## 0.5.4 Admin workflow continuity, invitations, and disposable drafts
+
+Starting release: immutable `v0.5.3` at `154f6027389357ddaabec56ba1c80f340f02cc33`.
+
+The ordinary account-invitation route returned the Admin POST response directly. Refresh could therefore resubmit creation, and the existing single-active-invite invariant revoked the pending token before inserting its replacement. Account and contractor creation now use POST → 303 → GET with a client-only fragment/session handoff; repeated GET/HEAD scans are non-mutating, new expiry is 24 hours, and replacement is explicit.
+
+Never-published draft deletion is transactional and refuses publication/version history, Deputy link/write history, or any other retained relationship identified by the `roster_days` relationship audit. Draft-only assignments, Open/TBC rows, and audit children delete through declared cascades with foreign keys enabled. Expected blocked/missing outcomes return ordinary Admin notices.
+
+Admin same-page actions restore nested disclosures and approximate scroll once from short-lived `sessionStorage`. Locations use five compact desktop columns and stack on phones; revoked devices are collapsed without deletion; Manual overrides is collapsed; Help reuses the application's icon geometry and shows Admin activity date-only.
+
+Focused validation is committed in `smoke_patch_054.py`, `smoke_admin_context.js`, and `smoke_admin_invitations.js`. Final canonical, responsive, Compose, integrity/FK, and exact-SHA CI evidence is recorded in the release handoff after those gates pass. No production deployment or Deputy write is authorized by this release.
+
+Vehicle correctness is release-ready as a narrow interpretation change. The two confirmed code-level loss points were the interpreter's fixed vehicle-only selection and its `_row_is_vehicle()` filter, which ignored explicit normalized vehicle evidence on a production row. The real 28 August Deputy JSON property name was not independently captured; `vehicle: "684"` is only a sanitized/synthetic normalized fixture, not a proven live schema. Accordingly, Re-Deputy does not add speculative raw capture parsing. The normal primary representation remains separate Travel/vehicle and production rows. The interpreter also accepts an already-recorded normalized vehicle label on a production row, deduplicates equal current values, surfaces different current values as `structured_deputy_conflict`, lets an explicit current roster note resolve that conflict, and applies preceding Travel only if no current explicit vehicle remains. Owner-scoped personal evidence fills only its matching shared blank and cannot overwrite an explicit conflicting shared value or leak to another person. `smoke_vehicle_combined_rows.py` covers the split/combined, conflict, privacy, changed/removed, and self-travel-preservation interpretation matrix; it is registered in the release gate. No further production evidence is required for this release. No production deployment or Deputy write occurred.

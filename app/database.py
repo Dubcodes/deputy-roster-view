@@ -3393,6 +3393,102 @@ def get_roster_day(roster_day_id: int) -> sqlite3.Row | None:
         ).fetchone()
 
 
+def _never_published_draft_blockers_conn(
+    conn: sqlite3.Connection,
+    roster_day_id: int,
+    row: sqlite3.Row,
+) -> list[str]:
+    blockers: list[str] = []
+    if (
+        str(row["status"] or "") != "draft"
+        or str(row["published_snapshot"] or "").strip()
+        or str(row["published_at"] or "").strip()
+        or row["published_by_user_id"] is not None
+        or conn.execute("SELECT 1 FROM roster_day_versions WHERE roster_day_id=? LIMIT 1", (roster_day_id,)).fetchone()
+    ):
+        blockers.append("published workday history")
+    if str(row["linked_deputy_event_id"] or "").strip() or str(row["duplicate_resolution"] or "") == "linked":
+        blockers.append("linked Deputy event evidence")
+    retained_checks = (
+        ("Deputy roster link history", "SELECT 1 FROM deputy_roster_links WHERE workday_id=? LIMIT 1", (roster_day_id,)),
+        ("Deputy write-operation history", "SELECT 1 FROM deputy_write_operations WHERE workday_id=? LIMIT 1", (roster_day_id,)),
+        ("open-position application history", "SELECT 1 FROM workday_open_position_applications WHERE roster_day_id=? LIMIT 1", (roster_day_id,)),
+        ("published user visibility", "SELECT 1 FROM workday_user_visibility WHERE roster_day_id=? LIMIT 1", (roster_day_id,)),
+        (
+            "personal travel preferences",
+            "SELECT 1 FROM user_event_transport_preferences WHERE event_kind='manual_workday' AND event_id=? LIMIT 1",
+            (str(roster_day_id),),
+        ),
+        (
+            "personal travel audit history",
+            "SELECT 1 FROM user_event_transport_preference_audit WHERE event_kind='manual_workday' AND event_id=? LIMIT 1",
+            (str(roster_day_id),),
+        ),
+        (
+            "personal time overrides",
+            "SELECT 1 FROM user_event_time_overrides WHERE event_kind='manual_workday' AND event_id=? LIMIT 1",
+            (str(roster_day_id),),
+        ),
+        (
+            "notification history",
+            """SELECT 1 FROM notification_events
+               WHERE workday_kind='manual' AND (workday_id=? OR workday_id LIKE ?) LIMIT 1""",
+            (str(roster_day_id), f"{roster_day_id}:%"),
+        ),
+    )
+    blockers.extend(label for label, sql, params in retained_checks if conn.execute(sql, params).fetchone())
+    return blockers
+
+
+def never_published_draft_deletion_status(roster_day_id: int) -> dict[str, object]:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM roster_days WHERE id=?", (roster_day_id,)).fetchone()
+        if row is None:
+            return {"status": "not_found", "allowed": False, "reason": "Workday draft not found."}
+        blockers = _never_published_draft_blockers_conn(conn, roster_day_id, row)
+    return {
+        "status": "eligible" if not blockers else "blocked",
+        "allowed": not blockers,
+        "reason": "" if not blockers else "This workday cannot be deleted because it has " + "; ".join(blockers) + ".",
+    }
+
+
+def delete_never_published_roster_day(roster_day_id: int) -> dict[str, object]:
+    try:
+        with get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM roster_days WHERE id=?", (roster_day_id,)).fetchone()
+            if row is None:
+                return {"status": "not_found", "deleted": False, "reason": "Workday draft not found."}
+            blockers = _never_published_draft_blockers_conn(conn, roster_day_id, row)
+            if blockers:
+                return {
+                    "status": "blocked",
+                    "deleted": False,
+                    "reason": "This workday cannot be deleted because it has " + "; ".join(blockers) + ".",
+                }
+            assignment_count = int(conn.execute(
+                "SELECT COUNT(*) FROM workday_assignments WHERE roster_day_id=?", (roster_day_id,)
+            ).fetchone()[0])
+            audit_count = int(conn.execute(
+                "SELECT COUNT(*) FROM workday_audit_events WHERE roster_day_id=?", (roster_day_id,)
+            ).fetchone()[0])
+            deleted = conn.execute("DELETE FROM roster_days WHERE id=?", (roster_day_id,)).rowcount
+        return {
+            "status": "deleted",
+            "deleted": bool(deleted),
+            "reason": "",
+            "assignments": assignment_count,
+            "audit_events": audit_count,
+        }
+    except sqlite3.IntegrityError:
+        return {
+            "status": "blocked",
+            "deleted": False,
+            "reason": "This workday cannot be deleted because retained history still references it.",
+        }
+
+
 def get_roster_day_assignments(roster_day_id: int) -> list[dict[str, object]]:
     with get_connection() as conn:
         rows = [dict(row) for row in conn.execute(

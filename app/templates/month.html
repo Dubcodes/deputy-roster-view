@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_icons.html" import ui_icon %}
 {% from "_holiday_marker.html" import holiday_marker %}
 
 {% block title %}{{ month_name }} - Re-Deputy{% endblock %}
@@ -180,7 +181,7 @@
               {% endfor %}
               {% if timesheet %}
                 <a class="timesheet-dot" href="{{ timesheet.url }}" aria-label="Timesheet submission summary">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+                  {{ ui_icon("timesheet") }}
                 </a>
               {% endif %}
             </div>

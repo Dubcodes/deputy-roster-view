@@ -49,29 +49,51 @@
     </div>
   </section>
 
-  <details class="table-panel"{% if new_account_invite_url %} open{% endif %}>
+  <details class="table-panel" data-admin-disclosure-key="accounts">
     <summary class="management-panel-summary"><span><strong>Accounts &amp; access</strong><small>Users, invitations, and restricted contractors</small></span><span>{{ users|length }} users</span></summary>
     <div class="management-panel-body">
       <p><a class="button button-secondary button-compact" href="#admin-users">Manage users and trusted devices</a></p>
-      <details{% if new_account_invite_url %} open{% endif %}><summary>Re-Deputy account invitations</summary>
-        {% if new_account_invite_url %}<div class="copy-panel"><label class="form-row"><span>Activation link — copy now</span><input value="{{ new_account_invite_url }}" readonly></label></div>{% endif %}
+      <details data-admin-disclosure-key="account-invitations"><summary>Re-Deputy account invitations</summary>
         <form class="settings-form compact-settings-form" action="/admin/account-invitations" method="post">
           <label class="form-row"><span>Account email</span><input type="email" name="account_email" required></label>
           <label class="form-row"><span>Display name (optional)</span><input name="display_name" autocomplete="name"></label>
           <label class="form-row"><span>Link to existing crew person (optional)</span><select name="crew_person_id"><option value="">Account only</option>{% for person in unlinked_crew_people if person.person_type != 'contractor' %}<option value="{{ person.id }}">{{ person.canonical_display_name }}</option>{% endfor %}</select></label>
           <button class="button" type="submit">Create account invitation</button>
         </form>
-        {% for invite in account_invitations %}<div class="admin-device-row"><span><strong>{{ invite.display_name or invite.account_email }}</strong><small>{{ invite.account_email }} · expires {{ invite.expires_at|datetime }}{% if invite.crew_person_id %} · explicit crew link{% endif %}{% if invite.consumed_at %} · consumed{% elif invite.revoked_at %} · revoked{% endif %}</small></span>{% if not invite.consumed_at and not invite.revoked_at %}<form action="/admin/account-invitations/{{ invite.id }}/revoke" method="post"><button class="button button-secondary button-compact">Revoke</button></form>{% else %}<form action="/admin/account-invitations/{{ invite.id }}/delete" method="post"><button class="button button-quiet button-compact">Remove record</button></form>{% endif %}</div>{% endfor %}
+        <p class="muted">New links expire after 24 hours. Refreshing or previewing a link does not replace or consume it.</p>
+        {% for invite in account_invitations %}
+          <article class="admin-invite-row" data-invite-row data-invite-key="account:{{ invite.id }}" data-invite-kind="account" data-invite-id="{{ invite.id }}" data-invite-expires-at="{{ invite.expires_at }}" data-invite-available="{{ 'true' if invite.available else 'false' }}">
+            <div><strong>{{ invite.display_name or invite.account_email }}</strong><small>{{ invite.account_email }} · expires {{ invite.expires_at|datetime }}{% if invite.crew_person_id %} · explicit crew link{% endif %}{% if invite.consumed_at %} · consumed{% elif invite.revoked_at %} · revoked{% elif not invite.available %} · expired{% endif %}</small></div>
+            {% if invite.available %}
+              <div class="admin-invite-link" data-invite-link hidden><input type="text" readonly aria-label="Activation link for {{ invite.display_name or invite.account_email }}" data-invite-link-input><button class="button button-compact" type="button" data-invite-copy>Copy link</button></div>
+              <small class="muted" data-invite-link-missing>Pending invitation · activation link is not available in this browser session.</small>
+              <small class="muted" data-invite-countdown></small>
+              <div class="admin-invite-actions"><form action="/admin/account-invitations/{{ invite.id }}/revoke" method="post"><button class="button button-secondary button-compact">Revoke</button></form><form action="/admin/account-invitations/{{ invite.id }}/reissue" method="post" onsubmit="return confirm('Reissue this invitation? The existing activation link will stop working.');"><button class="button button-quiet button-compact">Reissue link</button></form></div>
+            {% else %}
+              <form action="/admin/account-invitations/{{ invite.id }}/delete" method="post"><button class="button button-quiet button-compact">Remove record</button></form>
+            {% endif %}
+          </article>
+        {% endfor %}
       </details>
-      <details><summary>Contractors · {{ contractors.accounts|length }} accounts</summary>
+      <details data-admin-disclosure-key="contractors"><summary>Contractors · {{ contractors.accounts|length }} accounts</summary>
         <form class="settings-form compact-settings-form" action="/admin/contractors/invites" method="post">
           <label class="form-row"><span>Name</span><input name="contractor_name" autocomplete="name" required></label>
           <label class="form-row"><span>Company / organisation (optional)</span><input name="company" autocomplete="organization"></label>
           <button class="button" type="submit">Create contractor invite</button>
         </form>
         {% if contractors.accounts %}<form class="settings-form compact-settings-form" action="/admin/contractors/invites" method="post"><label class="form-row"><span>Replacement invitation</span><select name="replacement_person_id" required><option value="">Choose contractor…</option>{% for account in contractors.accounts %}<option value="{{ account.contractor_person_id }}">{{ account.display_name }}{% if account.company %} · {{ account.company }}{% endif %}</option>{% endfor %}</select></label><button class="button button-secondary" type="submit">Create replacement invite</button></form>{% endif %}
-        <p class="muted">Contractors are external crew identities with personal-only access. Invite links expire after 7 days and are displayed once.</p>
-        {% for invite in contractors.invites %}<div class="admin-device-row"><span><strong>{{ invite.canonical_display_name }}</strong><small>{% if invite.company %}{{ invite.company }} · {% endif %}expires {{ invite.expires_at|datetime }}{% if invite.consumed_at %} · consumed{% elif invite.revoked_at %} · revoked{% endif %}</small></span>{% if not invite.consumed_at and not invite.revoked_at %}<form action="/admin/contractors/invites/{{ invite.id }}/revoke" method="post"><button class="button button-secondary button-compact">Revoke</button></form>{% endif %}</div>{% endfor %}
+        <p class="muted">Contractors are external crew identities with personal-only access. New links expire after 24 hours and remain pending until successful activation, explicit revoke/reissue, or expiry.</p>
+        {% for invite in contractors.invites %}
+          <article class="admin-invite-row" data-invite-row data-invite-key="contractor:{{ invite.id }}" data-invite-kind="contractor" data-invite-id="{{ invite.id }}" data-invite-expires-at="{{ invite.expires_at }}" data-invite-available="{{ 'true' if invite.available else 'false' }}">
+            <div><strong>{{ invite.canonical_display_name }}</strong><small>{% if invite.company %}{{ invite.company }} · {% endif %}expires {{ invite.expires_at|datetime }}{% if invite.consumed_at %} · consumed{% elif invite.revoked_at %} · revoked{% elif not invite.available %} · expired{% endif %}</small></div>
+            {% if invite.available %}
+              <div class="admin-invite-link" data-invite-link hidden><input type="text" readonly aria-label="Contractor activation link for {{ invite.canonical_display_name }}" data-invite-link-input><button class="button button-compact" type="button" data-invite-copy>Copy link</button></div>
+              <small class="muted" data-invite-link-missing>Pending invitation · activation link is not available in this browser session.</small>
+              <small class="muted" data-invite-countdown></small>
+              <div class="admin-invite-actions"><form action="/admin/contractors/invites/{{ invite.id }}/revoke" method="post"><button class="button button-secondary button-compact">Revoke</button></form><form action="/admin/contractors/invites/{{ invite.id }}/reissue" method="post" onsubmit="return confirm('Reissue this contractor invitation? The existing activation link will stop working.');"><button class="button button-quiet button-compact">Reissue link</button></form></div>
+            {% endif %}
+          </article>
+        {% endfor %}
       </details>
     </div>
   </details>
@@ -125,26 +147,29 @@
     </article>
   </section>
 
-  <section class="table-panel roster-day-admin-panel">
-    <div class="section-heading">
-      <h2>Manual work days</h2>
-      <a class="button button-secondary button-compact" href="/admin/roster-days/new">New work day</a>
-    </div>
+  <details class="table-panel roster-day-admin-panel" id="manual-work-days" data-admin-disclosure-key="manual-work-days">
+    <summary class="management-panel-summary"><span><strong>Manual work days</strong><small>Draft, review, and publish local workdays</small></span><span>{{ roster_days|length }} work days</span></summary>
+    <div class="management-panel-body">
+    <p><a class="button button-secondary button-compact" href="/admin/roster-days/new">New work day</a></p>
     <p class="muted">Drafts stay private. Published versions appear for assigned crew and remain independent of Deputy.</p>
     {% if roster_days %}
       <div class="roster-day-admin-list">
         {% for roster_day in roster_days %}
-          <a href="/admin/roster-days/{{ roster_day.id }}">
-            <span><strong>{{ roster_day.roster_date }}</strong> · {{ roster_day.title or roster_day.track_label }}</span>
-            <span>{{ roster_day.day_type|replace('_', ' ')|title }} · {{ roster_day.assignment_count }} rows</span>
-            <span class="badge{% if roster_day.status == 'changes_pending' %} badge-warn{% endif %}">{{ roster_day.status|replace('_', ' ')|title }}</span>
-          </a>
+          <div class="roster-day-admin-row">
+            <a href="/admin/roster-days/{{ roster_day.id }}">
+              <span><strong>{{ roster_day.roster_date }}</strong> · {{ roster_day.title or roster_day.track_label }}</span>
+              <span>{{ roster_day.day_type|replace('_', ' ')|title }} · {{ roster_day.assignment_count }} rows</span>
+              <span class="badge{% if roster_day.status == 'changes_pending' %} badge-warn{% endif %}">{{ roster_day.status|replace('_', ' ')|title }}</span>
+            </a>
+            {% if roster_day.draft_deletion.allowed %}<form action="/admin/roster-days/{{ roster_day.id }}/delete" method="post" data-confirm-message="Delete this unpublished {{ (roster_day.title or roster_day.track_label or 'work day')|e }} draft for {{ roster_day.roster_date|datetime('%d %b %Y') }}? This cannot be undone." onsubmit="return confirm(this.dataset.confirmMessage);"><button class="button button-danger button-compact" type="submit">Delete draft</button></form>{% endif %}
+          </div>
         {% endfor %}
       </div>
     {% else %}
       <div class="empty-state">No manual workday drafts yet.</div>
     {% endif %}
-  </section>
+    </div>
+  </details>
 
   <section class="table-panel admin-maintenance-panel">
     <div class="section-heading">
@@ -568,7 +593,7 @@
     <p class="muted">Push endpoints and encryption keys remain hidden. Failed or expired devices are handled by the delivery worker.</p>
     {% if notification_summary.identity_diagnostic %}<p class="notice-inline">{{ notification_summary.identity_diagnostic }}</p>{% endif %}
   </details>
-  <details class="table-panel location-management-panel">
+  <details class="table-panel location-management-panel" data-admin-disclosure-key="locations">
     <summary class="management-panel-summary">
       <span><strong>Locations</strong><small>{{ planning_location_enabled_count }} of {{ planning_locations|length }} planning locations active</small></span>
       <span>Manage locations and travel</span>
@@ -576,7 +601,7 @@
     <div class="management-panel-body">
     <p class="muted">Active controls Love Racing planning hints only. Deputy shifts always remain visible. Save separate journeys from the office or each hotel used for a track.</p>
 
-    <details class="location-travel-entry">
+    <details class="location-travel-entry" data-admin-disclosure-key="location-add">
       <summary>Add a location, office, or hotel travel time</summary>
       <div class="location-travel-entry-body">
         <p class="muted">Office and Clow Place are the same base. Use the hotel’s real name so several hotels at the same track can each keep their own travel time.</p>
@@ -611,14 +636,12 @@
     {% else %}
       <div class="location-management-list">
         <div class="location-management-head" aria-hidden="true">
-          <span>Location</span><span>Details</span><span>Travel</span><span>Source</span><span>Seen</span><span>Actions</span>
+          <span>Location + details</span><span>Travel</span><span>Source / evidence</span><span>Team / active</span><span>Actions</span>
         </div>
         {% for location in location_rows %}
           <article class="location-management-row{% if location.planning_enabled is sameas false %} is-inactive{% endif %}">
             <div class="location-cell location-name-cell" data-label="Location">
               <strong>{{ location.display_name }}</strong>
-            </div>
-            <div class="location-cell" data-label="Details">
               {% if location.meeting_count %}
                 <span>{{ location.club_names or "NZTR calendar" }}</span>
                 <small>{{ location.meeting_count }} future date{% if location.meeting_count != 1 %}s{% endif %}</small>
@@ -636,12 +659,10 @@
                 <span class="muted">Not set</span>
               {% endif %}
             </div>
-            <div class="location-cell location-source-cell" data-label="Source">
+            <div class="location-cell location-source-cell" data-label="Source / evidence">
               {% for source in location.source_labels %}<span class="badge">{{ source }}</span>{% endfor %}
-            </div>
-            <div class="location-cell" data-label="Seen">
               {% if location.meeting_count %}
-                <span>{{ location.first_date }} to {{ location.last_date }}</span>
+                <small>Seen {{ location.first_date }} to {{ location.last_date }}</small>
               {% endif %}
               {% for item in location.travel_defaults %}
                 <small>
@@ -649,21 +670,23 @@
                 </small>
               {% endfor %}
             </div>
-            <div class="location-cell location-actions-cell" data-label="Actions">
+            <div class="location-cell location-state-cell" data-label="Team / active">
               <form class="location-active-form" action="/admin/location-team" method="post">
                 <input type="hidden" name="location_key" value="{{ location.location_key }}"><input type="hidden" name="location_label" value="{{ location.display_name }}">
-                <label><span class="visually-hidden">Primary team</span><select name="team_id" onchange="this.form.submit()"><option value="">No team</option>{% for team in crew_teams if team.active %}<option value="{{ team.id }}"{% if location.primary_team_id == team.id %} selected{% endif %}>{{ team.display_name }}</option>{% endfor %}</select></label>
+                <label><span class="visually-hidden">Primary team</span><select name="team_id" onchange="this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit()"><option value="">No team</option>{% for team in crew_teams if team.active %}<option value="{{ team.id }}"{% if location.primary_team_id == team.id %} selected{% endif %}>{{ team.display_name }}</option>{% endfor %}</select></label>
               </form>
               {% if location.planning_enabled is not none %}
                 <form class="location-active-form" action="/admin/planning-locations" method="post">
                   <input type="hidden" name="location_key" value="{{ location.location_key }}">
                   <label class="planning-location-toggle">
-                    <input type="checkbox" name="enabled" value="1"{% if location.planning_enabled %} checked{% endif %} onchange="this.form.submit()">
+                    <input type="checkbox" name="enabled" value="1"{% if location.planning_enabled %} checked{% endif %} onchange="this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit()">
                     <span>{{ "Active" if location.planning_enabled else "Inactive" }}</span>
                   </label>
                 </form>
               {% endif %}
-              <details class="inline-settings-details compact-row-details">
+            </div>
+            <div class="location-cell location-actions-cell" data-label="Actions">
+              <details class="inline-settings-details compact-row-details" data-admin-disclosure-key="location-{{ location.location_key }}-add">
                 <summary class="button button-compact button-secondary">Add hotel/base</summary>
                 <form class="settings-form compact-settings-form" action="/admin/travel-defaults" method="post">
                   <input type="hidden" name="track_label" value="{{ location.display_name }}">
@@ -684,7 +707,7 @@
               </details>
               {% for item in location.travel_defaults %}
                 <div class="location-travel-actions">
-                  <details class="inline-settings-details compact-row-details">
+                  <details class="inline-settings-details compact-row-details" data-admin-disclosure-key="travel-default-{{ item.id }}-edit">
                     <summary class="button button-compact button-secondary">Edit {{ item.base_label }}</summary>
                     <form class="settings-form compact-settings-form" action="/admin/travel-defaults/{{ item.id }}/edit" method="post">
                       <label class="form-row">
@@ -781,12 +804,12 @@
 
   <dialog class="builder-duplicate-dialog" data-create-team-dialog><form method="dialog"><h2>Create new team?</h2><p><strong data-create-team-name></strong> does not currently exist.</p><p>This will create the team and assign <strong data-create-team-person></strong> to it.</p><div class="dialog-actions"><button class="button button-secondary" value="cancel">Cancel</button><button class="button" value="create" data-confirm-create-team>Create team</button></div></form></dialog>
 
-  <details class="table-panel" id="admin-users">
+  <details class="table-panel" id="admin-users" data-admin-disclosure-key="users">
     <summary class="management-panel-summary"><span><strong>Users</strong><small>{{ users|length }} accounts</small></span><span>Devices, login, PIN, and account controls</span></summary>
     <div class="management-panel-body">
     <div class="admin-user-list">
       {% for user in users %}
-        <details class="admin-user-row">
+        <details class="admin-user-row" data-admin-disclosure-key="user-{{ user.id }}">
           <summary>
             <span>
             <strong>{{ user.display_name or user.deputy_email }}</strong>
@@ -845,24 +868,38 @@
                 <p class="muted">No devices recorded.</p>
               {% else %}
                 <div class="admin-device-list">
-                  {% for device in user.devices %}
-                    <article class="admin-device-row{% if device.revoked_at %} is-revoked{% endif %}">
+                  {% for device in user.active_device_rows %}
+                    <article class="admin-device-row">
                       <div>
                         <strong>{{ device.label or "Trusted device" }}</strong>
                         <p>{{ device.user_agent or "Unknown browser" }}</p>
                         <small>Last seen {{ device.last_seen_at|datetime if device.last_seen_at else "Never" }} · Expires {{ device.expires_at|datetime if device.expires_at else "Unknown" }}</small>
-                        {% if device.revoked_at %}
-                          <small>Revoked {{ device.revoked_at|datetime }}</small>
-                        {% endif %}
                       </div>
-                      {% if not device.revoked_at %}
-                        <form action="/admin/users/{{ user.id }}/devices/{{ device.id }}/revoke" method="post">
-                          <button class="button button-compact button-secondary" type="submit">Untrust</button>
-                        </form>
-                      {% endif %}
+                      <form action="/admin/users/{{ user.id }}/devices/{{ device.id }}/revoke" method="post">
+                        <button class="button button-compact button-secondary" type="submit">Untrust</button>
+                      </form>
                     </article>
+                  {% else %}
+                    <p class="muted">No currently trusted devices.</p>
                   {% endfor %}
                 </div>
+                {% if user.revoked_device_rows %}
+                  <details class="previous-devices" data-admin-disclosure-key="user-{{ user.id }}-previous-devices">
+                    <summary>Previously trusted devices · {{ user.revoked_device_rows|length }}</summary>
+                    <div class="admin-device-list">
+                      {% for device in user.revoked_device_rows %}
+                        <article class="admin-device-row is-revoked">
+                          <div>
+                            <strong>{{ device.label or "Trusted device" }}</strong>
+                            <p>{{ device.user_agent or "Unknown browser" }}</p>
+                            <small>Last seen {{ device.last_seen_at|datetime if device.last_seen_at else "Never" }} · Expires {{ device.expires_at|datetime if device.expires_at else "Unknown" }}</small>
+                            <small>Revoked {{ device.revoked_at|datetime }}</small>
+                          </div>
+                        </article>
+                      {% endfor %}
+                    </div>
+                  </details>
+                {% endif %}
               {% endif %}
             </section>
 
@@ -966,9 +1003,11 @@
     </div>
   </details>
 
-  <section class="table-panel">
+  <details class="table-panel" data-admin-disclosure-key="manual-overrides">
+    <summary class="management-panel-summary"><span><strong>Manual overrides</strong><small>Add, review, replace, or disable timing corrections</small></span><span>{{ active_override_count }} active</span></summary>
+    <div class="management-panel-body">
     <div class="section-heading">
-      <h2>Add Manual Override</h2>
+      <h2>Add manual override</h2>
     </div>
     <form class="marks-form admin-override-form" action="/admin/overrides" method="post">
       <div class="form-grid-two">
@@ -1001,10 +1040,9 @@
       </label>
       <button class="button" type="submit">Record Override</button>
     </form>
-  </section>
 
-  <details class="table-panel">
-    <summary>Override Audit</summary>
+  <details class="inline-settings-details" data-admin-disclosure-key="manual-overrides-audit">
+    <summary>Override audit</summary>
     {% if not overrides %}
       <div class="empty-state">No manual overrides recorded yet.</div>
     {% else %}
@@ -1052,6 +1090,8 @@
         {% endfor %}
       </div>
     {% endif %}
+  </details>
+    </div>
   </details>
 {% endblock %}
 
@@ -1263,4 +1303,6 @@
       });
     })();
   </script>
+  <script src="/static/admin-context.js?v={{ app_build }}"></script>
+  <script src="/static/admin-invitations.js?v={{ app_build }}"></script>
 {% endblock %}

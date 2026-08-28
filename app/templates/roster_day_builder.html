@@ -95,6 +95,11 @@
           <button class="button" type="submit">{% if incomplete_warnings or vehicle_conflicts %}Publish anyway{% else %}Publish work day{% endif %}</button>
         </form>
       {% endif %}
+      {% if roster_day.id and draft_deletion.allowed %}
+        <form action="/admin/roster-days/{{ roster_day.id }}/delete" method="post" data-confirm-message="Delete this unpublished {{ (roster_day.title or roster_day.track_label or 'work day')|e }} draft for {{ roster_day.roster_date|datetime('%d %b %Y') }}? This cannot be undone." onsubmit="return confirm(this.dataset.confirmMessage);">
+          <button class="button button-danger" type="submit">Delete draft</button>
+        </form>
+      {% endif %}
     </div>
   </section>
 
@@ -107,7 +112,7 @@
       <div class="section-heading"><h2>Publish review</h2><span>{{ roster_day.day_type|replace('_', ' ')|title }}</span></div>
       <dl class="race-day-rows">
         <div><dt>Date</dt><dd>{{ roster_day.roster_date }}</dd></div>
-        <div><dt>Location</dt><dd>{{ roster_day.custom_location or roster_day.track_label or 'Not set' }}</dd></div>
+        <div><dt>Location</dt><dd>{{ roster_day.display_location or 'Not set' }}</dd></div>
         <div><dt>Time</dt><dd>{{ roster_day.office_start or 'TBC' }}{% if roster_day.end_time %}–{{ roster_day.end_time }}{% endif %}</dd></div>
         <div><dt>Assigned</dt><dd>{{ review_summary.assigned_count }}{% if review_summary.roleless_count %} · {{ review_summary.roleless_count }} attending without a role{% endif %}</dd></div>
         <div><dt>Open roles</dt><dd>{{ review_summary.open_count }}</dd></div>

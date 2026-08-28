@@ -139,6 +139,14 @@ The route smoke also verifies that Office/Clow Place travel defaults collapse to
 The self-travel smoke confirms owner-only today/future authorization, stable identity linkage, reversible local overlay, preservation of a later roster vehicle update, append-only preference audit, and isolation from Deputy evidence and Changed state. The responsive builder smoke covers 1280px, 430px, 375px, and 320px widths.
 
 `python scripts\smoke_notifications.py` covers truck-time payloads, multiple devices, owner isolation, reminders, published-manual changes and cancellation, scheduled tests, deduplication, draft exclusion, open-position push filtering, and safe service-worker links.
+
+## 0.5.4 focused checks
+
+`python scripts\smoke_patch_054.py` covers invitation POST → 303 → GET, same-token refresh stability, read-only repeated GET/HEAD scans, failed and successful activation, explicit reissue, 24-hour expiry, hash-only persistence, eligible and blocked workday-draft deletion, child cleanup, authorization, FK integrity, the Avondale review-location regression, and the compact Admin/Help structure.
+
+`node scripts\smoke_admin_context.js` covers nested disclosure keys, scroll restoration, two-minute expiry, one-shot consumption, eligible form boundaries, and the Manual work days return fragment. `node scripts\smoke_admin_invitations.js` covers fragment cleanup, tab-session refresh persistence, countdowns, and terminal/missing-row token cleanup. Both are part of the canonical release gate.
+
+`python scripts\smoke_vehicle_combined_rows.py` covers Re-Deputy's interpretation contract: the primary historic split Travel/684 + CCU1 representation; a synthetic normalized combined `CCU1` + `vehicle_label=684` compatibility input; duplicate and blank companions; current structured conflicts; roster-note precedence; owner-only personal enrichment; unrelated people; changed/removed assignments; and preceding-Travel fallback. It does not prove Deputy's live JSON property name. It is part of the canonical release gate.
 # 2026.08.13.1 focused checks
 
 `python scripts/smoke_release_integration.py` uses a disposable SQLite database and mocked Deputy HTTP. It covers idempotent migration, personal start/finish and notification payloads, hash-only contractor invites, activation/replay/expiry/revocation/PIN login, contractor route and own-day authorization, OAuth state hashing/replay, encrypted tokens/secrets, own-user readiness, one POST plus GET verification, durable Roster linking, and duplicate-create prevention.

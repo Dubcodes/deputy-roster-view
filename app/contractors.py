@@ -17,7 +17,7 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def create_contractor_invite(name: str, company: str, created_by: int, days: int = 7) -> dict[str, object]:
+def create_contractor_invite(name: str, company: str, created_by: int, days: int = 1) -> dict[str, object]:
     display_name = " ".join(str(name or "").split())
     organisation = " ".join(str(company or "").split())
     if not display_name:
@@ -35,7 +35,7 @@ def create_contractor_invite(name: str, company: str, created_by: int, days: int
         return _create_invite_conn(conn, person_id, created_by, days)
 
 
-def create_invite(person_id: int, created_by: int, days: int = 7) -> dict[str, object]:
+def create_invite(person_id: int, created_by: int, days: int = 1) -> dict[str, object]:
     with get_connection() as conn:
         return _create_invite_conn(conn, person_id, created_by, days)
 
@@ -44,7 +44,7 @@ def _create_invite_conn(
     conn: sqlite3.Connection,
     person_id: int,
     created_by: int,
-    days: int = 7,
+    days: int = 1,
 ) -> dict[str, object]:
     token = secrets.token_urlsafe(40)
     now = _now()
@@ -62,6 +62,15 @@ def _create_invite_conn(
     cursor = conn.execute("INSERT INTO contractor_invites(token_hash,crew_person_id,created_by_user_id,created_at,expires_at) VALUES(?,?,?,?,?)",
                           (_token_hash(token), person_id, created_by, now.isoformat(timespec="seconds"), expires.isoformat(timespec="seconds")))
     return {"id": int(cursor.lastrowid), "token": token, "person_name": str(person["canonical_display_name"]), "expires_at": expires.isoformat(timespec="seconds")}
+
+
+def reissue_invite(invite_id: int, created_by: int) -> dict[str, object]:
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        invite = conn.execute("SELECT crew_person_id FROM contractor_invites WHERE id=?", (invite_id,)).fetchone()
+        if invite is None:
+            raise ValueError("Contractor invitation not found.")
+        return _create_invite_conn(conn, int(invite["crew_person_id"]), created_by)
 
 
 def invite_details(token: str) -> dict[str, object] | None:
@@ -119,12 +128,15 @@ def revoke_invite(invite_id: int) -> None:
 
 
 def contractor_admin_rows() -> dict[str, list[dict[str, object]]]:
+    now = _now().isoformat(timespec="seconds")
     with get_connection() as conn:
-        invites = [dict(r) for r in conn.execute("""SELECT i.id,i.created_at,i.expires_at,i.consumed_at,i.revoked_at,p.canonical_display_name,p.company
+        invites = [dict(r) for r in conn.execute("""SELECT i.id,i.crew_person_id,i.created_at,i.expires_at,i.consumed_at,i.revoked_at,p.canonical_display_name,p.company
                                                    FROM contractor_invites i JOIN crew_people p ON p.id=i.crew_person_id ORDER BY i.id DESC LIMIT 30""")]
         accounts = [dict(r) for r in conn.execute("""SELECT u.id,u.display_name,u.is_active,u.last_activity_at,u.contractor_person_id,p.company
                                                      FROM app_users u LEFT JOIN crew_people p ON p.id=u.contractor_person_id
                                                      WHERE u.account_type='contractor' ORDER BY u.display_name""")]
+    for item in invites:
+        item["available"] = not item.get("consumed_at") and not item.get("revoked_at") and str(item["expires_at"]) > now
     return {"invites": invites, "accounts": accounts}
 
 

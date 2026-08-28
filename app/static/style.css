@@ -1014,6 +1014,17 @@ a {
   background: var(--surface-soft);
 }
 
+.button-danger {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.button-danger:hover {
+  background: var(--danger-bg);
+  filter: brightness(1.12);
+}
+
 .button-compact {
   min-height: 34px;
   padding: 6px 10px;
@@ -2987,6 +2998,23 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.previous-devices {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.previous-devices > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 850;
+}
+
+.previous-devices > .admin-device-list {
+  margin-top: 8px;
+}
+
 .admin-pin-form {
   max-width: 260px;
 }
@@ -3126,6 +3154,29 @@ textarea {
   color: var(--muted);
 }
 
+.help-term,
+.help-heading-term {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.help-term svg,
+.help-heading-term svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.help-term .nav-symbol {
+  font-weight: 950;
+}
+
 .help-list {
   display: grid;
   gap: 10px;
@@ -3184,6 +3235,46 @@ textarea {
 
 .admin-override-form {
   max-width: 760px;
+}
+
+.admin-invite-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(230px, 1.4fr) auto;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+
+.admin-invite-row > div:first-child,
+.admin-invite-row > div:first-child small {
+  display: grid;
+  min-width: 0;
+}
+
+.admin-invite-row small {
+  overflow-wrap: anywhere;
+}
+
+.admin-invite-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.admin-invite-link[hidden] {
+  display: none;
+}
+
+.admin-invite-link input {
+  min-width: 0;
+}
+
+.admin-invite-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .settings-quiet {
@@ -3602,6 +3693,13 @@ textarea {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-raised);
+}
+
+.roster-day-admin-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
 }
 
 .builder-change-list div {
@@ -4217,7 +4315,7 @@ input[type="number"] {
 .location-management-head,
 .location-management-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(140px, 1.2fr) minmax(170px, 1.45fr) minmax(95px, 0.7fr) minmax(150px, 1.2fr) minmax(170px, 1.25fr);
+  grid-template-columns: minmax(130px, 1fr) minmax(130px, 1.05fr) minmax(155px, 1.25fr) minmax(130px, 0.9fr) minmax(150px, 1.15fr);
   gap: 10px;
   align-items: start;
 }
@@ -4273,6 +4371,21 @@ input[type="number"] {
 .location-actions-cell,
 .location-travel-actions {
   align-items: start;
+}
+
+.location-state-cell {
+  align-content: start;
+  gap: 6px;
+}
+
+.location-actions-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.location-actions-cell .inline-settings-details {
+  margin-top: 0;
 }
 
 .location-travel-actions {
@@ -4748,6 +4861,15 @@ th {
   }
 
   .admin-user-badges {
+    justify-content: flex-start;
+  }
+
+  .admin-invite-row,
+  .roster-day-admin-row {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-invite-actions {
     justify-content: flex-start;
   }
 

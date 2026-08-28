@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import base64
 import json
 import os
 import re
@@ -41,6 +42,7 @@ from .database import (
     create_app_user,
     create_error_report,
     create_trusted_device,
+    delete_never_published_roster_day,
     disable_admin_override,
     DEPUTY_AREA_OVERRIDES,
     ensure_user_sync_state,
@@ -99,6 +101,7 @@ from .database import (
     list_roster_builder_location_labels,
     list_roster_days,
     list_roster_day_versions,
+    never_published_draft_deletion_status,
     list_workday_roles,
     list_travel_time_defaults,
     list_travel_routes,
@@ -247,6 +250,7 @@ from .contractors import (
     create_invite,
     deactivate_inactive_contractors,
     invite_details,
+    reissue_invite,
     revoke_invite,
 )
 from .account_invitations import (
@@ -255,6 +259,7 @@ from .account_invitations import (
     activate_account_invite,
     create_account_invite,
     delete_terminal_account_invite,
+    reissue_account_invite,
     revoke_account_invite,
 )
 from .deputy_integration import (
@@ -278,7 +283,7 @@ from .deputy_integration import (
 
 
 APP_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.5.3"
+APP_VERSION = "0.5.4"
 APP_BUILD = (os.getenv("GIT_SHA", "").strip()[:12] or APP_VERSION)
 MARK_FIELDS = (
     ("checked", "Checked"),
@@ -4631,6 +4636,20 @@ def notice_url(path: str, message: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query_items), parts.fragment))
 
 
+def invite_handoff_fragment(kind: str, invite: dict[str, object]) -> str:
+    payload = json.dumps(
+        {
+            "kind": kind,
+            "id": int(invite["id"]),
+            "token": str(invite["token"]),
+            "expiresAt": str(invite["expires_at"]),
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    return f"redeputy-invite={encoded}"
+
+
 def default_manual_sync_status() -> dict[str, object]:
     return {
         "running": False,
@@ -4989,6 +5008,8 @@ def admin_user_rows() -> list[dict[str, object]]:
     for user in list_app_users():
         item = dict(user)
         item["devices"] = [dict(device) for device in list_trusted_devices_for_user(int(user["id"]))]
+        item["active_device_rows"] = [device for device in item["devices"] if not device.get("revoked_at")]
+        item["revoked_device_rows"] = [device for device in item["devices"] if device.get("revoked_at")]
         latest_capture = get_latest_deputy_web_capture_for_user(int(user["id"]))
         item["latest_capture"] = capture_summary(str(latest_capture["payload"] or "")) if latest_capture else None
         item["latest_capture_message"] = str(latest_capture["message"] or "") if latest_capture else ""
@@ -5005,7 +5026,7 @@ def admin_contact_rows() -> list[dict[str, object]]:
             {
                 "display_name": user["display_name"] or infer_display_name_from_email(str(user["deputy_email"] or "")),
                 "deputy_email": user["deputy_email"],
-                "last_seen_at": user["last_seen_at"],
+                "last_seen_at": user["last_activity_at"] or user["last_seen_at"],
             }
         )
     return contacts
@@ -5431,6 +5452,12 @@ def contractor_invite_view(request: Request, token: str, notice: str | None = No
     return templates.TemplateResponse("contractor_invite.html", {"request": request, "notice": notice, "invite": invite, "token": token})
 
 
+@app.head("/contractor/invite/{token}")
+def contractor_invite_head(token: str) -> PlainTextResponse:
+    invite_details(token)
+    return PlainTextResponse("", headers={"Cache-Control": "private, no-store"})
+
+
 @app.post("/contractor/invite/{token}")
 async def contractor_invite_activate(request: Request, token: str) -> RedirectResponse:
     form = await request.form()
@@ -5461,6 +5488,12 @@ def account_invite_view(request: Request, token: str, notice: str | None = None)
     response = templates.TemplateResponse("account_invite.html", {"request": request, "notice": notice, "invite": invite})
     response.headers["Cache-Control"] = "private, no-store"
     return response
+
+
+@app.head("/account/invite/{token}")
+def account_invite_head(token: str) -> PlainTextResponse:
+    account_invite_details(token)
+    return PlainTextResponse("", headers={"Cache-Control": "private, no-store"})
 
 
 def account_invite_error(request: Request, invite: object, notice: str) -> object:
@@ -5709,6 +5742,16 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
         "published_snapshot": "",
         "published_at": "",
     }
+    roster_day["display_location"] = (
+        str(roster_day.get("track_label") or "")
+        if str(roster_day.get("day_type") or "race_day") == "race_day"
+        else str(roster_day.get("custom_location") or roster_day.get("track_label") or "")
+    )
+    draft_deletion = (
+        never_published_draft_deletion_status(int(roster_day["id"]))
+        if roster_day.get("id")
+        else {"status": "not_found", "allowed": False, "reason": ""}
+    )
     assignments = [dict(item) for item in get_roster_day_assignments(int(roster_day["id"]))] if roster_day.get("id") else []
     hotel_assignments = parse_hotel_assignments(roster_day.get("hotel_assignments"))
     hotel_rows = hotel_assignments + [{} for _index in range(max(1, 3 - len(hotel_assignments)))]
@@ -5903,6 +5946,7 @@ def roster_day_builder_response(request: Request, roster_day_id: int | None, not
             "vehicle_conflicts": vehicle_conflicts,
             "review_mode": bool(row is not None and request.query_params.get("mode") == "review"),
             "planning_seed": planning_seed,
+            "draft_deletion": draft_deletion,
         },
     )
 
@@ -5918,7 +5962,6 @@ def admin_page_context(
     backfill_end: str = "",
     identity_reconciliation_report: dict[str, object] | None = None,
     identity_link_review: dict[str, object] | None = None,
-    new_account_invite_url: str = "",
 ) -> dict[str, object]:
     settings = get_settings()
     today = datetime.now(settings.timezone).date()
@@ -5979,6 +6022,9 @@ def admin_page_context(
                     "is_primary": bool(member.get("is_primary")),
                 })
     northern_team = next((team for team in crew_teams if team.get("stable_key") == "northern-team"), None)
+    roster_day_rows = [dict(item) for item in list_roster_days()]
+    for roster_day in roster_day_rows:
+        roster_day["draft_deletion"] = never_published_draft_deletion_status(int(roster_day["id"]))
     return {
         "request": request,
         "notice": notice,
@@ -5988,7 +6034,7 @@ def admin_page_context(
         "app_version": APP_VERSION,
         "app_build": APP_BUILD,
         "users": admin_user_rows(),
-        "roster_days": list_roster_days(),
+        "roster_days": roster_day_rows,
         "overrides": override_rows,
         "active_override_count": sum(
             1 for item in override_rows if str(item.get("status") or "") == "active"
@@ -6040,7 +6086,6 @@ def admin_page_context(
         "notification_summary": notification_admin_summary(),
         "contractors": contractor_admin_rows(),
         "account_invitations": account_invite_admin_rows(),
-        "new_account_invite_url": new_account_invite_url,
         "deputy_api_config": load_deputy_api_config(),
         "deputy_api_connection": connection_status(int(user["id"])),
         "deputy_write_audit": write_audit_summary(),
@@ -6104,8 +6149,8 @@ async def admin_create_contractor_invite(request: Request) -> RedirectResponse:
         )
     except ValueError as exc:
         return RedirectResponse(url=notice_url("/admin", str(exc)), status_code=303)
-    origin = str(request.base_url).rstrip("/")
-    return RedirectResponse(url=notice_url("/admin", f"Invite (copy now): {origin}/contractor/invite/{invite['token']}"), status_code=303)
+    location = notice_url("/admin", "Contractor invitation created. Copy the activation link while it is available in this browser session.")
+    return RedirectResponse(url=f"{location}#{invite_handoff_fragment('contractor', invite)}", status_code=303)
 
 
 @app.post("/admin/account-invitations")
@@ -6120,13 +6165,20 @@ async def admin_create_account_invitation(request: Request) -> RedirectResponse:
         invite = create_account_invite(email, display_name, int(actor["id"]), crew_person_id=crew_person_id)
     except ValueError as exc:
         return RedirectResponse(url=notice_url("/admin", str(exc)), status_code=303)
-    origin = str(request.base_url).rstrip("/")
-    response = templates.TemplateResponse(
-        "admin.html",
-        admin_page_context(request, actor, notice="Invitation created. Copy this activation link now.", new_account_invite_url=f"{origin}/account/invite/{invite['token']}"),
-    )
-    response.headers["Cache-Control"] = "private, no-store"
-    return response
+    location = notice_url("/admin", "Invitation created. Copy the activation link while it is available in this browser session.")
+    return RedirectResponse(url=f"{location}#{invite_handoff_fragment('account', invite)}", status_code=303)
+
+
+@app.post("/admin/account-invitations/{invite_id}/reissue")
+def admin_reissue_account_invitation(request: Request, invite_id: int) -> RedirectResponse:
+    actor = require_admin_user(request)
+    require_same_origin(request)
+    try:
+        invite = reissue_account_invite(invite_id, int(actor["id"]))
+    except ValueError as exc:
+        return RedirectResponse(url=notice_url("/admin", str(exc)), status_code=303)
+    location = notice_url("/admin", "Invitation reissued. The previous activation link no longer works.")
+    return RedirectResponse(url=f"{location}#{invite_handoff_fragment('account', invite)}", status_code=303)
 
 
 @app.post("/admin/account-invitations/{invite_id}/revoke")
@@ -6151,6 +6203,18 @@ def admin_revoke_contractor_invite(request: Request, invite_id: int) -> Redirect
     require_admin_user(request); require_same_origin(request)
     revoke_invite(invite_id)
     return RedirectResponse(url=notice_url("/admin", "Contractor invite revoked."), status_code=303)
+
+
+@app.post("/admin/contractors/invites/{invite_id}/reissue")
+def admin_reissue_contractor_invite(request: Request, invite_id: int) -> RedirectResponse:
+    actor = require_admin_user(request)
+    require_same_origin(request)
+    try:
+        invite = reissue_invite(invite_id, int(actor["id"]))
+    except ValueError as exc:
+        return RedirectResponse(url=notice_url("/admin", str(exc)), status_code=303)
+    location = notice_url("/admin", "Contractor invitation reissued. The previous activation link no longer works.")
+    return RedirectResponse(url=f"{location}#{invite_handoff_fragment('contractor', invite)}", status_code=303)
 
 
 @app.post("/admin/deputy-api/config")
@@ -7173,6 +7237,9 @@ def day_view(
         workday = interpreted_by_shift_id.get(int(shift["id"]))
         if workday:
             shift["header_vehicle_label"] = str(workday.get("vehicle") or "")
+            if workday.get("vehicle_conflict"):
+                values = " / ".join(str(value) for value in workday.get("vehicle_conflict_values") or [])
+                shift["vehicle_conflict_warning"] = f"Vehicle assignment conflict: {values}" if values else "Vehicle assignment conflict"
             shift["interpreted_workday"] = workday
     canonical_people_workdays = interpret_deputy_workdays_for_people(
         shifts,
@@ -7195,6 +7262,9 @@ def day_view(
             person["structured_vehicle_label"] = str(workday.get("structured_vehicle") or "")
             person["roster_note_vehicle_label"] = str(workday.get("roster_note_vehicle") or "")
             person["roster_note_vehicle_evidence"] = list(workday.get("current_roster_note_evidence") or [])
+        if workday.get("vehicle_conflict"):
+            values = " / ".join(str(value) for value in workday.get("vehicle_conflict_values") or [])
+            person["vehicle_conflict_warning"] = f"Vehicle assignment conflict: {values}" if values else "Vehicle assignment conflict"
     if travel_schedule_context:
         displayed_person_ids = {safe_int(person.get("canonical_person_id")) for person in deputy_schedule_people}
         identities_by_id = {safe_int(identity.get("id")): identity for identity in interpreter_identities}
@@ -7421,6 +7491,20 @@ def admin_new_roster_day(request: Request, notice: str | None = None) -> object:
 @app.get("/admin/roster-days/{roster_day_id}")
 def admin_edit_roster_day(request: Request, roster_day_id: int, notice: str | None = None) -> object:
     return roster_day_builder_response(request, roster_day_id, notice)
+
+
+@app.post("/admin/roster-days/{roster_day_id}/delete")
+def admin_delete_roster_day_draft(request: Request, roster_day_id: int) -> RedirectResponse:
+    require_admin_user(request)
+    require_same_origin(request)
+    row = get_roster_day(roster_day_id)
+    result = delete_never_published_roster_day(roster_day_id)
+    if result.get("deleted"):
+        label = str((row["title"] or row["track_label"] or "Workday") if row is not None else "Workday")
+        message = f"Deleted unpublished {label} draft."
+    else:
+        message = str(result.get("reason") or "That workday draft could not be deleted.")
+    return RedirectResponse(url=notice_url("/admin", message) + "#manual-work-days", status_code=303)
 
 
 @app.post("/admin/workday-roles/save")
