@@ -9,7 +9,7 @@ Use this immediately before and after a production redeploy. Do not put secrets 
 3. Verify the backup completed with `integrity_check=ok` and zero `foreign_key_check` rows.
 4. Confirm the target immutable tag and its exact commit SHA.
 5. Preserve `/data/compose/22/data:/app/data`, `/data/compose/22/backups:/app/backups`, and the existing `APP_SECRET_KEY`. If the deployment instead uses `data/app_secret.key`, preserve it as private recovery material.
-6. Use `production/docker-compose.portainer.yml`; retain the `deputy-roster-multi_default` network and Cloudflare routing. There must be no published host application port: Cloudflare reaches `deputy-roster-view:8000` privately.
+6. Portainer consumes the repository-root `docker-compose.yml`; routine releases need no Compose-path, repository, or environment change. Retain the `deputy-roster-multi_default` network and Cloudflare routing. There must be no published host application port: Cloudflare reaches `deputy-roster-view:8000` privately. The local-only alternative is `docker-compose.dev.yml`.
 7. Keep `SIGNUP_ENABLED=true`, `COOKIE_SECURE=true`, `TRUSTED_DEVICE_LIMIT`, and Deputy trial-write mode **OFF**.
 
 ## Deploy

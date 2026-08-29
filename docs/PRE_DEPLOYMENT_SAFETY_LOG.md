@@ -6,7 +6,7 @@ Starting baseline: `c29f918f88e98f366add4b1ff9fb52a9198192e8` (`0.5.0`).
 
 Scope: account/crew separation, explicit external contractors, invitation lifecycle, per-account trusted-device LRU cap, conservative Travel participant union, narrow racing gap-fill verification, quieter semantic history, targeted placeholder filtering, limited responsive cleanup, and a tracked hardened Portainer Compose definition.
 
-Safety boundaries retained: production was not deployed or restarted; no live Deputy tenant was contacted; Deputy write mode remains off by default; contractors, Travel, vehicles, Open/TBC, and background work cannot enter Deputy mutation paths. `SIGNUP_ENABLED=true` and `COOKIE_SECURE=true` remain deliberate production settings in `production/docker-compose.portainer.yml`; no host application port is published.
+Safety boundaries retained: production was not deployed or restarted; no live Deputy tenant was contacted; Deputy write mode remains off by default; contractors, Travel, vehicles, Open/TBC, and background work cannot enter Deputy mutation paths. `SIGNUP_ENABLED=true` and `COOKIE_SECURE=true` remain deliberate production settings in the canonical root `docker-compose.yml`; no host application port is published.
 
 Release selection is now the immutable Git tag `v0.5.1`, created only after exact-release-SHA CI succeeds. Validation evidence and the final tag SHA are recorded in the release handoff rather than guessed before CI.
 
@@ -597,3 +597,11 @@ The complete local deterministic release gate (including 320px/375px and Admin r
 Starting release: immutable `v0.5.5` at `20d65d99f09ef1d70cd94079d742c040f9abf677`.
 
 Startup no longer calls hard inactive-account purge. Deliberate inactive cleanup, roster reset, individual purge, and unpublished-draft deletion require a fresh successful safety backup before their destructive transaction. Central Admin auditing now treats redirect-only results as neutral `request_finished` until a handler has supplied a verified outcome, and adds compact recovery snapshots where specialist history is insufficient. Scheduled backups take the shared application version/build source. Pending final validation and exact-SHA CI/tag evidence; no production deployment or Deputy write is authorized.
+
+---
+
+## 0.5.7 root Portainer Compose closure
+
+Starting release: immutable `v0.5.6` at `f20a23d3e735e5c4dbda60db9849a6d3c331abe8`.
+
+The actual Git-backed Portainer stack reads repository-root `docker-compose.yml`, so it is now the sole canonical hardened production definition. The previous root development configuration moved to `docker-compose.dev.yml`; the duplicate production Compose was removed. Root production keeps the existing data mount, adds the backups mount, exposes 8000 only internally on the named shared network, has no host application port, and accepts either the existing external `APP_SECRET_KEY` or the persistent `/app/data/app_secret.key` fallback. Routine Portainer settings do not change. Pending final validation and exact-SHA CI/tag evidence; no production deployment is authorized.
