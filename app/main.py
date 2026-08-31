@@ -2790,6 +2790,22 @@ def schedule_area_is_vehicle(value: str | None) -> bool:
     return role_is_vehicleish(value)
 
 
+TRAVEL_PARTICIPANT_COHORT_KEYS = {
+    "travel",
+    "overnighter",
+    "travelthenovernighter",
+}
+
+
+def schedule_area_is_travel_participant_cohort(value: str | None) -> bool:
+    """Whether an exact Deputy area label is a shared travel participant cohort."""
+    return schedule_label_key(value) in TRAVEL_PARTICIPANT_COHORT_KEYS
+
+
+def schedule_item_is_multi_assignee_context(item: dict[str, object]) -> bool:
+    return bool(item.get("is_vehicle_area") or item.get("is_travel_participant_cohort"))
+
+
 def schedule_area_is_hidden(value: str | None) -> bool:
     return schedule_label_key(value) in HIDDEN_SCHEDULE_POSITION_KEYS
 
@@ -3207,6 +3223,7 @@ def decorate_schedule_row(row: object) -> dict[str, object]:
     item["schedule_location_id"] = item.get("schedule_location_id") or item.get("area_location_id")
     item["display_sort_order"] = schedule_display_sort(item["area_display"], item["area_sort_order"])
     item["is_vehicle_area"] = schedule_area_is_vehicle(str(item.get("area_display") or ""))
+    item["is_travel_participant_cohort"] = schedule_area_is_travel_participant_cohort(item["area_display"])
     item["changed"] = bool(int(item.get("changed_since_viewed") or 0))
     item["change_summary"] = str(item.get("change_summary") or "")
     item["change_time_label"] = format_datetime(str(item.get("last_changed_at") or ""), "%d %b %H:%M")
@@ -3236,7 +3253,7 @@ def person_focused_schedule_changes(items: list[dict[str, object]]) -> None:
     """Turn Deputy row movements into the person change for each position."""
     previous_people: dict[tuple[object, str], str] = {}
     for item in items:
-        if item.get("is_vehicle_area"):
+        if schedule_item_is_multi_assignee_context(item):
             continue
         current_position = str(item.get("area_display") or "Position")
         location_id = item.get("schedule_location_id")
@@ -3255,7 +3272,7 @@ def person_focused_schedule_changes(items: list[dict[str, object]]) -> None:
                 previous_people[(location_id, schedule_label_key(old_position))] = current_name
 
     for item in items:
-        if item.get("is_vehicle_area"):
+        if schedule_item_is_multi_assignee_context(item):
             continue
         position = str(item.get("area_display") or "Position")
         current_name = str(item.get("employee_name") or "").strip() or "TBC"
@@ -3530,7 +3547,7 @@ def replacement_change_summary(old_item: dict[str, object], new_item: dict[str, 
 def dedupe_schedule_items(items: list[dict[str, object]]) -> list[dict[str, object]]:
     deduped: list[dict[str, object]] = []
     for item in items:
-        if item.get("is_vehicle_area"):
+        if schedule_item_is_multi_assignee_context(item):
             deduped.append(item)
             continue
         item_key = (
@@ -3539,7 +3556,7 @@ def dedupe_schedule_items(items: list[dict[str, object]]) -> list[dict[str, obje
         )
         replacement_index = None
         for index, existing in enumerate(deduped):
-            if existing.get("is_vehicle_area"):
+            if schedule_item_is_multi_assignee_context(existing):
                 continue
             existing_key = (
                 existing.get("schedule_location_id"),
@@ -3573,12 +3590,12 @@ def dedupe_schedule_items(items: list[dict[str, object]]) -> list[dict[str, obje
 def suppress_stale_overlapping_employee_roles(items: list[dict[str, object]]) -> list[dict[str, object]]:
     visible: list[dict[str, object]] = []
     for item in items:
-        if item.get("is_vehicle_area") or not item.get("employee_id"):
+        if schedule_item_is_multi_assignee_context(item) or not item.get("employee_id"):
             visible.append(item)
             continue
         item_position = schedule_item_position_key(item)
         stale = any(
-            not other.get("is_vehicle_area")
+            not schedule_item_is_multi_assignee_context(other)
             and other.get("employee_id") == item.get("employee_id")
             and other.get("schedule_location_id") == item.get("schedule_location_id")
             and schedule_item_position_key(other) != item_position

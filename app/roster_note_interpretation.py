@@ -12,6 +12,7 @@ VEHICLE_ALLOCATION_TOKEN_RE = re.compile(
 )
 CONNECTORS = {"and", "plus", "with", "the"}
 TRUCK_LABEL = "Truck (unspecified)"
+TRUCK_ACTION_RE = re.compile(r"(?i)^(.+?)\s+(?:driving|drive)\s+trucks?$")
 _vehicle_alias_cache: tuple[float, dict[str, str]] = (0.0, {})
 
 
@@ -115,14 +116,24 @@ def _person_tokens(tokens: Iterable[str]) -> list[str]:
     ]
 
 
+def _truck_people(value: str) -> list[str]:
+    """Accept the established short name-list grammar for generic truck notes."""
+    people = _person_tokens(VEHICLE_ALLOCATION_WORD_RE.findall(value))
+    if not people or any(not re.fullmatch(r"[A-Z][A-Za-z'-]*", person) for person in people):
+        return []
+    return people
+
+
 def note_vehicle_allocations_from_text(value: str) -> list[dict[str, object]]:
     """Parse real roster-note vehicle lines into individual conservative names."""
     text = re.split(r"\s+[-–]\s+", str(value or ""), maxsplit=1)[-1].strip()
     truck = re.match(r"(?i)^trucks?\s+(.+)$", text)
     if not truck:
+        truck = TRUCK_ACTION_RE.match(text)
+    if not truck:
         truck = re.match(r"(?i)^(.+?)\s+trucks?$", text)
     if truck:
-        people = _person_tokens(VEHICLE_ALLOCATION_WORD_RE.findall(truck.group(1)))
+        people = _truck_people(truck.group(1))
         return [{"vehicle": TRUCK_LABEL, "people": people, "raw": value}] if people else []
     tokens = VEHICLE_ALLOCATION_WORD_RE.findall(text)
     vehicle_indexes = [(index, _vehicle_token(token)) for index, token in enumerate(tokens) if _vehicle_token(token)]

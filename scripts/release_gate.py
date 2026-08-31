@@ -32,6 +32,7 @@ OFFLINE_SMOKES = (
     "smoke_vehicle_combined_rows.py",
     "smoke_diagnostic_privacy.py",
     "smoke_notifications.py",
+    "smoke_travel_cohort_059.py",
     "smoke_roster_integrity.py",
     "smoke_route_flows.py",
     "smoke_account_onboarding.py",

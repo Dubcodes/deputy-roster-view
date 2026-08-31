@@ -7434,7 +7434,7 @@ EVENT_POSITION_ALIASES = {
 }
 
 EVENT_NON_POSITION_KEYS = {
-    "vehicle", "vehicles", "travel", "travelthenovernighter", "outofregion",
+    "vehicle", "vehicles", "travel", "overnighter", "travelthenovernighter", "outofregion",
     "manager", "northern", "northernopscontractors", "accommodation", "web",
     "shift", "maintenance", "training", "mewptraining", "office", "clowplace",
     "rav91", "tender", "transit", "ob",

@@ -5,5 +5,5 @@ from __future__ import annotations
 import os
 
 
-APP_VERSION = "0.5.8"
+APP_VERSION = "0.5.9"
 APP_BUILD = os.getenv("GIT_SHA", "").strip()[:12] or APP_VERSION
