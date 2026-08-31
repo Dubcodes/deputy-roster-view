@@ -646,9 +646,7 @@ SCHEDULE_POSITION_ORDER = {
     "fm": 270,
     "eng": 280,
 }
-HIDDEN_SCHEDULE_POSITION_KEYS = {
-    "outofregion",
-}
+HIDDEN_SCHEDULE_POSITION_KEYS: set[str] = set()
 ASSIGNED_ONLY_SCHEDULE_POSITION_KEYS = {"rts", "fm"}
 PLACEHOLDER_SCHEDULE_POSITION_KEYS = set(SCHEDULE_POSITION_ORDER) - {
     "northern",
@@ -2794,6 +2792,7 @@ TRAVEL_PARTICIPANT_COHORT_KEYS = {
     "travel",
     "overnighter",
     "travelthenovernighter",
+    "outofregion",
 }
 
 
@@ -4283,6 +4282,23 @@ def shift_schedule_location_ids(shifts: list[dict[str, object]]) -> list[int]:
         values.extend(list(shift.get("schedule_location_ids") or []))
         values.append(shift.get("schedule_location_id"))
     return unique_ints(values)
+
+
+def travel_cohort_schedule_rows(date_text: str, shifts: list[dict[str, object]]) -> list[object]:
+    """Return matching Travel cohorts across Deputy's distinct internal location IDs."""
+    location_keys = {
+        schedule_label_key(str(shift.get(key) or ""))
+        for shift in shifts
+        for key in ("source_code", "track_label", "location")
+    }
+    location_keys.discard("")
+    if not location_keys:
+        return []
+    return [
+        row for row in fetch_deputy_schedule_for_date(date_text)
+        if schedule_area_is_travel_participant_cohort(str(row["area_name"] or ""))
+        and schedule_label_key(str(row["location_name"] or "")) in location_keys
+    ]
 
 
 def track_maps_for_day(
@@ -7429,6 +7445,11 @@ def day_view(
         location_ids=schedule_location_ids or None,
     )
     if travel_schedule_context:
+        known_source_ids = {safe_int(row["source_shift_id"]) for row in deputy_schedule_rows}
+        deputy_schedule_rows.extend(
+            row for row in travel_cohort_schedule_rows(date_text, shifts)
+            if safe_int(row["source_shift_id"]) not in known_source_ids
+        )
         timed_shifts = [
             (parse_iso_datetime(str(item.get("start_at") or "")), parse_iso_datetime(str(item.get("end_at") or "")))
             for item in shifts

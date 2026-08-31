@@ -6786,9 +6786,12 @@ def fetch_deputy_schedule_for_date(
         rows = conn.execute(
             f"""
             SELECT s.*,
-                   COALESCE(s.area_location_id, a.location_id) AS schedule_location_id
+                   COALESCE(s.area_location_id, a.location_id) AS schedule_location_id,
+                   COALESCE(locations.name, '') AS location_name
             FROM deputy_schedule_shifts s
             LEFT JOIN deputy_schedule_areas a ON a.area_id = s.area_id
+            LEFT JOIN deputy_schedule_locations locations
+              ON locations.location_id = COALESCE(s.area_location_id, a.location_id)
             WHERE s.date = ?
               {location_sql}
             ORDER BY
