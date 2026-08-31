@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 production = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 development = (ROOT / "docker-compose.dev.yml").read_text(encoding="utf-8")
+tunnel = (ROOT / "docker-compose.tunnel.yml").read_text(encoding="utf-8")
 
 required = (
     "context: .",
@@ -17,6 +18,10 @@ required = (
     "name: deputy-roster-multi_default",
     "- deputy-roster-view",
     "APP_SECRET_KEY: ${APP_SECRET_KEY:-}",
+    "DEPUTY_ICAL_URL: ${DEPUTY_ICAL_URL:-}",
+    "DEPUTY_LOGIN_EMAIL: ${DEPUTY_LOGIN_EMAIL:-}",
+    "DEPUTY_LOGIN_PASSWORD: ${DEPUTY_LOGIN_PASSWORD:-}",
+    "DEPUTY_DISPLAY_NAME: ${DEPUTY_DISPLAY_NAME:-}",
     "SIGNUP_ENABLED: ${SIGNUP_ENABLED:-true}",
     "COOKIE_SECURE: ${COOKIE_SECURE:-true}",
     "TRUSTED_DEVICE_LIMIT: ${TRUSTED_DEVICE_LIMIT:-10}",
@@ -33,6 +38,8 @@ assert "APP_SECRET_KEY: ${APP_SECRET_KEY:?" not in production
 assert "${APP_PORT:-8096}:8000" in development
 assert "./data:/app/data" in development
 assert "COOKIE_SECURE: ${COOKIE_SECURE:-false}" in development
+assert "name: ${APP_NETWORK:-deputy-roster-multi_default}" in tunnel
+assert "http://deputy-roster-view:8000" in tunnel
 assert not (ROOT / "production" / "docker-compose.portainer.yml").exists()
 
 print("root production Compose smoke ok")

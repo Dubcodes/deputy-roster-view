@@ -14,7 +14,7 @@ Use this immediately before and after a production redeploy. Do not put secrets 
 
 ## Deploy
 
-Set the Portainer Git stack Reference to the approved immutable tag, then Pull and redeploy without changing existing deployment environment values or remounting persistent data. Do not enable Deputy writes during a normal deployment.
+After `main` points to the exact-SHA green released commit, use the existing Git-backed stack's **Pull and redeploy** action without changing its repository, Reference, Compose path, environment values, or persistent mounts. Immutable tags remain release evidence and known rollback points. Change the Reference only for an exceptional explicit rollback/pin, then Pull and redeploy. Do not enable Deputy writes during a normal deployment.
 
 ## After
 

@@ -15,6 +15,12 @@ services:
       # Existing deployments may use either this external value or the stable
       # /app/data/app_secret.key fallback. Never rotate either during redeploy.
       APP_SECRET_KEY: ${APP_SECRET_KEY:-}
+      # Optional legacy fallback inputs. Normal multi-user sync uses each
+      # account's encrypted credentials, but preserve these across redeploys.
+      DEPUTY_ICAL_URL: ${DEPUTY_ICAL_URL:-}
+      DEPUTY_LOGIN_EMAIL: ${DEPUTY_LOGIN_EMAIL:-}
+      DEPUTY_LOGIN_PASSWORD: ${DEPUTY_LOGIN_PASSWORD:-}
+      DEPUTY_DISPLAY_NAME: ${DEPUTY_DISPLAY_NAME:-}
       DEPUTY_WEB_URL: ${DEPUTY_WEB_URL:-}
       TRUSTED_DEVICE_DAYS: ${TRUSTED_DEVICE_DAYS:-730}
       TRUSTED_DEVICE_LIMIT: ${TRUSTED_DEVICE_LIMIT:-10}

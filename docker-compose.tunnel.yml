@@ -9,4 +9,4 @@ services:
 networks:
   roster_net:
     external: true
-    name: ${APP_NETWORK:-deputy-roster-view_default}
+    name: ${APP_NETWORK:-deputy-roster-multi_default}

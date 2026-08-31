@@ -49,7 +49,7 @@ Unknown or ambiguous results are never blindly retried. Externally created match
 
    The app does not require a Deputy API token. If an API token is present, the settings page can test it, but the main path uses logged-in Deputy web capture.
 
-6. Optional: set `APP_PORT` if port `8096` conflicts with another service.
+6. Optional local-development only: set `APP_PORT` if port `8096` conflicts with another service.
 
    ```env
    APP_PORT=8123
@@ -63,10 +63,10 @@ In Deputy, look for the calendar subscription/export option for your roster. Cop
 
 If the URL has previously been pasted into chat, logs, or another shared place, regenerate or reset it in Deputy if Deputy provides that option.
 
-## Run With Docker Compose
+## Run Locally With Docker Compose
 
 ```bash
-docker compose up --build
+docker compose -f docker-compose.dev.yml up --build
 ```
 
 Open:
@@ -81,7 +81,7 @@ On another machine, use:
 http://SERVER-IP:8096
 ```
 
-If you changed `APP_PORT`, use that port instead.
+If you changed local-development `APP_PORT`, use that port instead. Do not use plain `docker compose up` for local development: the repository-root Compose file is the hardened production definition.
 
 ## Portainer
 
@@ -89,7 +89,7 @@ Portainer production consumes the root `docker-compose.yml` directly: Git repo �
 
 This production definition deliberately defaults `SIGNUP_ENABLED=true` and `COOKIE_SECURE=true` for the current HTTPS-only installation. Change policy only through an explicit reviewed operator decision.
 
-Release and rollback are tag-based: after exact-SHA CI succeeds, create the immutable release tag; set Portainer's Reference to that tag and Pull and redeploy. To roll back, select a previous approved tag such as `v0.5.0`, then Pull and redeploy. Editing a visible version/environment label does not select or change application code.
+Normal production deployment uses the existing Git-backed stack, existing repository/reference, and root Compose: after `main` points to an exact-SHA green released commit, click Pull and redeploy. Do not edit the Git Reference for each routine release. Immutable tags remain release evidence and known rollback points; change the Reference only for an exceptional explicit rollback/pin, then Pull and redeploy. Editing a visible version/environment label does not select or change application code.
 
 `TRUSTED_PROXY_SOURCES` is a comma-separated allowlist of proxy peer IPs, CIDRs, or controlled Docker DNS names. Only requests whose actual network peer matches this list may use `X-Forwarded-Proto`/`X-Forwarded-Host` to reconstruct the browser-visible origin. The shipped Compose default names the separate `deputy-roster-tunnel` service; if your tunnel service uses another name, set that exact Docker DNS name. Direct LAN clients are not proxy-trusted and continue to use their actual HTTP origin.
 
@@ -117,7 +117,7 @@ services:
 networks:
   roster_net:
     external: true
-    name: ${APP_NETWORK:-deputy-roster-view_default}
+    name: ${APP_NETWORK:-deputy-roster-multi_default}
 ```
 
 4. In the tunnel stack env, set `APP_NETWORK` to the app stack network name.
@@ -181,9 +181,9 @@ Never retry an unknown or ambiguous write blindly. Admin → Deputy API → Depu
 Stop the container, then remove the SQLite database in `data/`:
 
 ```bash
-docker compose down
+docker compose -f docker-compose.dev.yml down
 rm data/deputy_roster.sqlite3
-docker compose up --build
+docker compose -f docker-compose.dev.yml up --build
 ```
 
 This removes synced shifts, local notes, timing adjustments, and sync history.
