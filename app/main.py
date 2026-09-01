@@ -211,6 +211,7 @@ from .security import (
 )
 from .user_credentials import deputy_email_for_user, resolve_deputy_web_url, settings_for_user
 from .interpreted_workdays import interpret_deputy_workdays, interpret_deputy_workdays_for_people
+from .travel_cohorts import is_travel_participant_cohort, travel_family_locations_match
 from .roster_note_interpretation import (
     VEHICLE_ALLOCATION_TOKEN_RE,
     VEHICLE_ALLOCATION_WORD_RE,
@@ -2788,17 +2789,9 @@ def schedule_area_is_vehicle(value: str | None) -> bool:
     return role_is_vehicleish(value)
 
 
-TRAVEL_PARTICIPANT_COHORT_KEYS = {
-    "travel",
-    "overnighter",
-    "travelthenovernighter",
-    "outofregion",
-}
-
-
 def schedule_area_is_travel_participant_cohort(value: str | None) -> bool:
     """Whether an exact Deputy area label is a shared travel participant cohort."""
-    return schedule_label_key(value) in TRAVEL_PARTICIPANT_COHORT_KEYS
+    return is_travel_participant_cohort(value)
 
 
 def schedule_item_is_multi_assignee_context(item: dict[str, object]) -> bool:
@@ -4286,18 +4279,17 @@ def shift_schedule_location_ids(shifts: list[dict[str, object]]) -> list[int]:
 
 def travel_cohort_schedule_rows(date_text: str, shifts: list[dict[str, object]]) -> list[object]:
     """Return matching Travel cohorts across Deputy's distinct internal location IDs."""
-    location_keys = {
-        schedule_label_key(str(shift.get(key) or ""))
-        for shift in shifts
-        for key in ("source_code", "track_label", "location")
-    }
-    location_keys.discard("")
-    if not location_keys:
-        return []
     return [
         row for row in fetch_deputy_schedule_for_date(date_text)
         if schedule_area_is_travel_participant_cohort(str(row["area_name"] or ""))
-        and schedule_label_key(str(row["location_name"] or "")) in location_keys
+        and any(
+            travel_family_locations_match(
+                shift.get("source_code") or shift.get("track_label") or shift.get("location"),
+                shift.get("role_label") or shift.get("area_name") or shift.get("role_full_label"),
+                row["location_name"], row["area_name"],
+            )
+            for shift in shifts
+        )
     ]
 
 
@@ -7597,13 +7589,15 @@ def day_view(
             })
             displayed_person_ids.add(person_id)
         displayed_names = {schedule_label_key(str(person.get("employee_name") or "")) for person in deputy_schedule_people}
+        displayed_aliases = schedule_person_alias_map(deputy_schedule_people)
         note_only = next((item.get("vehicle_evidence", {}).get("note_only_people", [])
                           for items in canonical_people_workdays.values() for item in items
                           if item.get("date") == date_text), [])
         for unresolved in note_only:
             name = str(unresolved.get("name") or "").strip()
             name_key = schedule_label_key(name)
-            if not name or not name_key or name_key in displayed_names:
+            resolved_indexes = set(displayed_aliases.get(name_key, []))
+            if not name or not name_key or name_key in displayed_names or len(resolved_indexes) == 1:
                 continue
             deputy_schedule_people.append({
                 "canonical_person_id": None, "employee_name": name,

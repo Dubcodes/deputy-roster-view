@@ -54,10 +54,14 @@ def main() -> None:
         init_db,
         save_deputy_web_schedule,
     )
-    from app.deputy_web import _extract_management_shifts
+    from app.deputy_web import _extract_management_shifts, _travel_family_location_ids
     from app.interpreted_workdays import interpret_deputy_workdays, interpret_deputy_workdays_for_people
-    from app.main import decorate_shift, effective_schedule_items, schedule_people, travel_cohort_schedule_rows
+    from app.main import app, decorate_shift, effective_schedule_items, schedule_people, travel_cohort_schedule_rows
     from app.roster_note_interpretation import note_vehicle_allocations_from_text
+    from app.scheduler import _combined_sync_status
+    from app.security import hash_pin
+    from app.travel_cohorts import travel_family_locations_match
+    from fastapi.testclient import TestClient
 
     init_db()
     with sqlite3.connect(get_settings().db_path) as conn:
@@ -65,8 +69,8 @@ def main() -> None:
             """INSERT INTO app_users
                (id, deputy_email, display_name, pin_hash, deputy_web_url, is_admin,
                 is_active, created_at, updated_at)
-               VALUES (1, 'jayden@example.test', 'Jayden-lee', 'x', 'https://example.test', 1, 1, ?, ?)""",
-            ("2026-08-31T15:29:00+12:00", "2026-08-31T15:29:00+12:00"),
+                VALUES (1, 'jayden@example.test', 'Jayden-lee', ?, 'https://example.test', 1, 1, ?, ?)""",
+            (hash_pin("1234"), "2026-08-31T15:29:00+12:00", "2026-08-31T15:29:00+12:00"),
         )
         for employee_id, name in PEOPLE:
             conn.execute(
@@ -218,17 +222,30 @@ def main() -> None:
     if saved_count != len(PEOPLE) or false_events:
         raise AssertionError(f"Travel cohort persistence or event history was collapsed: {(saved_count, false_events)!r}")
 
+    travel_area_refs = {
+        "1412": {"id": 1412, "name": "Travel then Overnighter", "locationId": 105},
+        "1045": {"id": 1045, "name": "Out of Region", "locationId": 105},
+    }
+    if _travel_family_location_ids(travel_area_refs) != [105]:
+        raise AssertionError("Travel selected-location scope was not derived from participant-area references.")
+    if not travel_family_locations_match("T-Travel", "Overnighter", "Travel", "Travel then Overnighter"):
+        raise AssertionError("The proven Travel/T-Travel participant alias was not recognised.")
+    if travel_family_locations_match("T-Ruakaka", "Director", "Ruakaka", "Director"):
+        raise AssertionError("Travel matching broadened to an unrelated production location.")
+    if _combined_sync_status({}, {"status": "ok", "payload": {"schedule_coverage": [{}], "travel_schedule_coverage": [{"status": "partial"}]}}) != "partial":
+        raise AssertionError("Incomplete dedicated Travel capture was not surfaced as partial sync coverage.")
+
     mixed_shared = [
         {
             "id": 10100 + index, "employee": employee_id, "employeeName": name,
             "area": 1412, "areaName": "Travel then Overnighter", "areaLocationId": 105,
-            "location": 105, "locationName": "T-Travel", "role": "Travel then Overnighter",
+            "location": 105, "locationName": "Travel", "role": "Travel then Overnighter",
             "start": START, "end": END, "duration": 18000, "isPublished": True, "note": "",
         }
         for index, (employee_id, name) in enumerate(PEOPLE, start=1)
     ]
     mixed_before = _extract_management_shifts({"data": [{
-        "id": 10501, "employee": 17, "area": 1762, "areaName": "Travel then Overnighter", "areaLocationId": 158,
+        "id": 33598, "employee": 17, "area": 1762, "areaName": "Travel then Overnighter", "areaLocationId": 158,
         "location": 158, "locationName": "T-Travel", "role": "Travel then Overnighter",
         "start": START, "end": END, "duration": 18000, "isPublished": True,
         "note": "Dylan and Matt driving trucks\nUnknown trucks",
@@ -240,16 +257,48 @@ def main() -> None:
             {"id": 1412, "name": "Travel then Overnighter", "locationId": 105, "rosterSortOrder": 1},
             {"id": 1762, "name": "Overnighter", "locationId": 158, "rosterSortOrder": 1},
         ],
-        "locations": [{"id": 105, "name": "T-Travel", "address": ""}, {"id": 158, "name": "T-Travel", "address": ""}],
+        "locations": [{"id": 105, "name": "Travel", "address": ""}, {"id": 158, "name": "T-Travel", "address": ""}],
         "extracted_shifts": mixed_before,
         "own_roster_coverage": [{"start_date": DATE, "end_date": DATE, "employee_id": 17,
                                   "status": "complete", "pagination_complete": True, "records_returned": 1}],
-        "extracted_schedule_shifts": mixed_shared,
-        "schedule_coverage": [],
+        # Production-shaped capture A: ALL succeeds with an ordinary row but
+        # omits location 105; the dedicated selected scope supplies it.
+        "extracted_schedule_shifts": mixed_shared + [{
+            "id": 12001, "employee": 301, "employeeName": "Ordinary Crew", "area": 901,
+            "areaName": "Director", "areaLocationId": 64, "location": 64,
+            "locationName": "T-Ruakaka", "role": "Director", "start": START,
+            "end": END, "duration": 18000, "isPublished": True,
+        }],
+        "schedule_coverage": [
+            {"start_date": DATE, "end_date": DATE, "mode": "all", "location_ids": [], "excluded_location_ids": [105]},
+            {"start_date": DATE, "end_date": DATE, "mode": "selected", "location_ids": [105]},
+        ],
+        "travel_schedule_coverage": [{"start_date": DATE, "end_date": DATE, "location_ids": [105], "status": "complete"}],
     }
     save_deputy_web_schedule(mixed_payload, owner_user_id=1)
     save_deputy_web_schedule({**mixed_payload, "captured_at": "2026-08-31T15:30:00+12:00", "extracted_shifts": mixed_after}, owner_user_id=1)
-    mixed_shift = next(decorate_shift(row) for row in fetch_shifts_for_date(DATE, owner_user_id=1) if ":10501" in str(row["source_uid"]))
+    with sqlite3.connect(get_settings().db_path) as conn:
+        captured_cohort_count = conn.execute(
+            "SELECT COUNT(*) FROM deputy_schedule_shifts WHERE date=? AND area_location_id=105", (DATE,)
+        ).fetchone()[0]
+    if captured_cohort_count != len(PEOPLE):
+        raise AssertionError(f"Dedicated Travel capture did not persist the cohort exactly once: {captured_cohort_count!r}")
+    # Production-shaped capture B: ALL succeeds but the dedicated scope is
+    # incomplete. Its old Travel observations must remain active.
+    incomplete_result = save_deputy_web_schedule({
+        **mixed_payload,
+        "captured_at": "2026-08-31T15:31:00+12:00", "extracted_shifts": [],
+        "extracted_schedule_shifts": [mixed_payload["extracted_schedule_shifts"][-1]],
+        "schedule_coverage": [{"start_date": DATE, "end_date": DATE, "mode": "all", "location_ids": [], "excluded_location_ids": [105]}],
+        "travel_schedule_coverage": [{"start_date": DATE, "end_date": DATE, "location_ids": [105], "status": "partial"}],
+    }, owner_user_id=1)
+    with sqlite3.connect(get_settings().db_path) as conn:
+        retained_cohort_count = conn.execute(
+            "SELECT COUNT(*) FROM deputy_schedule_shifts WHERE date=? AND area_location_id=105", (DATE,)
+        ).fetchone()[0]
+    if incomplete_result["schedule_removed"] or retained_cohort_count != len(PEOPLE):
+        raise AssertionError("Incomplete dedicated Travel capture destructively retired prior cohort evidence.")
+    mixed_shift = next(decorate_shift(row) for row in fetch_shifts_for_date(DATE, owner_user_id=1) if ":33598" in str(row["source_uid"]))
     mixed_rows = travel_cohort_schedule_rows(DATE, [mixed_shift])
     mixed_people = schedule_people(mixed_rows, include_vehicle_only=True, include_placeholders=False)
     if (
@@ -275,6 +324,22 @@ def main() -> None:
         or not any(row["field_name"] == "role" for row in get_shift_changes_for_date(DATE))
     ):
         raise AssertionError("Mixed Travel cohort lost note resolution or the genuine personal role change.")
+
+    client = TestClient(app, follow_redirects=False)
+    login = client.post("/login", data={"deputy_email": "jayden@example.test", "pin": "1234"})
+    if login.status_code != 303:
+        raise AssertionError(f"Travel day-view login failed: {login.status_code}")
+    day_page = client.get(f"/day/{DATE}")
+    page_text = day_page.text
+    if day_page.status_code != 200:
+        raise AssertionError(f"Travel day view did not render: {day_page.status_code}")
+    for name in ("Dylan Holden", "Matt Blackmore"):
+        if page_text.count(name) != 1 or "Unresolved note-only person" in page_text and name.split()[0] + "</strong>" in page_text:
+            raise AssertionError(f"Final day view duplicated resolved Travel note person {name!r}.")
+    if "Unknown" not in page_text:
+        raise AssertionError("Final day view lost the deliberately unknown note-only person.")
+    if '>driving<' in page_text.lower() or '>Driving<' in page_text:
+        raise AssertionError("Final day view rendered a fake driving person.")
 
     personal_source = _extract_management_shifts({"data": [
         {"id": 9401, "employee": 17, "area": 684, "areaName": "684", "areaLocationId": 64,

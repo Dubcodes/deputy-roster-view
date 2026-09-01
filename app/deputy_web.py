@@ -11,6 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from .config import Settings, get_settings
 from .url_safety import normalize_deputy_web_url
 from .interpreted_workdays import deputy_shift_is_available
+from .travel_cohorts import is_travel_participant_cohort
 from .database import (
     DEPUTY_LOCATION_CODES,
     get_current_or_next_shift,
@@ -459,6 +460,19 @@ def _direct_schedule_location_ids(location_refs_by_id: dict[str, dict[str, Any]]
     return sorted(ids)
 
 
+def _travel_family_location_ids(area_refs_by_id: dict[str, dict[str, Any]]) -> list[int]:
+    """Derive dedicated shared Travel locations from Deputy's participant areas."""
+    ids = set()
+    for area in area_refs_by_id.values():
+        if not is_travel_participant_cohort(area.get("name")):
+            continue
+        try:
+            ids.add(int(area.get("locationId")))
+        except (TypeError, ValueError):
+            continue
+    return sorted(ids)
+
+
 def _chunks(items: list[int], size: int) -> Any:
     for index in range(0, len(items), size):
         yield items[index : index + size]
@@ -634,6 +648,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     extracted_shifts_by_id: dict[str, dict[str, Any]] = {}
     extracted_schedule_shifts_by_id: dict[str, dict[str, Any]] = {}
     schedule_coverage: list[dict[str, Any]] = []
+    travel_schedule_coverage: list[dict[str, Any]] = []
     own_roster_coverage: list[dict[str, Any]] = []
     event_retry_coverage: list[dict[str, Any]] = []
     area_refs_by_id: dict[str, dict[str, Any]] = {}
@@ -1227,6 +1242,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
 
                 async def capture_direct_schedule_searches() -> None:
                     location_ids = _direct_schedule_location_ids(location_refs_by_id)
+                    travel_location_ids = _travel_family_location_ids(area_refs_by_id)
                     start_at, end_at = schedule_capture_bounds()
                     initial_shift_ids = set(extracted_schedule_shifts_by_id)
                     request_count = 0
@@ -1262,6 +1278,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                         "end_date": window_end.date().isoformat(),
                                         "mode": "all",
                                         "location_ids": [],
+                                        "excluded_location_ids": travel_location_ids,
                                     }
                                 )
                             else:
@@ -1321,6 +1338,54 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 f"HTTP {status or 'unknown'} and no fallback location list was available for "
                                 f"{window_start.date().isoformat()} to {window_end.date().isoformat()}."
                             )
+
+                        if not travel_location_ids:
+                            travel_schedule_coverage.append({
+                                "start_date": window_start.date().isoformat(),
+                                "end_date": window_end.date().isoformat(),
+                                "location_ids": [], "status": "unavailable",
+                                "note": "No recognised Travel participant locations were available for dedicated capture.",
+                            })
+                        else:
+                            travel_complete = True
+                            travel_error = ""
+                            for batch_location_ids in _chunks(travel_location_ids, DIRECT_SCHEDULE_LOCATION_BATCH_SIZE):
+                                travel_body = {
+                                    "start": window_start.isoformat(),
+                                    "end": window_end.isoformat(),
+                                    "expandMetadata": True,
+                                    "locationMode": "SELECTED",
+                                    "locationIds": batch_location_ids,
+                                }
+                                travel_result = await _paginate_schedule_search(fetch_schedule_search, travel_body)
+                                request_count += max(1, len(travel_result["pages"]))
+                                for travel_payload in travel_result["pages"]:
+                                    rows_seen += store_schedule_search_body(travel_payload)
+                                if not travel_result["complete"]:
+                                    travel_complete = False
+                                    travel_error = str(travel_result.get("error") or "selected Travel query failed")
+                                    failed_requests += 1
+                                    continue
+                                schedule_coverage.append({
+                                    "start_date": window_start.date().isoformat(),
+                                    "end_date": window_end.date().isoformat(),
+                                    "mode": "selected",
+                                    "location_ids": list(batch_location_ids),
+                                })
+                            travel_schedule_coverage.append({
+                                "start_date": window_start.date().isoformat(),
+                                "end_date": window_end.date().isoformat(),
+                                "location_ids": travel_location_ids,
+                                "status": "complete" if travel_complete else "partial",
+                                "note": "Dedicated Travel selected-location capture completed."
+                                if travel_complete else f"Dedicated Travel selected-location capture incomplete: {travel_error}.",
+                            })
+                            if not travel_complete:
+                                events.append(
+                                    "Dedicated Travel schedule capture was incomplete for "
+                                    f"{window_start.date().isoformat()} to {window_end.date().isoformat()}; "
+                                    "prior Travel evidence was retained without pruning."
+                                )
 
                         window_start = (window_end + timedelta(seconds=1)).replace(
                             hour=0,
@@ -1606,6 +1671,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
         ),
         "extracted_schedule_shifts": extracted_schedule_shifts,
         "schedule_coverage": schedule_coverage,
+        "travel_schedule_coverage": travel_schedule_coverage,
         "own_roster_coverage": own_roster_coverage,
         "event_retry_coverage": event_retry_coverage,
     }

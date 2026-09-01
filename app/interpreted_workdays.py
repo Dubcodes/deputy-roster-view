@@ -12,6 +12,7 @@ from .roster_note_interpretation import (
     identity_key,
     resolve_note_allocations,
 )
+from .travel_cohorts import travel_family_locations_match
 
 
 VEHICLE_RE = re.compile(r"^(?:\d{3,4}|rav\w*|rp\d+|ob|tender|transit)$", re.IGNORECASE)
@@ -178,6 +179,19 @@ def _overlaps_or_touches(row: dict[str, object], start: datetime | None, end: da
     return bool(start and end and row_start and row_end and row_start <= end and start <= row_end)
 
 
+def _structured_row_connects_evidence(row: dict[str, object], evidence: dict[str, object]) -> bool:
+    row_location = _location_key(row)
+    evidence_location = _location_key(evidence)
+    if not row_location or not evidence_location or row_location == evidence_location:
+        return True
+    return travel_family_locations_match(
+        evidence.get("location_name") or _title_parts(evidence.get("title"))[0],
+        evidence.get("role_label") or evidence.get("area_name") or _title_parts(evidence.get("title"))[1],
+        row.get("location_name") or _title_parts(row.get("title"))[0],
+        row.get("role_label") or row.get("area_name") or _title_parts(row.get("title"))[1],
+    )
+
+
 def _cohort_people(
     rows: list[dict[str, object]], identity_records: list[dict[str, object]], person: dict[str, object],
 ) -> list[dict[str, object]]:
@@ -319,14 +333,10 @@ def interpret_deputy_workdays(
         cohort_ends = [_moment(row.get("end_at") or row.get("end")) for row in evidence]
         cohort_start = min((value for value in cohort_starts if value), default=None)
         cohort_end = max((value for value in cohort_ends if value), default=None)
-        evidence_locations = {_location_key(row) for row in evidence if _location_key(row)}
         connected_structured = [
             row for row in structured
             if _overlaps_or_touches(row, cohort_start, cohort_end)
-            and (
-                not evidence_locations or not _location_key(row)
-                or _location_key(row) in evidence_locations
-            )
+            and any(_structured_row_connects_evidence(row, source) for source in evidence)
         ]
         target_structured = [row for row in connected_structured if _same_person(row, employee_id, aliases)]
         # Raw rows may be enriched for the viewing account.  They are reusable

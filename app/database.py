@@ -19,6 +19,7 @@ from .admin_overrides import (
 )
 from .workday_builder import BUILT_IN_ROLES, canonical_role_key, legacy_transport_mode
 from .interpreted_workdays import deputy_shift_is_available
+from .travel_cohorts import is_travel_participant_cohort
 
 
 DEFAULT_CREW_POOL_NAME = "Northern Crew"
@@ -7511,6 +7512,11 @@ def _authoritative_schedule_coverage(payload: dict[str, object]) -> list[dict[st
             for value in (_optional_int(item) for item in coverage.get("location_ids") or [])
             if value is not None
         }
+        excluded_location_ids = {
+            value
+            for value in (_optional_int(item) for item in coverage.get("excluded_location_ids") or [])
+            if value is not None
+        }
         if (
             not re.fullmatch(r"\d{4}-\d{2}-\d{2}", start_date)
             or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", end_date)
@@ -7518,7 +7524,30 @@ def _authoritative_schedule_coverage(payload: dict[str, object]) -> list[dict[st
             or (mode == "selected" and not location_ids)
         ):
             continue
-        result.append({"start_date": start_date, "end_date": end_date, "mode": mode, "location_ids": location_ids})
+        result.append({
+            "start_date": start_date, "end_date": end_date, "mode": mode,
+            "location_ids": location_ids, "excluded_location_ids": excluded_location_ids,
+        })
+    return result
+
+
+def _known_travel_family_location_ids(conn: sqlite3.Connection) -> set[int]:
+    """Return locally evidenced Travel participant locations without guessing IDs."""
+    result = set()
+    rows = conn.execute(
+        """
+        SELECT a.name, a.location_id
+        FROM deputy_schedule_areas a
+        UNION ALL
+        SELECT s.area_name, COALESCE(s.area_location_id, a.location_id)
+        FROM deputy_schedule_shifts s
+        LEFT JOIN deputy_schedule_areas a ON a.area_id = s.area_id
+        """
+    ).fetchall()
+    for row in rows:
+        location_id = _optional_int(row["location_id"])
+        if location_id is not None and is_travel_participant_cohort(row["name"]):
+            result.add(location_id)
     return result
 
 
@@ -7535,6 +7564,10 @@ def _authoritative_schedule_rows(
             placeholders = ", ".join("?" for _ in location_ids)
             location_sql = f"AND COALESCE(s.area_location_id, a.location_id) IN ({placeholders})"
             params.extend(location_ids)
+        elif coverage["excluded_location_ids"]:
+            placeholders = ", ".join("?" for _ in coverage["excluded_location_ids"])
+            location_sql = f"AND COALESCE(s.area_location_id, a.location_id) NOT IN ({placeholders})"
+            params.extend(sorted(coverage["excluded_location_ids"]))
         for row in conn.execute(
             f"""
             SELECT s.*, COALESCE(s.area_location_id, a.location_id) AS schedule_location_id
@@ -8032,6 +8065,7 @@ def _prune_missing_deputy_schedule_rows(
     remove_ids: set[int] = set()
     observer_key = f"user:{owner_user_id}" if owner_user_id is not None else "system"
     partial_scopes = partial_scopes or set()
+    known_travel_location_ids = _known_travel_family_location_ids(conn)
     for coverage in coverage_rows:
         if not isinstance(coverage, dict):
             continue
@@ -8045,6 +8079,11 @@ def _prune_missing_deputy_schedule_rows(
         location_ids = {
             value
             for value in (_optional_int(item) for item in coverage.get("location_ids") or [])
+            if value is not None
+        }
+        excluded_location_ids = {
+            value
+            for value in (_optional_int(item) for item in coverage.get("excluded_location_ids") or [])
             if value is not None
         }
         if mode not in {"all", "selected"} or (mode == "selected" and not location_ids):
@@ -8069,6 +8108,12 @@ def _prune_missing_deputy_schedule_rows(
             if _event_lock_row(conn, scope[0], scope[1]) is not None or scope[0] < datetime.now(get_settings().timezone).date().isoformat():
                 continue
             if mode == "selected" and _optional_int(row["schedule_location_id"]) not in location_ids:
+                continue
+            if (
+                mode == "all"
+                and _optional_int(row["schedule_location_id"])
+                in known_travel_location_ids | excluded_location_ids
+            ):
                 continue
             # Absence is evidence only for the account that made this capture. A
             # different account may legitimately see a different slice of the
@@ -8118,6 +8163,10 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
     with get_connection() as conn:
         lock_completed_events(conn)
         authoritative_coverage = _authoritative_schedule_coverage(payload)
+        known_travel_location_ids = _known_travel_family_location_ids(conn)
+        for coverage in authoritative_coverage:
+            if coverage["mode"] == "all":
+                coverage["excluded_location_ids"].update(known_travel_location_ids)
         before_event_snapshots = _effective_event_snapshots(
             conn,
             _authoritative_schedule_rows(conn, authoritative_coverage),
