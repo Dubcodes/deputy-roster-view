@@ -246,24 +246,22 @@
             {% endif %}
           </section>
         {% elif shift.description_lines %}
-          <section class="description-block">
+          <section class="description-block roster-note-section">
             <h3>Current roster note</h3>
-            <ul class="roster-lines">
+            <div class="roster-note-panel">
+              <div class="roster-note-lines">
               {% for line in shift.description_lines %}
-                <li>{{ line }}</li>
+                <p>{{ line }}</p>
               {% endfor %}
-            </ul>
+              </div>
+            </div>
           </section>
         {% endif %}
 
-        {% if shift.description_lines and shift.roster_summary.has_structured %}
-          <details class="raw-source">
+        {% if shift.description and shift.description.strip() %}
+          <details class="raw-source raw-roster-note">
             <summary>Raw roster note</summary>
-            <ul class="roster-lines">
-              {% for line in shift.description_lines %}
-                <li>{{ line }}</li>
-              {% endfor %}
-            </ul>
+            <div class="raw-roster-note-content">{{ shift.description }}</div>
           </details>
         {% endif %}
 

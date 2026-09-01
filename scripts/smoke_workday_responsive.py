@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import date
 from pathlib import Path
 from fastapi import Request
 
@@ -54,6 +55,37 @@ def main() -> None:
         }
         return templates.TemplateResponse("deputy_trial_preview.html", {"request": request, "current_user": None, "notice": None, "preview": preview, "results": []})
 
+    @app.get("/__release_gate_roster_note_preview")
+    def release_gate_roster_note_preview(request: Request):
+        source_note = "*Rescheduled from Te Aroha 30th August\nIf you can't work this new date, please advise your manager"
+        shift = {
+            "id": 124, "deleted_from_source": 0,
+            "colour_style": "--shift-location-colour: var(--location-colour-8);",
+            "time_range": "09:00–18:00", "display_hours_label": "9h",
+            "role_chain_label": "SVT", "role_full_label": "SVT", "role_label": "SVT", "title": "SVT",
+            "track_label": "Te Aroha", "location": "Te Aroha", "race_type_label": "",
+            "changed_since_viewed": 0, "source_status": "", "timing_adjustment_labels": [],
+            "description": source_note, "description_lines": source_note.splitlines(),
+            "roster_summary": {"has_structured": False},
+            "race_day_summary": {"has_items": False, "source_note": "", "rows": []}, "changes": [],
+            "timing_math": {
+                "segments": [], "start_label": "09:00", "end_label": "18:00", "raw_label": "9h",
+                "race_day": {"available": False, "complete": False, "lines": []},
+            },
+        }
+        crew = [
+            {"position_label": "Director", "employee_name": "Dylan", "vehicle_label": "684", "changed": False, "placeholder": False},
+            {"position_label": "SVT", "employee_name": "Matt", "vehicle_label": "684", "changed": False, "placeholder": False},
+        ]
+        return templates.TemplateResponse("day.html", {
+            "request": request, "notice": None, "current_user": None,
+            "date_text": "2026-08-30", "day_date": date(2026, 8, 30), "month_year": 2026, "month_number": 8,
+            "day_holiday": {"is_public_holiday": False}, "shifts": [shift], "open_shifts": [],
+            "deputy_schedule_changed": False, "deputy_schedule_people": crew, "deputy_schedule_changes": [],
+            "deputy_event_changes": [], "deputy_event_change_groups": [], "deputy_assignment_history": [],
+            "deputy_schedule_label": "Deputy Schedule", "track_maps": [], "can_change_self_travel": False,
+        })
+
     init_db()
     port = free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
@@ -78,6 +110,31 @@ def main() -> None:
             page.locator('[name="pin_confirm"]').fill("1234")
             page.locator('button[type="submit"]').click()
             page.wait_for_url("**/month")
+            for width in (1280, 375):
+                page.set_viewport_size({"width": width, "height": 900})
+                page.goto(f"http://127.0.0.1:{port}/__release_gate_roster_note_preview")
+                for theme in ("jade", "daylight", "paper", "high-contrast"):
+                    page.evaluate("theme => { document.documentElement.dataset.theme = theme; }", theme)
+                    note_panel = page.locator(".roster-note-panel")
+                    if note_panel.count() != 1 or page.locator(".roster-note-lines > p").count() != 2:
+                        raise AssertionError(f"Roster-note panel did not preserve two source lines at {width}px / {theme}.")
+                    if page.locator(".raw-roster-note summary", has_text="Raw roster note").count() != 1:
+                        raise AssertionError(f"Raw roster-note disclosure is unavailable at {width}px / {theme}.")
+                    if page.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1"):
+                        raise AssertionError(f"Roster-note preview overflowed horizontally at {width}px / {theme}.")
+                    panel_style = note_panel.evaluate("element => ({background: getComputedStyle(element).backgroundColor, border: getComputedStyle(element).borderTopWidth})")
+                    if panel_style["background"] == "rgba(0, 0, 0, 0)" or panel_style["border"] == "0px":
+                        raise AssertionError(f"Roster-note panel lost its bounded neutral treatment at {width}px / {theme}.")
+                    if page.locator(".roster-note-lines > p").first.evaluate("element => getComputedStyle(element).borderBottomWidth") != "0px":
+                        raise AssertionError("Roster-note source lines were rendered as divided rows.")
+                    raw = page.locator(".raw-roster-note")
+                    raw.locator("summary").click()
+                    if raw.get_attribute("open") is None or page.locator(".crew-roster").count() != 1:
+                        raise AssertionError(f"Raw roster-note disclosure did not remain usable with crew content at {width}px / {theme}.")
+                    crew_box = page.locator(".crew-roster").bounding_box()
+                    if not crew_box or crew_box["x"] < 0 or crew_box["x"] + crew_box["width"] > width + 1:
+                        raise AssertionError(f"Opening raw roster-note evidence distorted the crew layout at {width}px / {theme}.")
+                    raw.locator("summary").click()
             for width in (375, 320):
                 page.set_viewport_size({"width": width, "height": 900})
                 for month, label in ((8, "August 2026"), (9, "September 2026"), (11, "November 2026")):

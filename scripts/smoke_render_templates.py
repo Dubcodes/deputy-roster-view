@@ -299,6 +299,83 @@ def render_month_template() -> None:
         raise AssertionError("List view mixed roster and calculated display sources.")
 
 
+def render_roster_note_template() -> None:
+    env = Environment(loader=FileSystemLoader(ROOT / "app" / "templates"))
+    env.filters.update(datetime=datetime_filter, time=str, day_short=str, hours=str, urlencode=quote_plus)
+    env.globals["theme_values"] = THEME_VALUES
+    template = env.get_template("day.html")
+
+    def render_note(description: str, *, has_structured: bool = False, race_day: bool = False) -> str:
+        lines = description.splitlines() if description else []
+        shift = {
+            "id": 12,
+            "deleted_from_source": 0,
+            "colour_style": "--shift-location-colour: var(--location-colour-8);",
+            "time_range": "09:00–18:00",
+            "display_hours_label": "9h",
+            "role_chain_label": "SVT",
+            "role_full_label": "SVT",
+            "role_label": "SVT",
+            "title": "SVT",
+            "track_label": "Te Aroha",
+            "location": "Te Aroha",
+            "race_type_label": "",
+            "changed_since_viewed": 0,
+            "source_status": "",
+            "timing_adjustment_labels": [],
+            "description": description,
+            "description_lines": lines,
+            "roster_summary": {"has_structured": has_structured},
+            "race_day_summary": {
+                "has_items": race_day,
+                "source_note": "Race count from Deputy",
+                "rows": [{"label": "8 races", "value": "11:00 | 16:00", "source": "Deputy"}],
+            },
+            "changes": [],
+            "timing_math": {
+                "segments": [],
+                "start_label": "09:00",
+                "end_label": "18:00",
+                "raw_label": "9h",
+                "race_day": {"available": False, "complete": False, "lines": []},
+            },
+        }
+        return template.render(
+            request={}, notice=None, current_user=None,
+            date_text="2026-08-30", day_date=date(2026, 8, 30), month_year=2026, month_number=8,
+            day_holiday={"is_public_holiday": False}, shifts=[shift], open_shifts=[],
+            deputy_schedule_changed=False, deputy_schedule_people=[], deputy_schedule_changes=[],
+            deputy_event_changes=[], deputy_event_change_groups=[], deputy_assignment_history=[],
+            deputy_schedule_label="Deputy Schedule", track_maps=[], can_change_self_travel=False,
+        )
+
+    te_aroha_note = "*Rescheduled from Te Aroha 30th August\nIf you can't work this new date, please advise your manager"
+    note_html = render_note(te_aroha_note)
+    if "Current roster note" not in note_html or te_aroha_note.splitlines()[0] not in note_html or te_aroha_note.splitlines()[1] not in note_html:
+        raise AssertionError("Current roster note did not retain the Te Aroha source lines.")
+    if 'class="roster-note-panel"' not in note_html or 'class="roster-note-lines"' not in note_html:
+        raise AssertionError("Current roster note did not render as one cohesive note panel.")
+    if '<details class="raw-source raw-roster-note">' not in note_html or "<summary>Raw roster note</summary>" not in note_html:
+        raise AssertionError("Raw roster note control is missing for an unstructured source note.")
+    if f'<div class="raw-roster-note-content">{te_aroha_note}</div>' not in note_html:
+        raise AssertionError("Raw roster note did not retain the persisted source text and line break.")
+    if '<ul class="roster-lines">' in note_html:
+        raise AssertionError("Roster-note panel must not use divider-oriented roster list markup.")
+
+    structured_html = render_note("Dylan and Matt driving trucks", has_structured=True)
+    if '<details class="raw-source raw-roster-note">' not in structured_html:
+        raise AssertionError("Structured roster note lost its Raw roster note control.")
+    informational_html = render_note("Please call the office before leaving.")
+    if '<details class="raw-source raw-roster-note">' not in informational_html:
+        raise AssertionError("Unstructured informational note lost its Raw roster note control.")
+    no_note_html = render_note("")
+    if "Raw roster note" in no_note_html:
+        raise AssertionError("Raw roster note control rendered without source note text.")
+    race_day_html = render_note("Race briefing is at 09:00.", race_day=True)
+    if "Race Day" not in race_day_html or '<details class="raw-source raw-roster-note">' not in race_day_html:
+        raise AssertionError("Race Day source note lost its independent Raw roster note control.")
+
+
 def render_timesheet_template() -> None:
     env = Environment(loader=FileSystemLoader(ROOT / "app" / "templates"))
     env.filters.update(datetime=datetime_filter, time=str, day_short=str, hours=str, urlencode=quote_plus)
@@ -368,6 +445,27 @@ def check_holiday_marker_css() -> None:
         raise AssertionError("Holiday markers must not be absolutely positioned over date headings.")
 
 
+def check_roster_note_css() -> None:
+    css = (ROOT / "app" / "static" / "style.css").read_text(encoding="utf-8")
+    required = (
+        ".roster-note-panel",
+        "background: var(--surface-raised);",
+        "border: 1px solid var(--line);",
+        ".roster-note-lines",
+        ".raw-roster-note-content",
+        "background: var(--surface-soft);",
+        "white-space: pre-wrap;",
+        "overflow-wrap: anywhere;",
+    )
+    if any(value not in css for value in required):
+        raise AssertionError("Roster-note panel lost its theme-safe evidence presentation rules.")
+    note_css = css[css.index(".roster-note-panel"):css.index(".race-day-panel", css.index(".roster-note-panel"))]
+    if "border-bottom" in note_css or ".roster-lines" in note_css:
+        raise AssertionError("Roster-note panel must not inherit row dividers or generic roster-list styling.")
+    if ".roster-lines li {\n  padding: 8px 0;\n  border-bottom: 1px solid var(--line);" not in css:
+        raise AssertionError("Generic roster-list separators were unexpectedly changed.")
+
+
 def check_product_branding() -> None:
     template_text = "\n".join(
         path.read_text(encoding="utf-8")
@@ -384,7 +482,9 @@ def check_product_branding() -> None:
 if __name__ == "__main__":
     render_day_template()
     render_month_template()
+    render_roster_note_template()
     render_timesheet_template()
     check_holiday_marker_css()
+    check_roster_note_css()
     check_product_branding()
     print("template smoke render ok")

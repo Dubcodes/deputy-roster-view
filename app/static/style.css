@@ -1982,6 +1982,27 @@ a {
   white-space: pre-wrap;
 }
 
+.roster-note-panel {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.roster-note-lines {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.roster-note-lines p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
 .race-day-panel {
   margin-top: 16px;
   padding-top: 14px;
@@ -2642,6 +2663,18 @@ textarea {
   cursor: pointer;
   color: var(--accent);
   font-weight: 850;
+}
+
+.raw-roster-note-content {
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.5;
 }
 
 .hidden-url p {
