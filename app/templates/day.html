@@ -356,7 +356,7 @@
         <details class="maths-panel maths-panel-compact">
           <summary>
             {% if shift.timing_math.race_day.available and shift.timing_math.race_day.complete %}
-              Start {{ shift.display_window.start_label }}, finish {{ shift.display_window.end_label }} = {{ shift.display_window.hours_label }}
+              Deputy roster: {{ shift.display_window.start_label }}–{{ shift.display_window.end_label }} = {{ shift.display_window.hours_label }}
             {% elif shift.timing_math.race_day.available %}
               Partial race-day calculation · {{ shift.timing_math.race_day.warning }}
             {% else %}
@@ -375,6 +375,7 @@
               </dl>
             {% endif %}
             {% if shift.timing_math.race_day.available %}
+              <p class="muted">Calculated operational timing (supplemental)</p>
               <dl class="timeline-list maths-segments">
                 {% for line in shift.timing_math.race_day.lines %}
                   <div>

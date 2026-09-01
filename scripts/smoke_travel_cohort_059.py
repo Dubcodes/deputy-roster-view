@@ -56,7 +56,17 @@ def main() -> None:
     )
     from app.deputy_web import _extract_management_shifts, _travel_family_location_ids
     from app.interpreted_workdays import interpret_deputy_workdays, interpret_deputy_workdays_for_people
-    from app.main import app, decorate_shift, effective_schedule_items, schedule_people, travel_cohort_schedule_rows
+    import app.main as main_module
+    from app.main import (
+        app,
+        combine_adjacent_shifts,
+        decorate_shift,
+        effective_schedule_items,
+        reconcile_personal_assignment_evidence,
+        schedule_people,
+        travel_cohort_schedule_rows,
+        travel_personal_assignment_evidence,
+    )
     from app.roster_note_interpretation import note_vehicle_allocations_from_text
     from app.scheduler import _combined_sync_status
     from app.security import hash_pin
@@ -189,6 +199,23 @@ def main() -> None:
     if {item["name"] for item in unresolved} != {"Unknown"}:
         raise AssertionError(f"Resolved shorthand or driving leaked into unresolved display evidence: {unresolved!r}")
 
+    july_date = "2026-07-31"
+    july_start = f"{july_date}T13:00:00+12:00"
+    july_end = f"{july_date}T17:00:00+12:00"
+    july_note = "Accommodation Beachfront\n684 Jnr, Lans Josh, Grant\n685 Gaz, Jayden, Campbell, Todd"
+    july_workdays = interpret_deputy_workdays_for_people(
+        [{**note_rows[0], "date": july_date, "start_at": july_start, "end_at": july_end, "description": july_note}],
+        structured_rows=[
+            {**row, "date": july_date, "start_at": july_start, "end_at": july_end}
+            for row in structured
+        ],
+        identity_records=identities,
+    )
+    if set(july_workdays) != {employee_id for employee_id, _name in PEOPLE} or any(
+        len(days) != 1 for days in july_workdays.values()
+    ):
+        raise AssertionError(f"31 July allocation note changed the structured Travel membership: {july_workdays!r}")
+
     def wire_schedule(area_name: str) -> list[dict[str, object]]:
         return [
             {
@@ -306,6 +333,29 @@ def main() -> None:
         or {row["employee_name"] for row in mixed_people} != {name for _employee_id, name in PEOPLE}
     ):
         raise AssertionError(f"Mixed T-Travel internal IDs did not retain the older shared cohort: {mixed_rows!r}")
+    shared_abc = [row for row in mixed_rows if int(row["employee_id"]) in {101, 102, 103}]
+    personal_union_rows = [
+        {"deputy_employee_id": 102, "employee_name": "Elliot", "position_label": "Overnighter", "area_location_id": 158, "start_at": START, "end_at": END},
+        {"deputy_employee_id": 106, "employee_name": "Dylan Holden", "position_label": "Overnighter", "area_location_id": 158, "start_at": START, "end_at": END},
+        {"deputy_employee_id": 110, "employee_name": "Matt Blackmore", "position_label": "Overnighter", "area_location_id": 158, "start_at": START, "end_at": END},
+        {"deputy_employee_id": 999, "employee_name": "Unrelated Travel", "position_label": "Overnighter", "area_location_id": 999, "start_at": START, "end_at": END},
+    ]
+    original_personal_fetch = main_module.fetch_personal_assignment_evidence_for_date
+    main_module.fetch_personal_assignment_evidence_for_date = lambda _date: personal_union_rows
+    try:
+        event_personal_rows = travel_personal_assignment_evidence(DATE, [mixed_shift], shared_abc)
+    finally:
+        main_module.fetch_personal_assignment_evidence_for_date = original_personal_fetch
+    union_people = schedule_people(shared_abc, include_vehicle_only=True, include_placeholders=False)
+    reconcile_personal_assignment_evidence(
+        union_people,
+        event_personal_rows,
+        event_start_at=START,
+        event_end_at=END,
+        travel_participant_union=True,
+    )
+    if {int(person["employee_id"]) for person in union_people} != {101, 102, 103, 106, 110}:
+        raise AssertionError(f"Shared and personal Deputy Travel evidence did not form the exact union: {union_people!r}")
     mixed_workday = interpret_deputy_workdays(
         [mixed_shift], structured_rows=mixed_rows,
         person_identity={"deputy_employee_id": 17, "aliases": ["Jayden-lee"]}, identity_records=identities,
@@ -329,17 +379,32 @@ def main() -> None:
     login = client.post("/login", data={"deputy_email": "jayden@example.test", "pin": "1234"})
     if login.status_code != 303:
         raise AssertionError(f"Travel day-view login failed: {login.status_code}")
-    day_page = client.get(f"/day/{DATE}")
-    page_text = day_page.text
-    if day_page.status_code != 200:
-        raise AssertionError(f"Travel day view did not render: {day_page.status_code}")
+    def rendered_travel_people(note: str) -> str:
+        with sqlite3.connect(get_settings().db_path) as conn:
+            conn.execute("UPDATE shifts SET description=? WHERE owner_user_id=1 AND date=?", (note, DATE))
+            conn.commit()
+        day_page = client.get(f"/day/{DATE}")
+        if day_page.status_code != 200:
+            raise AssertionError(f"Travel day view did not render: {day_page.status_code}")
+        return day_page.text
+
+    for note in (
+        "Dylan and Matt driving trucks\nUnknown trucks",
+        "",
+        "Please call the office before leaving.",
+    ):
+        page_text = rendered_travel_people(note)
+        for _employee_id, name in PEOPLE:
+            if page_text.count(name) != 1:
+                raise AssertionError(f"Travel roster note changed structured cohort membership for {name!r}: {page_text!r}")
+        if '>driving<' in page_text.lower() or '>Driving<' in page_text:
+            raise AssertionError("Final day view rendered a fake driving person.")
+    page_text = rendered_travel_people("Dylan and Matt driving trucks\nUnknown trucks")
     for name in ("Dylan Holden", "Matt Blackmore"):
-        if page_text.count(name) != 1 or "Unresolved note-only person" in page_text and name.split()[0] + "</strong>" in page_text:
+        if "Unresolved note-only person" in page_text and name.split()[0] + "</strong>" in page_text:
             raise AssertionError(f"Final day view duplicated resolved Travel note person {name!r}.")
     if "Unknown" not in page_text:
         raise AssertionError("Final day view lost the deliberately unknown note-only person.")
-    if '>driving<' in page_text.lower() or '>Driving<' in page_text:
-        raise AssertionError("Final day view rendered a fake driving person.")
 
     personal_source = _extract_management_shifts({"data": [
         {"id": 9401, "employee": 17, "area": 684, "areaName": "684", "areaLocationId": 64,
@@ -347,37 +412,46 @@ def main() -> None:
          "start": "2026-09-02T09:00:00+12:00", "end": "2026-09-02T09:30:00+12:00", "duration": 1800, "isPublished": True},
         {"id": 9402, "employee": 17, "area": 685, "areaName": "DIR", "areaLocationId": 64,
          "location": 64, "locationName": "T-Ruakaka", "role": "DIR",
-         "start": "2026-09-02T09:30:00+12:00", "end": "2026-09-02T22:00:00+12:00", "duration": 45000, "isPublished": True},
-        {"id": 9403, "employee": 17, "area": 686, "areaName": "SVT", "areaLocationId": 65,
+         "start": "2026-09-02T10:00:00+12:00", "end": "2026-09-02T22:00:00+12:00", "duration": 43200, "isPublished": True},
+        {"id": 9403, "employee": 17, "area": 686, "areaName": "685", "areaLocationId": 65,
          "location": 65, "locationName": "T-Te Aroha", "role": "SVT",
-         "start": "2026-09-03T09:30:00+12:00", "end": "2026-09-03T18:45:00+12:00", "duration": 33300, "isPublished": True},
+         "start": "2026-09-03T08:45:00+12:00", "end": "2026-09-03T09:45:00+12:00", "duration": 3600, "isPublished": True},
+        {"id": 9404, "employee": 17, "area": 687, "areaName": "SVT", "areaLocationId": 65,
+         "location": 65, "locationName": "T-Te Aroha", "role": "SVT",
+         "start": "2026-09-03T09:45:00+12:00", "end": "2026-09-03T19:00:00+12:00", "duration": 33300, "isPublished": True},
     ]})
-    if [row["id"] for row in personal_source] != [9401, 9402, 9403]:
+    if [row["id"] for row in personal_source] != [9401, 9402, 9403, 9404]:
         raise AssertionError(f"Management extraction lost the returned own-roster rows: {personal_source!r}")
     save_deputy_web_schedule({
         "captured_at": "2026-08-31T15:29:00+12:00",
         "areas": [
             {"id": 684, "name": "684", "locationId": 64, "rosterSortOrder": 1},
             {"id": 685, "name": "DIR", "locationId": 64, "rosterSortOrder": 2},
-            {"id": 686, "name": "SVT", "locationId": 65, "rosterSortOrder": 1},
+            {"id": 686, "name": "685", "locationId": 65, "rosterSortOrder": 1},
+            {"id": 687, "name": "SVT", "locationId": 65, "rosterSortOrder": 2},
         ],
         "locations": [{"id": 64, "name": "T-Ruakaka", "address": ""}, {"id": 65, "name": "T-Te Aroha", "address": ""}],
         "extracted_shifts": personal_source,
         "own_roster_coverage": [{"start_date": "2026-09-02", "end_date": "2026-09-08", "employee_id": 17,
-                                  "status": "complete", "pagination_complete": True, "records_returned": 3}],
+                                  "status": "complete", "pagination_complete": True, "records_returned": 4}],
         "extracted_schedule_shifts": [],
         "schedule_coverage": [],
     }, owner_user_id=1)
     personal_rows = [dict(row) for row in fetch_shifts_between("2026-09-02", "2026-09-03", owner_user_id=1)]
-    if len(personal_rows) != 3:
+    if len(personal_rows) != 4:
         raise AssertionError(f"Own-roster persistence/retrieval lost a returned row: {personal_rows!r}")
     interpreted = interpret_deputy_workdays(personal_rows)
     ruakaka = next(item for item in interpreted if item["date"] == "2026-09-02")
     te_aroha = next(item for item in interpreted if item["date"] == "2026-09-03")
     if (ruakaka["production_position"], ruakaka["rostered_start"], ruakaka["rostered_finish"], ruakaka["vehicle"]) != ("DIR", "09:00", "22:00", "684"):
-        raise AssertionError(f"Touching 684 + DIR did not form the expected Ruakaka workday: {ruakaka!r}")
-    if (te_aroha["production_position"], te_aroha["rostered_start"], te_aroha["rostered_finish"]) != ("SVT", "09:30", "18:45"):
+        raise AssertionError(f"The short Deputy handoff did not form the expected Ruakaka workday: {ruakaka!r}")
+    if (te_aroha["production_position"], te_aroha["rostered_start"], te_aroha["rostered_finish"], te_aroha["vehicle"]) != ("SVT", "08:45", "19:00", "685"):
         raise AssertionError(f"Independent Te Aroha SVT workday was lost or joined: {te_aroha!r}")
+    rendered_handoffs = combine_adjacent_shifts([decorate_shift(row) for row in personal_rows])
+    rendered_ruakaka = next(item for item in rendered_handoffs if item["date"] == "2026-09-02")
+    if [(segment["role"], segment["start_label"], segment["end_label"])
+            for segment in rendered_ruakaka["role_segments"]] != [("684", "09:00", "09:30"), ("Director", "10:00", "22:00")]:
+        raise AssertionError(f"The 30-minute Deputy gap was fabricated or lost: {rendered_ruakaka!r}")
 
     role_before = [row for row in personal_source if row["id"] == 9402]
     role_after = [{**role_before[0], "areaName": "Overnighter", "roleName": "Overnighter"}]
@@ -385,7 +459,7 @@ def main() -> None:
         "captured_at": "2026-08-31T15:31:00+12:00", "areas": [{"id": 685, "name": "Overnighter", "locationId": 64, "rosterSortOrder": 2}],
         "locations": [{"id": 64, "name": "T-Ruakaka", "address": ""}], "extracted_shifts": role_after,
         "own_roster_coverage": [{"start_date": "2026-09-02", "end_date": "2026-09-08", "employee_id": 17,
-                                  "status": "complete", "pagination_complete": True, "records_returned": 3}],
+                                  "status": "complete", "pagination_complete": True, "records_returned": 4}],
         "extracted_schedule_shifts": [], "schedule_coverage": [],
     }, owner_user_id=1)
     if not any(row["field_name"] == "role" for row in get_shift_changes_for_date("2026-09-02")):

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterable
 
 from .roster_note_interpretation import (
@@ -136,6 +136,22 @@ def _touching_complements(current: list[dict[str, object]], row: dict[str, objec
     return (current_has_vehicle and not _row_is_vehicle(row)) or (current_has_production and _row_is_vehicle(row))
 
 
+def _vehicle_handoff_gap_complements(
+    current: list[dict[str, object]], row: dict[str, object], start: datetime | None, current_end: datetime | None,
+) -> bool:
+    if not current or not start or not current_end or not (timedelta() < start - current_end <= timedelta(minutes=30)):
+        return False
+    if _row_is_vehicle(row) or not _location_key(row) or not any(_location_key(item) == _location_key(row) for item in current):
+        return False
+    vehicle_rows = [item for item in current if _row_is_vehicle(item)]
+    return bool(vehicle_rows) and all(
+        (end := _moment(item.get("end_at") or item.get("end"))) is not None
+        and (begin := _moment(item.get("start_at") or item.get("start"))) is not None
+        and end - begin <= timedelta(minutes=30)
+        for item in vehicle_rows
+    )
+
+
 def _cohorts(rows: list[dict[str, object]]) -> list[list[dict[str, object]]]:
     """Build connected workdays from overlap or semantic boundary adjacency."""
     by_date: dict[str, list[dict[str, object]]] = {}
@@ -150,7 +166,10 @@ def _cohorts(rows: list[dict[str, object]]) -> list[list[dict[str, object]]]:
         for row in ordered:
             start = _moment(row.get("start_at") or row.get("start"))
             end = _moment(row.get("end_at") or row.get("end"))
-            separated = bool(current and start and current_end and start > current_end)
+            separated = bool(
+                current and start and current_end and start > current_end
+                and not _vehicle_handoff_gap_complements(current, row, start, current_end)
+            )
             touching_unrelated = bool(
                 current and start and current_end and start == current_end and not _touching_complements(current, row)
             )

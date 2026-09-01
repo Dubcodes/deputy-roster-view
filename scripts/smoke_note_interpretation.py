@@ -36,6 +36,7 @@ def main() -> None:
         group_event_changes,
         parse_roster_summary,
         parse_roster_time_token,
+        shift_hours_value,
     )
 
     init_db()
@@ -383,14 +384,16 @@ def main() -> None:
     }
     apply_timing_math(calculated_shift)
     if calculated_shift["display_window"] != {
-        "source": "calculated",
-        "start_label": "08:30",
-        "end_label": "18:45",
-        "hours": 10.25,
-        "hours_label": "10h 15m",
-        "time_range": "08:30–18:45",
+        "source": "roster",
+        "start_label": "09:30",
+        "end_label": "18:30",
+        "hours": 10.0,
+        "hours_label": "10h",
+        "time_range": "09:30–18:30",
     }:
-        raise AssertionError(f"Calculated display window mixed sources: {calculated_shift!r}")
+        raise AssertionError(f"Primary roster display window was replaced by race-day calculation: {calculated_shift!r}")
+    if calculated_shift["timing_math"]["race_day"].get("start_label") != "08:30":
+        raise AssertionError("Race-day calculation was removed instead of remaining supplemental evidence.")
 
     roster_shift = {
         **calculated_shift,
@@ -420,6 +423,31 @@ def main() -> None:
         travel_minutes=300,
         also_reverse=True,
     )
+    derived_route_shift = {
+        **roster_shift,
+        "date": "2026-09-02",
+        "track_label": "Ruakaka",
+        "source_code": "T-Ruakaka",
+        "start_at": "2026-09-02T09:00:00+12:00",
+        "end_at": "2026-09-02T22:00:00+12:00",
+        "start_label": "09:00",
+        "end_label": "22:00",
+        "time_range": "09:00-22:00",
+        "raw_hours": 13.0,
+        "raw_label": "13h",
+        "paid_hours": 13.0,
+        "paid_label": "13h",
+        "description_lines": ["On track 10:00", "8 races 12:00 | 16:30"],
+        "roster_summary": parse_roster_summary(["On track 10:00", "8 races 12:00 | 16:30"]),
+    }
+    apply_timing_math(derived_route_shift)
+    if (
+        derived_route_shift["display_start_label"] != "09:00"
+        or derived_route_shift["display_hours_label"] != "13h"
+        or shift_hours_value(derived_route_shift) != 13.0
+        or derived_route_shift["timing_math"]["race_day"].get("start_label") != "05:00"
+    ):
+        raise AssertionError(f"Learned 300-minute route changed the primary Deputy roster window: {derived_route_shift!r}")
     original_fetch = main_module.fetch_shifts_between
     main_module.fetch_shifts_between = lambda *_args, **_kwargs: [{
         "date": "2026-08-14",

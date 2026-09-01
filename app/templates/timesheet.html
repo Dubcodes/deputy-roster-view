@@ -41,13 +41,13 @@
                 <section class="timesheet-calculation">
                   <strong>{{ shift.track_label }}</strong>
                   {% if calculation.available %}
-                    {% if calculation.complete %}<p>Start {{ shift.display_window.start_label }}, finish {{ shift.display_window.end_label }} = {{ shift.display_window.hours_label }}</p>{% else %}<p class="calculation-warning">{{ calculation.warning }}. Finish and total remain incomplete.</p>{% endif %}
+                    {% if calculation.complete %}<p>Deputy roster: {{ shift.display_window.start_label }}–{{ shift.display_window.end_label }} = {{ shift.display_window.hours_label }}</p>{% else %}<p class="calculation-warning">{{ calculation.warning }}. Finish and total remain incomplete.</p>{% endif %}
                     <dl class="timeline-list maths-segments">
                       {% for line in calculation.lines %}
                         <div><dt>{{ line.value }}</dt><dd>{{ line.label }}</dd></div>
                       {% endfor %}
                     </dl>
-                    <p class="muted-text">{{ calculation.formula }}</p>
+                    <p class="muted-text">Calculated operational timing: {{ calculation.formula }}</p>
                   {% else %}
                     <p>{{ shift.time_range }} = {{ shift.display_hours_label }}.</p>
                   {% endif %}

@@ -2400,23 +2400,19 @@ def apply_timing_math(shift: dict[str, object]) -> None:
     if race_day.get("available") and race_day.get("complete", True):
         shift["calculated_hours"] = race_day.get("hours")
         shift["calculated_label"] = race_day.get("hours_label")
-        display_window = {
-            "source": "calculated",
-            "start_label": str(race_day.get("start_label") or ""),
-            "end_label": str(race_day.get("end_label") or ""),
-            "hours": race_day.get("hours"),
-            "hours_label": str(race_day.get("hours_label") or ""),
-        }
     else:
         shift["calculated_hours"] = None
         shift["calculated_label"] = ""
-        display_window = {
-            "source": "roster",
-            "start_label": roster_start_label,
-            "end_label": roster_end_label,
-            "hours": roster_hours,
-            "hours_label": roster_hours_label,
-        }
+    # Calendar/list/Next Up time is roster evidence. Race and route calculations
+    # remain useful supplemental operational information on the day, but must not
+    # silently become a Deputy start, finish, or rostered-hours total.
+    display_window = {
+        "source": "roster",
+        "start_label": roster_start_label,
+        "end_label": roster_end_label,
+        "hours": roster_hours,
+        "hours_label": roster_hours_label,
+    }
     personal_start = clean_time_value(str(shift.get("personal_start_time") or ""))
     personal_finish = clean_time_value(str(shift.get("personal_finish_time") or ""))
     normal_start = str(display_window["start_label"] or "")
@@ -2644,13 +2640,35 @@ def shift_is_vehicle_context_pair(left: dict[str, object], right: dict[str, obje
     )
 
 
+def shift_is_vehicle_handoff_gap(left: dict[str, object], right: dict[str, object]) -> bool:
+    """Allow one short real Deputy vehicle lead-in before its same-location role."""
+    left_end = parse_iso_datetime(str(left.get("end_at") or ""))
+    right_start = parse_iso_datetime(str(right.get("start_at") or ""))
+    if not left_end or not right_start or not (timedelta() < right_start - left_end <= timedelta(minutes=30)):
+        return False
+    if left.get("date") != right.get("date") or not role_is_vehicleish(shift_role_label(left)) or role_is_vehicleish(shift_role_label(right)):
+        return False
+    left_locations = set(shift_location_id_values(left))
+    right_locations = set(shift_location_id_values(right))
+    left_context = str(left.get("track_label") or "") or str(left.get("location") or "")
+    right_context = str(right.get("track_label") or "") or str(right.get("location") or "")
+    same_location = bool(left_locations and right_locations and left_locations & right_locations) or (
+        bool(left_context and right_context)
+        and str(left.get("track_label") or "") == str(right.get("track_label") or "")
+        and str(left.get("location") or "") == str(right.get("location") or "")
+    )
+    return same_location and shift_duration_hours_value(left) <= 0.5
+
+
 def can_merge_shift(left: dict[str, object], right: dict[str, object]) -> bool:
     if int(left.get("deleted_from_source") or 0) or int(right.get("deleted_from_source") or 0):
         return False
     left_end = parse_iso_datetime(str(left.get("end_at") or ""))
     right_start = parse_iso_datetime(str(right.get("start_at") or ""))
-    if not left_end or not right_start or left_end != right_start:
+    if not left_end or not right_start:
         return False
+    if left_end != right_start:
+        return shift_is_vehicle_handoff_gap(left, right)
     if (
         left.get("date") == right.get("date")
         and left.get("track_label") == right.get("track_label")
@@ -3865,6 +3883,24 @@ def reconcile_personal_assignment_evidence(
         position_key = schedule_label_key(str(evidence.get("position_label") or ""))
         employee_name = str(evidence.get("employee_name") or evidence.get("display_name") or "Crew member").strip()
         evidence_employee_id = safe_int(evidence.get("deputy_employee_id"))
+        if travel_participant_union:
+            existing_travel_person = next(
+                (
+                    person for person in people
+                    if (
+                        evidence_employee_id is not None
+                        and safe_int(person.get("employee_id")) is not None
+                        and safe_int(person.get("employee_id")) == evidence_employee_id
+                    ) or (
+                        (evidence_employee_id is None or safe_int(person.get("employee_id")) is None)
+                        and schedule_label_key(str(person.get("employee_name") or "")) == schedule_label_key(employee_name)
+                    )
+                ),
+                None,
+            )
+            if existing_travel_person is not None:
+                existing_travel_person["personal_evidence"] = True
+                continue
         matching_rows = [
             person for person in people
             if position_key in {
@@ -4291,6 +4327,41 @@ def travel_cohort_schedule_rows(date_text: str, shifts: list[dict[str, object]])
             for shift in shifts
         )
     ]
+
+
+def travel_personal_assignment_evidence(
+    date_text: str,
+    shifts: list[dict[str, object]],
+    schedule_rows: list[object],
+) -> list[object]:
+    """Return personal Deputy rows for this already-proven Travel event only."""
+    location_ids = set(shift_schedule_location_ids(shifts))
+    location_ids.update(
+        safe_int(dict(row).get("schedule_location_id") or dict(row).get("area_location_id"))
+        for row in schedule_rows
+        if schedule_area_is_travel_participant_cohort(str(dict(row).get("area_name") or ""))
+    )
+    location_ids.discard(None)
+    windows = [
+        (parse_iso_datetime(str(shift.get("start_at") or "")), parse_iso_datetime(str(shift.get("end_at") or "")))
+        for shift in shifts
+    ]
+    windows = [(start, end) for start, end in windows if start and end]
+    if not location_ids or not windows:
+        return []
+    result = []
+    for evidence in fetch_personal_assignment_evidence_for_date(date_text):
+        item = dict(evidence)
+        if (
+            not schedule_area_is_travel_participant_cohort(str(item.get("position_label") or ""))
+            or safe_int(item.get("area_location_id")) not in location_ids
+        ):
+            continue
+        start = parse_iso_datetime(str(item.get("start_at") or ""))
+        end = parse_iso_datetime(str(item.get("end_at") or ""))
+        if start and end and any(start < window_end and window_start < end for window_start, window_end in windows):
+            result.append(evidence)
+    return result
 
 
 def track_maps_for_day(
@@ -7464,15 +7535,19 @@ def day_view(
         include_vehicle_only=travel_schedule_context,
         include_placeholders=not travel_schedule_context,
     )
+    personal_schedule_evidence = (
+        travel_personal_assignment_evidence(date_text, shifts, deputy_schedule_rows)
+        if travel_schedule_context
+        else fetch_personal_assignment_evidence_for_date(date_text, schedule_location_ids or None)
+    )
     reconcile_personal_assignment_evidence(
         deputy_schedule_people,
-        fetch_personal_assignment_evidence_for_date(
-            date_text, schedule_location_ids or None
-        ),
+        personal_schedule_evidence,
         event_start_at=min((str(item.get("start_at") or "") for item in shifts), default="") if travel_schedule_context else None,
         event_end_at=max((str(item.get("end_at") or "") for item in shifts), default="") if travel_schedule_context else None,
         travel_participant_union=travel_schedule_context,
     )
+    apply_crew_directory_identity(deputy_schedule_people)
     apply_schedule_role_context(shifts, deputy_schedule_rows)
     note_travel_cohort = False
     if travel_schedule_context:

@@ -174,8 +174,10 @@ def main() -> None:
         assert shift["effective_race_timing"]["last_race_time"] == "16:38"
         assert shift["effective_race_timing"]["sources"]["last_race_time"] == "Admin override"
         assert shift["timing_math"]["race_day"]["last_race_label"] == "16:38"
-        assert shift["display_window"]["end_label"] == "18:15"
-        assert shift["display_window"]["hours_label"] == "10h"
+        assert shift["display_window"]["start_label"] == "08:15"
+        assert shift["display_window"]["end_label"] == "17:00"
+        assert shift["display_window"]["hours_label"] == "8h 45m"
+        assert shift["timing_math"]["race_day"]["end_label"] == "18:15"
         assert "comes from an Admin override" in shift["timing_math"]["race_day"]["formula"]
         assert dict(get_love_racing_meeting_detail("55032")) == cached_before
         from app.main import parse_roster_summary, resolve_race_timing_fields
@@ -229,7 +231,8 @@ def main() -> None:
         replaced_shift = load_te_rapa()
         assert replaced_shift["effective_race_timing"]["last_race_time"] == "16:45"
         assert replaced_shift["effective_race_timing"]["sources"]["last_race_time"] == "Admin override"
-        assert replaced_shift["display_window"]["end_label"] == "18:30"
+        assert replaced_shift["display_window"]["end_label"] == "17:00"
+        assert replaced_shift["timing_math"]["race_day"]["end_label"] == "18:30"
 
         assert disable_admin_override(
             int(replacement["id"]),

@@ -111,12 +111,12 @@ def render_day_template() -> None:
                 "id": 1,
                 "deleted_from_source": 0,
                 "colour_style": "--shift-location-colour: var(--location-colour-8); --location-colour: var(--location-colour-8);",
-                "time_range": "08:30–18:45",
+                "time_range": "09:30–18:30",
                 "display_window": {
-                    "source": "calculated",
-                    "start_label": "08:30",
-                    "end_label": "18:45",
-                    "hours_label": "10h 15m",
+                    "source": "roster",
+                    "start_label": "09:30",
+                    "end_label": "18:30",
+                    "hours_label": "9h",
                 },
                 "role_chain_label": "Sound/VT",
                 "role_full_label": "Sound/VT",
@@ -129,9 +129,9 @@ def render_day_template() -> None:
                 "change_summary_text": "Start 09:00 → 09:30 · Finish 18:00 → 18:30",
                 "source_status": "",
                 "timing_adjustment_labels": [],
-                "start_at": "2026-06-13T08:30:00+12:00",
-                "end_at": "2026-06-13T17:45:00+12:00",
-                "display_hours_label": "10h 15m",
+                "start_at": "2026-06-13T09:30:00+12:00",
+                "end_at": "2026-06-13T18:30:00+12:00",
+                "display_hours_label": "9h",
                 "source_link": "",
                 "race_day_summary": {
                     "has_items": True,
@@ -203,8 +203,8 @@ def render_day_template() -> None:
         or "18:00 → 18:30" not in html
     ):
         raise AssertionError("Day template did not render compact personal roster changes.")
-    if "08:30–18:45" not in html or "10h 15m" not in html:
-        raise AssertionError("Day template did not render one consistent calculated display window.")
+    if "Deputy roster: 09:30–18:30 = 9h" not in html or "Calculated operational timing (supplemental)" not in html:
+        raise AssertionError("Day template did not distinguish the Deputy roster window from calculated timing.")
     if any(label in html for label in ("Start origin evidence", "Finish destination evidence", "roster base timing")):
         raise AssertionError("Day template rendered internal timeline evidence labels.")
 
@@ -226,14 +226,14 @@ def render_month_template() -> None:
         "deleted_from_source": 0,
         "changed_since_viewed": 0,
         "colour_style": "--shift-location-colour: var(--location-colour-8); --location-colour: var(--location-colour-8);",
-        "track_label": "Te Rapa",
-        "role_chain_label": "Sound/VT",
-        "role_label": "SVT",
-        "title": "[TRAP-T] SVT",
-        "start_label": "09:30",
-        "display_start_label": "08:30",
-        "time_range": "08:30–18:45",
-        "display_hours_label": "10h 15m",
+        "track_label": "Ruakaka",
+        "role_chain_label": "Director",
+        "role_label": "DIR",
+        "title": "[T-Ruakaka] DIR",
+        "start_label": "09:00",
+        "display_start_label": "09:00",
+        "time_range": "09:00–22:00",
+        "display_hours_label": "13h",
         "race_type_label": "Thoroughbred racing",
     }
     day = {
@@ -259,7 +259,7 @@ def render_month_template() -> None:
         view="month",
         month_name="June 2026",
         weekdays=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
-        weeks=[{"days": [day], "total": 9.25}],
+        weeks=[{"days": [day], "total": 13.0}],
         active_days=[day],
         upcoming_shifts=[shift],
         upcoming_items=[{**shift, "upcoming_kind": "deputy"}],
@@ -274,14 +274,15 @@ def render_month_template() -> None:
     if 'class="calendar-date-heading"' not in html:
         raise AssertionError("Month holiday marker is not in reserved date-heading layout space.")
     if (
-        "10h 15m" not in html
-        or html.count("08:30") < 2
-        or "Sound/VT · 08:30" not in html
+        "13h" not in html
+        or html.count("09:00") < 2
+        or "Director · 09:00" not in html
+        or "05:00" in html
     ):
         raise AssertionError(
-            f"Month/list/Next Up mixed roster and calculated display sources: "
-            f"08:30={html.count('08:30')}, hours={'10h 15m' in html}, "
-            f"next={'Sound/VT · 08:30' in html}"
+            f"Month/list/Next Up did not retain the primary Deputy roster window: "
+            f"09:00={html.count('09:00')}, hours={'13h' in html}, "
+            f"next={'Director · 09:00' in html}, inferred={'05:00' in html}"
         )
 
     list_html = template.render(
@@ -295,8 +296,8 @@ def render_month_template() -> None:
         raise AssertionError("Shared/global month list did not render the holiday marker.")
     if 'class="list-day-heading"' not in list_html:
         raise AssertionError("List holiday marker is not in reserved date-heading layout space.")
-    if "08:30–18:45" not in list_html or "10h 15m" not in list_html:
-        raise AssertionError("List view mixed roster and calculated display sources.")
+    if "09:00–22:00" not in list_html or "13h" not in list_html or "05:00" in list_html:
+        raise AssertionError("List view did not retain the primary Deputy roster window.")
 
 
 def render_roster_note_template() -> None:
@@ -388,10 +389,10 @@ def render_timesheet_template() -> None:
                 "iso": "2026-02-06", "date_label": "Fri 06 Feb", "total": 8.5,
                 "locations": "Te Rapa", "notes": [],
                 "shifts": [{
-                    "track_label": "Te Rapa", "time_range": "08:30–18:45", "display_hours_label": "10h 15m",
+                    "track_label": "Te Rapa", "time_range": "09:30–18:30", "display_hours_label": "9h",
                     "display_window": {
-                        "source": "calculated", "start_label": "08:30",
-                        "end_label": "18:45", "hours_label": "10h 15m",
+                        "source": "roster", "start_label": "09:30",
+                        "end_label": "18:30", "hours_label": "9h",
                     },
                     "timing_math": {"race_day": {
                         "available": True, "complete": True, "start_label": "08:30",
@@ -427,8 +428,10 @@ def render_timesheet_template() -> None:
         raise AssertionError("Timesheet holiday marker is not in reserved date-heading layout space.")
     if "Start · Office / Clow Place" not in html or "Finish · Office / Clow Place" not in html:
         raise AssertionError("Timesheet template did not render the shared simplified wording.")
-    if "Using the scheduled last race from Love Racing" not in html:
+    if "Calculated operational timing: Using the scheduled last race from Love Racing" not in html:
         raise AssertionError("Timesheet template did not render cached Love Racing calculation evidence.")
+    if "Deputy roster: 09:30–18:30 = 9h" not in html:
+        raise AssertionError("Timesheet calculation replaced the Deputy roster window with an estimate.")
     if "Deputy roster start" not in html:
         raise AssertionError("Timesheet template hid an operational timing discrepancy.")
     if "Return travel not configured" not in html:

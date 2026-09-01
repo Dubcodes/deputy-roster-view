@@ -1,5 +1,11 @@
 # Decisions
 
+## 2026-09-02 — Deputy is the primary roster authority
+
+- Published shared Deputy rows and authenticated users' own Deputy rows determine roster membership, role, location, start, finish, and source state. Matching Travel evidence is additive only when the existing narrow Travel/T-Travel location semantics and an overlapping Deputy window prove the same event.
+- Roster notes enrich a structured person's vehicle, accommodation, transport, and operational details. They cannot remove or replace structured roster members; unresolved note-only names remain supplemental evidence.
+- Route learning and race-day calculations are operational estimates. They remain visible on the day and timesheet calculation panels, but never replace Deputy roster times or roster-hour totals. Explicit user personal-time overrides retain their existing intentional presentation role.
+
 ## 2026-08-24 — Keep account, crew identity, and Deputy connection independent
 
 - Keep legacy `app_users.deputy_email` as the Re-Deputy login identity; do not rename or duplicate it.
