@@ -177,4 +177,17 @@ assert note_with_prior_conflict["vehicle"] == ""
 assert note_with_prior_conflict["vehicle_evidence"]["roster_note_conflict"] is True
 assert note_with_prior_conflict["vehicle_evidence"]["preceding_travel_value"] == "Rav91"
 
+note_conflict_with_structured = single(
+    [row("note-conflict-with-structured", description="684 Jayden\n685 Jayden")],
+    structured_rows=[row("note-conflict-with-structured", "CCU1", "684")],
+    person_identity=JAYDEN,
+    preceding_rows=conflict_prior_raw,
+    preceding_structured_rows=conflict_prior_structured,
+)
+assert (note_conflict_with_structured["vehicle"], note_conflict_with_structured["vehicle_provenance"]) == (
+    "684", "structured_deputy",
+)
+assert note_conflict_with_structured["vehicle_evidence"]["roster_note_conflict"] is True
+assert note_conflict_with_structured["vehicle_evidence"]["preceding_travel_value"] == "Rav91"
+
 print("combined Deputy vehicle interpretation smoke ok")

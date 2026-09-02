@@ -395,8 +395,8 @@ def interpret_deputy_workdays(
         vehicle_source = (
             "current_roster_note" if note_vehicle
             else "structured_deputy_conflict" if structured_conflict
-            else "current_roster_note_conflict" if note_conflict
             else "structured_deputy" if structured_vehicle
+            else "current_roster_note_conflict" if note_conflict
             else prior_source
         )
         source_ids = list(dict.fromkeys(
