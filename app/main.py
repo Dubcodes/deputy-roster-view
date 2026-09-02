@@ -25,6 +25,7 @@ from .auth import (
     require_admin_user, trusted_device_middleware,
 )
 from .config import get_settings
+from .deputy_evidence import classify_deputy_evidence
 from .version import APP_BUILD, APP_VERSION
 from .backup_service import backup_status, create_backup
 from .admin_audit import admin_audit_count, finalize_admin_action, list_admin_action_audit, record_admin_action
@@ -3883,17 +3884,31 @@ def reconcile_personal_assignment_evidence(
         position_key = schedule_label_key(str(evidence.get("position_label") or ""))
         employee_name = str(evidence.get("employee_name") or evidence.get("display_name") or "Crew member").strip()
         evidence_employee_id = safe_int(evidence.get("deputy_employee_id"))
-        if travel_participant_union:
+        evidence_person_id = safe_int(evidence.get("canonical_person_id"))
+        evidence_type = str(evidence.get("evidence_type") or "")
+        cohort_type = str(evidence.get("cohort_type") or "")
+        if not evidence_type:
+            fallback = classify_deputy_evidence(
+                evidence.get("raw_role_label") or evidence.get("position_label"),
+                production_keys=SCHEDULE_POSITION_ORDER,
+                production_aliases=SCHEDULE_POSITION_ALIASES,
+            )
+            evidence_type = fallback.evidence_type
+            cohort_type = fallback.cohort_type
+        if cohort_type == "travel":
+            if not travel_participant_union or not event_start_at or not event_end_at:
+                continue
+            if evidence_employee_id is None and evidence_person_id is None:
+                continue
             existing_travel_person = next(
                 (
                     person for person in people
                     if (
                         evidence_employee_id is not None
-                        and safe_int(person.get("employee_id")) is not None
                         and safe_int(person.get("employee_id")) == evidence_employee_id
                     ) or (
-                        (evidence_employee_id is None or safe_int(person.get("employee_id")) is None)
-                        and schedule_label_key(str(person.get("employee_name") or "")) == schedule_label_key(employee_name)
+                        evidence_person_id is not None
+                        and safe_int(person.get("canonical_person_id")) == evidence_person_id
                     )
                 ),
                 None,
@@ -3901,6 +3916,24 @@ def reconcile_personal_assignment_evidence(
             if existing_travel_person is not None:
                 existing_travel_person["personal_evidence"] = True
                 continue
+            people.append({
+                "canonical_person_id": evidence_person_id,
+                "employee_name": employee_name,
+                "employee_id": evidence_employee_id,
+                "position_label": "Travel",
+                "vehicle_label": "",
+                "sort_order": schedule_display_sort("Travel"),
+                "changed": False,
+                "change_summary": "",
+                "change_time_label": "",
+                "placeholder": False,
+                "personal_evidence": True,
+                "provenance_label": "Confirmed from personal roster",
+                "possibly_missing": str(evidence.get("status") or "") == "possibly_missing",
+            })
+            continue
+        if evidence_type != "production_position":
+            continue
         matching_rows = [
             person for person in people
             if position_key in {
@@ -3946,31 +3979,6 @@ def reconcile_personal_assignment_evidence(
         )
         if same_person:
             shared["personal_evidence"] = True
-            continue
-        if travel_participant_union and any(
-            token in position_key for token in ("travel", "overnighter")
-        ):
-            # Travel is a participant cohort rather than a one-person production
-            # position. Matching authenticated personal evidence adds the linked
-            # person without inventing a role or touching unrelated crews.
-            if not any(
-                (evidence_employee_id is not None and safe_int(person.get("employee_id")) == evidence_employee_id)
-                or schedule_label_key(str(person.get("employee_name") or "")) == schedule_label_key(employee_name)
-                for person in people
-            ):
-                people.append({
-                    "employee_name": employee_name,
-                    "employee_id": evidence_employee_id,
-                    "position_label": str(evidence.get("position_label") or "Travel"),
-                    "vehicle_label": "",
-                    "sort_order": schedule_display_sort("Travel"),
-                    "changed": False,
-                    "change_summary": "",
-                    "change_time_label": "",
-                    "placeholder": False,
-                    "personal_evidence": True,
-                    "provenance_label": "Confirmed from personal roster",
-                })
             continue
         shared["assignment_conflict"] = True
         shared["conflict_warning"] = (
@@ -4352,9 +4360,17 @@ def travel_personal_assignment_evidence(
     result = []
     for evidence in fetch_personal_assignment_evidence_for_date(date_text):
         item = dict(evidence)
+        alias_match = any(
+            travel_family_locations_match(
+                dict(row).get("location_name"), dict(row).get("area_name"),
+                item.get("location_name"), item.get("raw_role_label") or item.get("position_label"),
+            )
+            for row in schedule_rows
+        )
         if (
-            not schedule_area_is_travel_participant_cohort(str(item.get("position_label") or ""))
-            or safe_int(item.get("area_location_id")) not in location_ids
+            str(item.get("evidence_type") or "") != "participant_cohort"
+            or str(item.get("cohort_type") or "") != "travel"
+            or (safe_int(item.get("area_location_id")) not in location_ids and not alias_match)
         ):
             continue
         start = parse_iso_datetime(str(item.get("start_at") or ""))
@@ -5174,6 +5190,8 @@ def aggregate_global_schedule(rows: list[object]) -> list[dict[str, object]]:
         end_at = item.pop("global_end_at")
         crew_label = "Crew scheduled"
         item["crew_count"] = crew_count
+        item["start_at"] = start_at.isoformat() if start_at else ""
+        item["end_at"] = end_at.isoformat() if end_at else ""
         item["role_chain_label"] = crew_label
         item["role_label"] = crew_label
         item["display_hours_label"] = crew_label
@@ -7410,13 +7428,29 @@ def day_view(
                 else []
             ),
         )
+        global_travel_context = bool(
+            selected_event
+            and any(schedule_area_is_travel_participant_cohort(dict(row).get("area_name")) for row in global_schedule_rows)
+        )
+        global_evidence_rows = fetch_personal_assignment_evidence_for_date(
+            date_text, [selected_location_id] if selected_location_id else None
+        )
+        if global_travel_context and selected_event:
+            global_evidence_rows = travel_personal_assignment_evidence(
+                date_text,
+                [{
+                    "start_at": selected_event.get("start_at"),
+                    "end_at": selected_event.get("end_at"),
+                    "schedule_location_id": selected_location_id,
+                }],
+                global_schedule_rows,
+            )
         reconcile_personal_assignment_evidence(
             global_schedule_people,
-            fetch_personal_assignment_evidence_for_date(
-                date_text, [selected_location_id] if selected_location_id else None
-            ),
+            global_evidence_rows,
             event_start_at=selected_event.get("start_at") if selected_event else None,
             event_end_at=selected_event.get("end_at") if selected_event else None,
+            travel_participant_union=global_travel_context,
         )
         apply_schedule_self_travel(
             global_schedule_people,
@@ -7644,44 +7678,6 @@ def day_view(
         if workday.get("vehicle_conflict"):
             values = " / ".join(str(value) for value in workday.get("vehicle_conflict_values") or [])
             person["vehicle_conflict_warning"] = f"Vehicle assignment conflict: {values}" if values else "Vehicle assignment conflict"
-    if travel_schedule_context:
-        displayed_person_ids = {safe_int(person.get("canonical_person_id")) for person in deputy_schedule_people}
-        identities_by_id = {safe_int(identity.get("id")): identity for identity in interpreter_identities}
-        for person_id, workdays in canonical_people_workdays.items():
-            workday = next((item for item in workdays if item.get("date") == date_text), None)
-            if not workday or person_id in displayed_person_ids or not workday.get("roster_note_vehicle"):
-                continue
-            identity = identities_by_id.get(person_id) or {}
-            deputy_schedule_people.append({
-                "canonical_person_id": person_id,
-                "employee_name": str(identity.get("canonical_display_name") or identity.get("current_deputy_name") or "Crew member"),
-                "position_label": "Travel", "area_display": "Travel",
-                "vehicle_label": str(workday.get("vehicle") or ""),
-                "vehicle_provenance": str(workday.get("vehicle_provenance") or "current_roster_note"),
-                "roster_note_vehicle_label": str(workday.get("roster_note_vehicle") or ""),
-                "source": "Roster note + canonical workday",
-                "provenance_label": "Roster note + Deputy schedule",
-            })
-            displayed_person_ids.add(person_id)
-        displayed_names = {schedule_label_key(str(person.get("employee_name") or "")) for person in deputy_schedule_people}
-        displayed_aliases = schedule_person_alias_map(deputy_schedule_people)
-        note_only = next((item.get("vehicle_evidence", {}).get("note_only_people", [])
-                          for items in canonical_people_workdays.values() for item in items
-                          if item.get("date") == date_text), [])
-        for unresolved in note_only:
-            name = str(unresolved.get("name") or "").strip()
-            name_key = schedule_label_key(name)
-            resolved_indexes = set(displayed_aliases.get(name_key, []))
-            if not name or not name_key or name_key in displayed_names or len(resolved_indexes) == 1:
-                continue
-            deputy_schedule_people.append({
-                "canonical_person_id": None, "employee_name": name,
-                "position_label": "Travel", "area_display": "Travel",
-                "vehicle_label": str(unresolved.get("vehicle") or ""),
-                "source": "Roster note + canonical workday",
-                "provenance_label": "Unresolved note-only person",
-            })
-            displayed_names.add(name_key)
     apply_shift_self_travel(shifts, date_text, date_text, owner_user_id)
     apply_schedule_self_travel(
         deputy_schedule_people,

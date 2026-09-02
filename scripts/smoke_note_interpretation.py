@@ -153,17 +153,15 @@ def main() -> None:
     html = rendered.text
     crew_match = re.search(r'aria-label="Deputy schedule crew".*?</section>', html, re.S)
     crew_html = crew_match.group(0) if crew_match else ""
-    expected_people = ("Dylan Holden", "Esq", "Grant Woolston", "Todd", "Lans McGall", "Junior", "Joshua Druett", "Jayden-lee", "Nate")
-    if not crew_html or any(name not in crew_html for name in expected_people):
-        raise AssertionError(f"Rendered Travel cohort omitted confidently resolved note people: {crew_html}")
+    note_only_people = ("Dylan Holden", "Esq", "Todd", "Lans McGall", "Junior", "Joshua Druett", "Jayden-lee", "Nate")
+    if not crew_html or crew_html.count("Grant Woolston") != 1 or any(name in crew_html for name in note_only_people):
+        raise AssertionError(f"Roster-note evidence changed structured Travel membership: {crew_html}")
     if "Rob Watson" in html or "Mark Strachan" in html:
         raise AssertionError("Rendered Travel day retained unrelated generic schedule crew/history.")
-    if "Rav91" not in crew_html or "684" not in crew_html:
-        raise AssertionError("Rendered Travel cohort lost canonical note vehicles.")
+    if "Rav91" not in crew_html or "684" in crew_html:
+        raise AssertionError("Rendered Travel cohort did not limit note vehicles to structured crew identities.")
     if "Rav91, Rav" in crew_html:
         raise AssertionError("Final rendered Travel cohort leaked the Rav alias beside canonical Rav91.")
-    if "Unresolved note-only person" not in crew_html:
-        raise AssertionError("Explicit note-only people lost their unresolved provenance.")
     for raw_line in travel_note.splitlines():
         if raw_line not in html:
             raise AssertionError(f"Raw Travel roster note line was not preserved: {raw_line!r}")

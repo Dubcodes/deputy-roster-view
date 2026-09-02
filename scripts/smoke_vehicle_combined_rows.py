@@ -94,6 +94,23 @@ assert disagreement["vehicle_evidence"]["structured_values"] == ["684", "685"]
 assert disagreement["vehicle_evidence"]["structured_conflict"] is True
 note_override = single([row("note-production", vehicle="684", description="Rav Jayden")], structured_rows=[row("note-production", "CCU1", "684")], person_identity=JAYDEN)
 assert (note_override["vehicle"], note_override["vehicle_provenance"]) == ("Rav91", "current_roster_note")
+assert note_override["vehicle_conflict"] is True
+assert note_override["vehicle_conflict_values"] == ["684", "Rav91"]
+assert note_override["vehicle_evidence"]["cross_source_conflict"] is True
+
+# The narrow handoff exception applies only to a short vehicle lead. A long
+# Travel participant row followed by a 30-minute gap remains a distinct duty,
+# as do unrelated production rows that merely touch at a boundary.
+long_travel = interpret_deputy_workdays([
+    row("long-travel", "Travel", start="07:00", end="11:30"),
+    row("after-long-travel", "CCU1", start="12:00", end="18:00"),
+], person_identity=JAYDEN)
+touching_production = interpret_deputy_workdays([
+    row("touching-one", "Director", start="07:00", end="10:00"),
+    row("touching-two", "CCU1", start="10:00", end="18:00"),
+], person_identity=JAYDEN)
+assert len(long_travel) == 2
+assert len(touching_production) == 2
 
 # Personal structured evidence can fill a shared blank for its canonical owner,
 # but cannot overwrite a shared explicit disagreement.  Olivia/Matt's separate
@@ -118,7 +135,7 @@ personal_conflict = interpret_deputy_workdays_for_people(
     raw_evidence_owner_identity=JAYDEN,
 )
 assert personal_conflict[1][0]["vehicle"] == "" and personal_conflict[1][0]["vehicle_conflict_values"] == ["685", "684"]
-assert personal_conflict[2][0]["vehicle"] == personal_conflict[3][0]["vehicle"] == "Truck (unspecified)"
+assert personal_conflict[2][0]["vehicle"] == personal_conflict[3][0]["vehicle"] == "Truck"
 
 # Preceding Travel remains a fallback only.  A changed current assignment wins;
 # after removal, the old current value is not retained and the valid preceding

@@ -73,9 +73,11 @@ def main() -> int:
     for script in OFFLINE_SMOKES:
         run(script, [sys.executable, str(Path("scripts") / script)], env)
     with tempfile.TemporaryDirectory(prefix="redeputy-release-migration-") as directory:
-        database = str(Path(directory) / "migration.sqlite3")
-        run("migration rehearsal", [sys.executable, "scripts/rehearse_migration.py", database], env)
-        run("assignment/link collision audit", [sys.executable, "scripts/audit_assignment_keys.py", database], env)
+        fresh_database = str(Path(directory) / "fresh.sqlite3")
+        upgrade_database = str(Path(directory) / "upgrade-0.5.13.sqlite3")
+        run("fresh database rehearsal", [sys.executable, "scripts/rehearse_migration.py", "--empty", fresh_database], env)
+        run("0.5.13 upgrade rehearsal", [sys.executable, "scripts/rehearse_migration.py", upgrade_database], env)
+        run("assignment/link collision audit", [sys.executable, "scripts/audit_assignment_keys.py", upgrade_database], env)
     if args.responsive:
         run("responsive 320px/375px browser gate", [sys.executable, "scripts/smoke_workday_responsive.py"], env)
         run("0.5.4 Admin/Help responsive browser gate", [sys.executable, "scripts/smoke_patch_054_responsive.py"], env)

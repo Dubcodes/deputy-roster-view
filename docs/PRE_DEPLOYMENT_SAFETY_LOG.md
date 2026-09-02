@@ -605,3 +605,13 @@ Startup no longer calls hard inactive-account purge. Deliberate inactive cleanup
 Starting release: immutable `v0.5.6` at `f20a23d3e735e5c4dbda60db9849a6d3c331abe8`.
 
 The actual Git-backed Portainer stack reads repository-root `docker-compose.yml`, so it is now the sole canonical hardened production definition. The previous root development configuration moved to `docker-compose.dev.yml`; the duplicate production Compose was removed. Root production keeps the existing data mount, adds the backups mount, exposes 8000 only internally on the named shared network, has no host application port, and accepts either the existing external `APP_SECRET_KEY` or the persistent `/app/data/app_secret.key` fallback. Routine Portainer settings do not change. Pending final validation and exact-SHA CI/tag evidence; no production deployment is authorized.
+
+---
+
+## 0.5.13 interpretation stabilization candidate
+
+Starting baseline: `bfe9103aa17f76229924a872f7a479d0ba2be3fd` (`Re-Deputy 0.5.13`).
+
+Authenticated personal Deputy rows are now retained before semantic classification. Production positions, Travel participants, vehicle/operational context, and unknown labels remain distinct; the upgrade backfill classifies retained labels without promoting unknown evidence. Production coverage consumes production-position evidence only. Event-scoped Travel membership is the union of shared structured participants and strongly identified authenticated personal participants for the same narrow Travel/T-Travel family and overlapping event window. Roster notes enrich established members but cannot create crew membership. Generic truck evidence renders as `Truck` while retaining generic metadata, and note-versus-structured vehicle disagreement is reported without changing note authority.
+
+The dedicated Travel collector, broad-ALL absence exclusions, per-observer evidence, partial-capture protection, historical event locks, capture recovery, structured vehicle collector, raw-owner isolation, short-lead handoff duration guard, and Deputy roster timing authority remain intact. The complete deterministic 0.5.13 release gate and its 320px/375px responsive variant passed, including fresh initialization, representative in-place 0.5.13 migration twice, SQLite integrity/FK checks, assignment/link collision audit, and `git diff --check`. No live Deputy access, write enablement, deployment, merge, or push occurred.

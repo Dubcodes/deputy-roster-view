@@ -61,7 +61,7 @@ for line in ("684 james grant lans", "Rav Alf jayden and josh", "Matt and Troy t
 assert [(item["vehicle"], item["people"]) for item in taupo_allocations] == [
     ("684", ["james", "grant", "lans"]),
     ("Rav91", ["Alf", "jayden", "josh"]),
-    ("Truck (unspecified)", ["Matt", "Troy"]),
+    ("Truck", ["Matt", "Troy"]),
 ]
 assert note_vehicle_allocations_from_text("qua684 Jayden")[0]["vehicle"] == "684"
 assert note_vehicle_allocations_from_text("QUA690 Olivia")[0]["vehicle"] == "QUA690"
@@ -92,7 +92,7 @@ assigned = {
     travel_people[int(item["person_index"])]["employee_id"]: item["vehicle"]
     for item in travel_resolution["assignments"]
 }
-assert assigned == {7: "Truck (unspecified)", 13: "Rav91", 20: "Rav91", 21: "Rav91", 22: "684", 23: "684", 24: "684", 25: "Truck (unspecified)"}
+assert assigned == {7: "Truck", 13: "Rav91", 20: "Rav91", 21: "Rav91", 22: "684", 23: "684", 24: "684", 25: "Truck"}
 assert any(item["name"] == "Todd" for item in travel_resolution["unresolved"])
 assert 14 not in assigned  # Gaz/Gary Russo is never confused with Gary McClure #13.
 
@@ -130,7 +130,7 @@ travel_workdays = interpret_deputy_workdays_for_people([
     for identity in identities if identity["id"] != 14
 ], identity_records=identities)
 assert {key: travel_workdays[key][0]["vehicle"] for key in (7, 13, 20, 21, 22, 23, 24, 25)} == {
-    7: "Truck (unspecified)", 13: "Rav91", 20: "Rav91", 21: "Rav91", 22: "684", 23: "684", 24: "684", 25: "Truck (unspecified)",
+    7: "Truck", 13: "Rav91", 20: "Rav91", 21: "Rav91", 22: "684", 23: "684", 24: "684", 25: "Truck",
 }
 assert any(item["name"] == "Todd" for item in travel_workdays[20][0]["vehicle_evidence"]["unresolved_roster_note"])
 
@@ -157,7 +157,8 @@ esq_resolution = resolve_note_allocations(
     [{"employee_id": 7, "employee_name": "Danny Hunter", "current_deputy_name": "Sir Daniel Hunter ESQ."}],
 )
 assert esq_resolution["assignments"] == [{
-    "vehicle": "Truck (unspecified)", "name": "Esq", "raw": "Trucks Esq", "person_index": 0,
+    "vehicle": "Truck", "name": "Esq", "raw": "Trucks Esq",
+    "vehicle_type": "truck", "vehicle_specificity": "generic", "person_index": 0,
 }]
 
 ambiguous = resolve_note_allocations(

@@ -12,7 +12,7 @@ from .roster_note_interpretation import (
     identity_key,
     resolve_note_allocations,
 )
-from .travel_cohorts import travel_family_locations_match
+from .travel_cohorts import is_travel_participant_cohort, travel_family_locations_match
 
 
 VEHICLE_RE = re.compile(r"^(?:\d{3,4}|rav\w*|rp\d+|ob|tender|transit)$", re.IGNORECASE)
@@ -75,7 +75,11 @@ def _vehicle_from_row(row: dict[str, object]) -> str:
 def _row_is_vehicle(row: dict[str, object]) -> bool:
     _, title_role = _title_parts(row.get("title"))
     role = str(row.get("role_label") or row.get("area_name") or title_role or "").strip()
-    return bool(VEHICLE_RE.fullmatch(role) or re.fullmatch(r"(?:Travel|Vehicles?)", role, re.I))
+    return bool(
+        VEHICLE_RE.fullmatch(role)
+        or re.fullmatch(r"(?:Travel|Vehicles?)", role, re.I)
+        or is_travel_participant_cohort(role)
+    )
 
 
 def _current_vehicle_candidates(
@@ -377,6 +381,8 @@ def interpret_deputy_workdays(
         ]
         note_vehicles = {canonical_vehicle_label(item.get("vehicle")) for item in target_note_assignments if item.get("vehicle")}
         note_vehicle = next(iter(note_vehicles)) if len(note_vehicles) == 1 else ""
+        note_conflict = len(note_vehicles) > 1
+        cross_source_conflict = bool(note_vehicle and structured_vehicle and note_vehicle != structured_vehicle)
         starts = [str(row.get("start_at") or row.get("start") or "") for row in evidence]
         finishes = [str(row.get("end_at") or row.get("end") or "") for row in evidence]
         date_text = str(anchor.get("date") or starts[0] or "")[:10]
@@ -405,8 +411,11 @@ def interpret_deputy_workdays(
             "vehicle": vehicle,
             "vehicle_provenance": vehicle_source,
             "structured_vehicle": structured_vehicle,
-            "vehicle_conflict": structured_conflict,
-            "vehicle_conflict_values": structured_values if structured_conflict else [],
+            "vehicle_conflict": bool(structured_conflict or note_conflict or cross_source_conflict),
+            "vehicle_conflict_values": list(dict.fromkeys(
+                (structured_values if structured_conflict else ([structured_vehicle] if structured_vehicle else []))
+                + (sorted(note_vehicles) if note_vehicles else [])
+            )) if (structured_conflict or note_conflict or cross_source_conflict) else [],
             "roster_note_vehicle": note_vehicle,
             "rostered_start": start,
             "rostered_finish": finish,
@@ -421,6 +430,9 @@ def interpret_deputy_workdays(
                 "structured_values": structured_values,
                 "structured_conflict": structured_conflict,
                 "structured_rows": structured_value_rows,
+                "roster_note_conflict": note_conflict,
+                "cross_source_conflict": cross_source_conflict,
+                "cross_source_conflict_values": [structured_vehicle, note_vehicle] if cross_source_conflict else [],
                 "roster_note_value": note_vehicle, "roster_note_rows": note_evidence,
                 "linked_travel_rows": [row for row in evidence + target_structured if _row_is_vehicle(row)],
                 "preceding_travel_value": prior_vehicle, "preceding_travel_rows": prior_rows,
@@ -434,6 +446,12 @@ def interpret_deputy_workdays(
             "structured_deputy_evidence": evidence + target_structured,
             "logical_workday_id": hashlib.sha256(identity_source.encode()).hexdigest()[:24],
         }
+        generic_truck = next(
+            (assignment for assignment in target_note_assignments if assignment.get("vehicle_specificity") == "generic"),
+            None,
+        )
+        if generic_truck and vehicle == "Truck":
+            item["vehicle_evidence"].update({"vehicle_type": "truck", "vehicle_specificity": "generic"})
         item["revision"] = hashlib.sha256(json.dumps({
             "ids": source_ids, "position": item["production_position"], "vehicle": vehicle,
             "start": start, "finish": finish,

@@ -19,6 +19,7 @@ from .admin_overrides import (
 )
 from .workday_builder import BUILT_IN_ROLES, canonical_role_key, legacy_transport_mode
 from .interpreted_workdays import deputy_shift_is_available
+from .deputy_evidence import classify_deputy_evidence
 from .travel_cohorts import is_travel_participant_cohort
 
 
@@ -739,6 +740,11 @@ def init_db(settings: Settings | None = None) -> None:
                 area_location_id INTEGER NOT NULL,
                 position_key TEXT NOT NULL,
                 position_label TEXT NOT NULL,
+                raw_role_label TEXT NOT NULL DEFAULT '',
+                evidence_type TEXT NOT NULL DEFAULT 'unknown',
+                production_position INTEGER NOT NULL DEFAULT 0,
+                participant_evidence INTEGER NOT NULL DEFAULT 0,
+                cohort_type TEXT NOT NULL DEFAULT '',
                 start_at TEXT NOT NULL,
                 end_at TEXT NOT NULL,
                 first_seen_at TEXT NOT NULL,
@@ -1437,6 +1443,35 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "track_maps", "manual_updated_at", "TEXT")
         _ensure_column(conn, "deputy_schedule_event_changes", "changed_since_viewed", "INTEGER DEFAULT 1")
         _ensure_column(conn, "deputy_schedule_event_changes", "change_category", "TEXT DEFAULT 'assignment_change'")
+        _ensure_column(conn, "deputy_personal_assignment_evidence", "raw_role_label", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "deputy_personal_assignment_evidence", "evidence_type", "TEXT NOT NULL DEFAULT 'unknown'")
+        _ensure_column(conn, "deputy_personal_assignment_evidence", "production_position", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "deputy_personal_assignment_evidence", "participant_evidence", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "deputy_personal_assignment_evidence", "cohort_type", "TEXT NOT NULL DEFAULT ''")
+        if conn.execute("SELECT value FROM app_settings WHERE key='personal_evidence_classification_v1'").fetchone() is None:
+            for legacy_row in conn.execute(
+                "SELECT id, raw_role_label, position_label FROM deputy_personal_assignment_evidence"
+            ).fetchall():
+                classification = classify_deputy_evidence(
+                    legacy_row["raw_role_label"] or legacy_row["position_label"],
+                    production_keys=CORE_EVENT_POSITION_KEYS,
+                    production_aliases=EVENT_POSITION_ALIASES,
+                )
+                conn.execute(
+                    """UPDATE deputy_personal_assignment_evidence
+                       SET raw_role_label=?, position_key=?, position_label=?, evidence_type=?,
+                           production_position=?, participant_evidence=?, cohort_type=? WHERE id=?""",
+                    (
+                        classification.raw_label, classification.role_key, classification.role_label,
+                        classification.evidence_type, 1 if classification.production_position else 0,
+                        1 if classification.participant_evidence else 0, classification.cohort_type,
+                        int(legacy_row["id"]),
+                    ),
+                )
+            conn.execute(
+                "INSERT INTO app_settings(key,value,updated_at) VALUES('personal_evidence_classification_v1','1',?)",
+                (datetime.now(get_settings().timezone).isoformat(timespec="seconds"),),
+            )
         _ensure_column(conn, "push_subscriptions", "app_origin", "TEXT NOT NULL DEFAULT ''")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_deputy_schedule_shifts_location ON deputy_schedule_shifts(date, area_location_id)"
@@ -7937,7 +7972,9 @@ def _evaluate_event_coverage(
         FROM deputy_personal_assignment_evidence e
         JOIN app_users u ON u.id = e.owner_user_id AND u.is_active = 1
         LEFT JOIN crew_people p ON p.id = e.canonical_person_id
-        WHERE e.status IN ('confirmed', 'possibly_missing') AND e.date >= ?
+        WHERE e.status IN ('confirmed', 'possibly_missing')
+          AND e.production_position = 1
+          AND e.date >= ?
         """,
         (today_text,),
     ).fetchall():
@@ -9167,11 +9204,14 @@ def _upsert_personal_assignment_evidence(
         return False
     payload = _json_loads_dict(str(values.get("source_payload") or ""))
     normalised = payload.get("normalised") if isinstance(payload.get("normalised"), dict) else {}
-    position = _event_position(normalised.get("role_label") or normalised.get("area_name"))
+    raw_role_label = str(normalised.get("role_label") or normalised.get("area_name") or "").strip()
+    classification = classify_deputy_evidence(
+        raw_role_label,
+        production_keys=CORE_EVENT_POSITION_KEYS,
+        production_aliases=EVENT_POSITION_ALIASES,
+    )
     location_id = _optional_int(normalised.get("area_location_id"))
     employee_id = _optional_int(normalised.get("employee_id"))
-    if position is None or position[0] not in EVENT_POSITION_ALIASES and position[0] not in CORE_EVENT_POSITION_KEYS:
-        return False
     if location_id is None or not values.get("date") or not values.get("start_at") or not values.get("end_at"):
         return False
     canonical_person_id, display_name = _personal_evidence_identity(conn, owner_user_id, employee_id)
@@ -9182,16 +9222,19 @@ def _upsert_personal_assignment_evidence(
         "source": "deputy_personal_roster",
         "display_name": display_name,
         "captured_at": captured_at,
+        "raw_role_label": classification.raw_label,
+        "evidence_type": classification.evidence_type,
     })
     conn.execute(
         """
         INSERT INTO deputy_personal_assignment_evidence (
             owner_user_id, deputy_employee_id, canonical_person_id,
             source_shift_uid, source_shift_id, date, area_location_id,
-            position_key, position_label, start_at, end_at,
+            position_key, position_label, raw_role_label, evidence_type,
+            production_position, participant_evidence, cohort_type, start_at, end_at,
             first_seen_at, last_seen_at, last_confirmed_at,
             missing_capture_count, status, provenance
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
         ON CONFLICT(owner_user_id, source_shift_uid) DO UPDATE SET
             deputy_employee_id = excluded.deputy_employee_id,
             canonical_person_id = excluded.canonical_person_id,
@@ -9200,6 +9243,11 @@ def _upsert_personal_assignment_evidence(
             area_location_id = excluded.area_location_id,
             position_key = excluded.position_key,
             position_label = excluded.position_label,
+            raw_role_label = excluded.raw_role_label,
+            evidence_type = excluded.evidence_type,
+            production_position = excluded.production_position,
+            participant_evidence = excluded.participant_evidence,
+            cohort_type = excluded.cohort_type,
             start_at = excluded.start_at,
             end_at = excluded.end_at,
             last_seen_at = excluded.last_seen_at,
@@ -9210,8 +9258,12 @@ def _upsert_personal_assignment_evidence(
         """,
         (
             owner_user_id, employee_id, canonical_person_id, source_uid, source_shift_id,
-            values["date"], location_id, position[0], position[1], values["start_at"],
-            values["end_at"], captured_at, captured_at, captured_at, evidence_status, provenance,
+            values["date"], location_id, classification.role_key, classification.role_label,
+            classification.raw_label, classification.evidence_type,
+            1 if classification.production_position else 0,
+            1 if classification.participant_evidence else 0,
+            classification.cohort_type, values["start_at"], values["end_at"],
+            captured_at, captured_at, captured_at, evidence_status, provenance,
         ),
     )
     return True
@@ -9325,10 +9377,12 @@ def fetch_personal_assignment_evidence_for_date(
         return conn.execute(
             f"""
             SELECT e.*, u.display_name,
-                   COALESCE(p.canonical_display_name, u.display_name) AS employee_name
+                   COALESCE(p.canonical_display_name, u.display_name) AS employee_name,
+                   l.name AS location_name
             FROM deputy_personal_assignment_evidence e
             JOIN app_users u ON u.id = e.owner_user_id AND u.is_active = 1
             LEFT JOIN crew_people p ON p.id = e.canonical_person_id
+            LEFT JOIN deputy_schedule_locations l ON l.location_id = e.area_location_id
             WHERE e.date = ? {location_sql}
               AND e.status IN ('confirmed', 'possibly_missing', 'historical_locked')
             ORDER BY e.position_label, employee_name

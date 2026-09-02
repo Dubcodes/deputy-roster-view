@@ -11,7 +11,7 @@ VEHICLE_ALLOCATION_TOKEN_RE = re.compile(
     r"^(?:\d{3}|rav(?:\d+)?|rp\d+|ob|tender|transit)$", re.IGNORECASE,
 )
 CONNECTORS = {"and", "plus", "with", "the"}
-TRUCK_LABEL = "Truck (unspecified)"
+TRUCK_LABEL = "Truck"
 TRUCK_ACTION_RE = re.compile(r"(?i)^(.+?)\s+(?:driving|drive)\s+trucks?$")
 _vehicle_alias_cache: tuple[float, dict[str, str]] = (0.0, {})
 
@@ -80,6 +80,8 @@ def canonical_vehicle_label(value: object) -> str:
     if not label:
         return ""
     key = identity_key(label)
+    if key == "truckunspecified":
+        return TRUCK_LABEL
     known = vehicle_aliases()
     if key in known:
         return known[key]
@@ -134,7 +136,13 @@ def note_vehicle_allocations_from_text(value: str) -> list[dict[str, object]]:
         truck = re.match(r"(?i)^(.+?)\s+trucks?$", text)
     if truck:
         people = _truck_people(truck.group(1))
-        return [{"vehicle": TRUCK_LABEL, "people": people, "raw": value}] if people else []
+        return [{
+            "vehicle": TRUCK_LABEL,
+            "vehicle_type": "truck",
+            "vehicle_specificity": "generic",
+            "people": people,
+            "raw": value,
+        }] if people else []
     tokens = VEHICLE_ALLOCATION_WORD_RE.findall(text)
     vehicle_indexes = [(index, _vehicle_token(token)) for index, token in enumerate(tokens) if _vehicle_token(token)]
     if not vehicle_indexes:
@@ -168,7 +176,15 @@ def allocations_from_shifts(shifts: Iterable[dict[str, object]]) -> list[dict[st
                 vehicle = canonical_vehicle_label(item.get("vehicle"))
                 people = _person_tokens(VEHICLE_ALLOCATION_WORD_RE.findall(str(item.get("people") or "")))
                 if vehicle and people:
-                    result.append({"vehicle": vehicle, "people": people, "raw": item})
+                    result.append({
+                        "vehicle": vehicle,
+                        "people": people,
+                        "raw": item,
+                        "vehicle_type": item.get("vehicle_type") or ("truck" if vehicle == TRUCK_LABEL else ""),
+                        "vehicle_specificity": item.get("vehicle_specificity") or (
+                            "generic" if vehicle == TRUCK_LABEL else "specific"
+                        ),
+                    })
         lines.extend(str(line) for line in shift.get("description_lines") or [] if str(line).strip())
         if shift.get("description"):
             lines.extend(str(shift["description"]).splitlines())
@@ -233,7 +249,13 @@ def resolve_note_allocations(
             matches = set(exact.get(key, set()))
             if not matches:
                 matches = set(first.get(key, set()))
-            evidence = {"vehicle": vehicle, "name": name, "raw": allocation.get("raw")}
+            evidence = {
+                "vehicle": vehicle,
+                "name": name,
+                "raw": allocation.get("raw"),
+                "vehicle_type": allocation.get("vehicle_type") or "",
+                "vehicle_specificity": allocation.get("vehicle_specificity") or "specific",
+            }
             if len(matches) == 1:
                 assignments.append({**evidence, "person_index": matches.pop()})
             else:

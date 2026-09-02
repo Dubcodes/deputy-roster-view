@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -11,6 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 DATE = "2026-09-01"
 START = f"{DATE}T12:00:00+12:00"
 END = f"{DATE}T17:00:00+12:00"
+COHORT_DATE = "2026-08-30"
+COHORT_START = f"{COHORT_DATE}T12:00:00+12:00"
+COHORT_END = f"{COHORT_DATE}T17:00:00+12:00"
 PEOPLE = (
     (101, "Grant Woolston"),
     (102, "Elliot"),
@@ -50,6 +54,7 @@ def main() -> None:
     from app.database import (
         fetch_shifts_between,
         fetch_shifts_for_date,
+        fetch_personal_assignment_evidence_for_date,
         get_shift_changes_for_date,
         init_db,
         save_deputy_web_schedule,
@@ -166,7 +171,11 @@ def main() -> None:
     if {row["employee_name"] for row in vehicle_rows} != {"Vehicle One", "Vehicle Two"}:
         raise AssertionError(f"Existing multi-person vehicle semantics changed: {vehicle_rows!r}")
 
-    expected_truck = [{"vehicle": "Truck (unspecified)", "people": ["Dylan", "Matt"], "raw": "Dylan and Matt driving trucks"}]
+    expected_truck = [{
+        "vehicle": "Truck", "people": ["Dylan", "Matt"],
+        "raw": "Dylan and Matt driving trucks", "vehicle_type": "truck",
+        "vehicle_specificity": "generic",
+    }]
     if note_vehicle_allocations_from_text("Dylan and Matt driving trucks") != expected_truck:
         raise AssertionError("Driving-trucks grammar did not retain exactly Dylan and Matt.")
     for text in ("Dylan & Matt drive trucks", "Dylan and Matt trucks", "Trucks Dylan and Matt", "Dylan, Matt trucks"):
@@ -193,7 +202,7 @@ def main() -> None:
     workdays = interpret_deputy_workdays_for_people(note_rows, structured_rows=structured, identity_records=identities)
     dylan = next(item for item in workdays[106] if item["date"] == DATE)
     matt = next(item for item in workdays[110] if item["date"] == DATE)
-    if dylan["vehicle"] != "Truck (unspecified)" or matt["vehicle"] != "Truck (unspecified)":
+    if dylan["vehicle"] != "Truck" or matt["vehicle"] != "Truck":
         raise AssertionError(f"Unique cohort aliases did not receive the conservative truck evidence: {workdays!r}")
     unresolved = dylan["vehicle_evidence"]["note_only_people"]
     if {item["name"] for item in unresolved} != {"Unknown"}:
@@ -222,7 +231,7 @@ def main() -> None:
                 "id": 9100 + index, "employee": employee_id, "employeeName": name,
                 "area": 700, "areaName": area_name, "areaLocationId": 7000,
                 "location": 7000, "locationName": "T-Travel", "role": area_name,
-                "start": START, "end": END, "duration": 18000, "isPublished": True, "note": "",
+                "start": COHORT_START, "end": COHORT_END, "duration": 18000, "isPublished": True, "note": "",
             }
             for index, (employee_id, name) in enumerate(PEOPLE, start=1)
         ]
@@ -233,7 +242,7 @@ def main() -> None:
         "locations": [{"id": 7000, "name": "T-Travel", "address": ""}],
         "extracted_shifts": [],
         "own_roster_coverage": [],
-        "schedule_coverage": [{"start_date": DATE, "end_date": DATE, "mode": "all", "location_ids": []}],
+        "schedule_coverage": [{"start_date": COHORT_DATE, "end_date": COHORT_DATE, "mode": "all", "location_ids": []}],
         "extracted_schedule_shifts": wire_schedule("Travel then Overnighter"),
     }
     save_deputy_web_schedule(base_schedule_payload, owner_user_id=1)
@@ -244,8 +253,8 @@ def main() -> None:
         "extracted_schedule_shifts": wire_schedule("Overnighter"),
     }, owner_user_id=1)
     with sqlite3.connect(get_settings().db_path) as conn:
-        saved_count = conn.execute("SELECT COUNT(*) FROM deputy_schedule_shifts WHERE date = ?", (DATE,)).fetchone()[0]
-        false_events = conn.execute("SELECT COUNT(*) FROM deputy_schedule_event_changes WHERE date = ?", (DATE,)).fetchone()[0]
+        saved_count = conn.execute("SELECT COUNT(*) FROM deputy_schedule_shifts WHERE date = ?", (COHORT_DATE,)).fetchone()[0]
+        false_events = conn.execute("SELECT COUNT(*) FROM deputy_schedule_event_changes WHERE date = ?", (COHORT_DATE,)).fetchone()[0]
     if saved_count != len(PEOPLE) or false_events:
         raise AssertionError(f"Travel cohort persistence or event history was collapsed: {(saved_count, false_events)!r}")
 
@@ -262,6 +271,7 @@ def main() -> None:
     if _combined_sync_status({}, {"status": "ok", "payload": {"schedule_coverage": [{}], "travel_schedule_coverage": [{"status": "partial"}]}}) != "partial":
         raise AssertionError("Incomplete dedicated Travel capture was not surfaced as partial sync coverage.")
 
+    shared_people = tuple(person for person in PEOPLE if person[0] != 17)
     mixed_shared = [
         {
             "id": 10100 + index, "employee": employee_id, "employeeName": name,
@@ -269,7 +279,7 @@ def main() -> None:
             "location": 105, "locationName": "Travel", "role": "Travel then Overnighter",
             "start": START, "end": END, "duration": 18000, "isPublished": True, "note": "",
         }
-        for index, (employee_id, name) in enumerate(PEOPLE, start=1)
+        for index, (employee_id, name) in enumerate(shared_people, start=1)
     ]
     mixed_before = _extract_management_shifts({"data": [{
         "id": 33598, "employee": 17, "area": 1762, "areaName": "Travel then Overnighter", "areaLocationId": 158,
@@ -304,11 +314,21 @@ def main() -> None:
     }
     save_deputy_web_schedule(mixed_payload, owner_user_id=1)
     save_deputy_web_schedule({**mixed_payload, "captured_at": "2026-08-31T15:30:00+12:00", "extracted_shifts": mixed_after}, owner_user_id=1)
+    persisted_personal = [dict(row) for row in fetch_personal_assignment_evidence_for_date(DATE, [158])]
+    if len(persisted_personal) != 1 or (
+        persisted_personal[0]["deputy_employee_id"],
+        persisted_personal[0]["raw_role_label"],
+        persisted_personal[0]["evidence_type"],
+        persisted_personal[0]["production_position"],
+        persisted_personal[0]["participant_evidence"],
+        persisted_personal[0]["cohort_type"],
+    ) != (17, "Overnighter", "participant_cohort", 0, 1, "travel"):
+        raise AssertionError(f"Personal Travel evidence was not preserved and classified safely: {persisted_personal!r}")
     with sqlite3.connect(get_settings().db_path) as conn:
         captured_cohort_count = conn.execute(
             "SELECT COUNT(*) FROM deputy_schedule_shifts WHERE date=? AND area_location_id=105", (DATE,)
         ).fetchone()[0]
-    if captured_cohort_count != len(PEOPLE):
+    if captured_cohort_count != len(shared_people):
         raise AssertionError(f"Dedicated Travel capture did not persist the cohort exactly once: {captured_cohort_count!r}")
     # Production-shaped capture B: ALL succeeds but the dedicated scope is
     # incomplete. Its old Travel observations must remain active.
@@ -323,22 +343,22 @@ def main() -> None:
         retained_cohort_count = conn.execute(
             "SELECT COUNT(*) FROM deputy_schedule_shifts WHERE date=? AND area_location_id=105", (DATE,)
         ).fetchone()[0]
-    if incomplete_result["schedule_removed"] or retained_cohort_count != len(PEOPLE):
+    if incomplete_result["schedule_removed"] or retained_cohort_count != len(shared_people):
         raise AssertionError("Incomplete dedicated Travel capture destructively retired prior cohort evidence.")
     mixed_shift = next(decorate_shift(row) for row in fetch_shifts_for_date(DATE, owner_user_id=1) if ":33598" in str(row["source_uid"]))
     mixed_rows = travel_cohort_schedule_rows(DATE, [mixed_shift])
     mixed_people = schedule_people(mixed_rows, include_vehicle_only=True, include_placeholders=False)
     if (
         not any(int(row["source_shift_id"]) == 10101 and int(row["schedule_location_id"]) == 105 for row in mixed_rows)
-        or {row["employee_name"] for row in mixed_people} != {name for _employee_id, name in PEOPLE}
+        or {row["employee_name"] for row in mixed_people} != {name for _employee_id, name in shared_people}
     ):
         raise AssertionError(f"Mixed T-Travel internal IDs did not retain the older shared cohort: {mixed_rows!r}")
     shared_abc = [row for row in mixed_rows if int(row["employee_id"]) in {101, 102, 103}]
     personal_union_rows = [
-        {"deputy_employee_id": 102, "employee_name": "Elliot", "position_label": "Overnighter", "area_location_id": 158, "start_at": START, "end_at": END},
-        {"deputy_employee_id": 106, "employee_name": "Dylan Holden", "position_label": "Overnighter", "area_location_id": 158, "start_at": START, "end_at": END},
-        {"deputy_employee_id": 110, "employee_name": "Matt Blackmore", "position_label": "Overnighter", "area_location_id": 158, "start_at": START, "end_at": END},
-        {"deputy_employee_id": 999, "employee_name": "Unrelated Travel", "position_label": "Overnighter", "area_location_id": 999, "start_at": START, "end_at": END},
+        {"deputy_employee_id": 102, "employee_name": "Elliot", "position_label": "Overnighter", "raw_role_label": "Overnighter", "evidence_type": "participant_cohort", "cohort_type": "travel", "location_name": "T-Travel", "area_location_id": 158, "start_at": START, "end_at": END},
+        {"deputy_employee_id": 106, "employee_name": "Dylan Holden", "position_label": "Overnighter", "raw_role_label": "Overnighter", "evidence_type": "participant_cohort", "cohort_type": "travel", "location_name": "T-Travel", "area_location_id": 158, "start_at": START, "end_at": END},
+        {"deputy_employee_id": 110, "employee_name": "Matt Blackmore", "position_label": "Overnighter", "raw_role_label": "Overnighter", "evidence_type": "participant_cohort", "cohort_type": "travel", "location_name": "T-Travel", "area_location_id": 158, "start_at": START, "end_at": END},
+        {"deputy_employee_id": 999, "employee_name": "Unrelated Travel", "position_label": "Overnighter", "raw_role_label": "Overnighter", "evidence_type": "participant_cohort", "cohort_type": "travel", "location_name": "Other", "area_location_id": 999, "start_at": START, "end_at": END},
     ]
     original_personal_fetch = main_module.fetch_personal_assignment_evidence_for_date
     main_module.fetch_personal_assignment_evidence_for_date = lambda _date: personal_union_rows
@@ -356,24 +376,44 @@ def main() -> None:
     )
     if {int(person["employee_id"]) for person in union_people} != {101, 102, 103, 106, 110}:
         raise AssertionError(f"Shared and personal Deputy Travel evidence did not form the exact union: {union_people!r}")
+    isolated_people: list[dict[str, object]] = []
+    reconcile_personal_assignment_evidence(
+        isolated_people, personal_union_rows[:1], event_start_at=END,
+        event_end_at=f"{DATE}T18:00:00+12:00", travel_participant_union=True,
+    )
+    reconcile_personal_assignment_evidence(
+        isolated_people, personal_union_rows[:1], event_start_at=START,
+        event_end_at=END, travel_participant_union=False,
+    )
+    reconcile_personal_assignment_evidence(
+        isolated_people,
+        [{**personal_union_rows[0], "deputy_employee_id": None, "canonical_person_id": None}],
+        event_start_at=START, event_end_at=END, travel_participant_union=True,
+    )
+    if isolated_people:
+        raise AssertionError(f"Travel personal evidence leaked across event or context boundaries: {isolated_people!r}")
     mixed_workday = interpret_deputy_workdays(
         [mixed_shift], structured_rows=mixed_rows,
         person_identity={"deputy_employee_id": 17, "aliases": ["Jayden-lee"]}, identity_records=identities,
     )[0]
-    if mixed_workday["production_position"] != "Overnighter":
-        raise AssertionError(f"Personal Overnighter role was overwritten by shared cohort evidence: {mixed_workday!r}")
+    if mixed_workday["production_position"] != "Shift":
+        raise AssertionError(f"Travel participant evidence leaked into production position: {mixed_workday!r}")
     mixed_people_workdays = interpret_deputy_workdays_for_people(
         [mixed_shift], structured_rows=mixed_rows, identity_records=identities,
     )
     mixed_dylan = next(item for item in mixed_people_workdays[106] if item["date"] == DATE)
     mixed_matt = next(item for item in mixed_people_workdays[110] if item["date"] == DATE)
     if (
-        mixed_dylan["vehicle"] != "Truck (unspecified)"
-        or mixed_matt["vehicle"] != "Truck (unspecified)"
+        mixed_dylan["vehicle"] != "Truck"
+        or mixed_matt["vehicle"] != "Truck"
+        or mixed_dylan["vehicle_evidence"].get("vehicle_specificity") != "generic"
         or {item["name"] for item in mixed_dylan["vehicle_evidence"]["note_only_people"]} != {"Unknown"}
         or not any(row["field_name"] == "role" for row in get_shift_changes_for_date(DATE))
     ):
-        raise AssertionError("Mixed Travel cohort lost note resolution or the genuine personal role change.")
+        raise AssertionError(
+            "Mixed Travel cohort lost note resolution or the genuine personal role change: "
+            f"{(mixed_dylan, mixed_matt, get_shift_changes_for_date(DATE))!r}"
+        )
 
     client = TestClient(app, follow_redirects=False)
     login = client.post("/login", data={"deputy_email": "jayden@example.test", "pin": "1234"})
@@ -392,6 +432,7 @@ def main() -> None:
         "Dylan and Matt driving trucks\nUnknown trucks",
         "",
         "Please call the office before leaving.",
+        "Mystery Person trucks",
     ):
         page_text = rendered_travel_people(note)
         for _employee_id, name in PEOPLE:
@@ -403,8 +444,15 @@ def main() -> None:
     for name in ("Dylan Holden", "Matt Blackmore"):
         if "Unresolved note-only person" in page_text and name.split()[0] + "</strong>" in page_text:
             raise AssertionError(f"Final day view duplicated resolved Travel note person {name!r}.")
-    if "Unknown" not in page_text:
-        raise AssertionError("Final day view lost the deliberately unknown note-only person.")
+    rendered_crew_names = re.findall(r'class="crew-name"[^>]*>\s*<span>([^<]+)</span>', page_text)
+    if "Unknown" in rendered_crew_names:
+        raise AssertionError("Unresolved note-only evidence became a fabricated Travel crew member.")
+    global_page = client.get(f"/day/{DATE}?scope=global&location_id=105")
+    if global_page.status_code != 200:
+        raise AssertionError(f"Global Travel day view did not render: {global_page.status_code}")
+    for _employee_id, name in PEOPLE:
+        if global_page.text.count(name) != 1:
+            raise AssertionError(f"Global Travel union did not contain {name!r} exactly once.")
 
     personal_source = _extract_management_shifts({"data": [
         {"id": 9401, "employee": 17, "area": 684, "areaName": "684", "areaLocationId": 64,
