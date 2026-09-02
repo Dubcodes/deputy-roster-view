@@ -278,3 +278,8 @@ This remains the governing boundary. Build 2026.08.13.1 implements only the cont
 - Create reconciliation is bounded by operational date, Employee, and Operational Unit. One exact roster is adopted and GET-verified; multiple exact or overlapping rosters stop mutation.
 - A batch publishes only after every intended mutation is verified and every unchanged roster is read-ready. Any failed, locked, unknown, or ambiguous result stops the batch and prevents partial publish.
 - Local assignment keys are generated as globally unique IDs across creation/migration paths, even though the workday table also enforces per-workday uniqueness. Roster links keep workday, assignment, canonical person, Employee, Area, Roster ID, and ownership provenance.
+
+# 0.5.14 future-development notes
+
+- When open self-signup is next developed, verify that the supplied Deputy account is a genuine usable Deputy account before granting a normal Re-Deputy account. Current open signup behavior is accepted for this release.
+- Future migration tooling should support exporting/importing important configuration independently of the full historical database. At minimum consider app settings/preferences, user/account configuration as appropriate, crew/region membership, region/location assignments, vehicle aliases, and other durable configuration required to recreate the installation without carrying all historical roster/capture data.
