@@ -147,4 +147,34 @@ removed = single([row("removed", "CCU1", "")], person_identity=JAYDEN, preceding
 assert (changed["vehicle"], changed["vehicle_provenance"]) == ("Rav91", "structured_deputy")
 assert (removed["vehicle"], removed["vehicle_provenance"]) == ("684", "preceding_travel_structured")
 
+# Current conflicts remain unresolved and cannot fall through to an older Travel
+# vehicle, but the historical evidence remains visible for diagnosis.
+conflict_prior_raw = [row("conflict-prior", "Travel", "", date="2026-08-27")]
+conflict_prior_structured = [row("conflict-prior", "Travel", "Rav91", date="2026-08-27")]
+structured_with_prior_conflict = single(
+    [row("structured-conflict-current")],
+    structured_rows=[
+        row("structured-conflict-current", "CCU1", "684"),
+        row("structured-conflict-travel", "Travel", "685"),
+    ],
+    person_identity=JAYDEN,
+    preceding_rows=conflict_prior_raw,
+    preceding_structured_rows=conflict_prior_structured,
+)
+assert structured_with_prior_conflict["vehicle"] == ""
+assert structured_with_prior_conflict["vehicle_evidence"]["structured_values"] == ["684", "685"]
+assert structured_with_prior_conflict["vehicle_evidence"]["structured_conflict"] is True
+assert structured_with_prior_conflict["vehicle_evidence"]["preceding_travel_value"] == "Rav91"
+assert structured_with_prior_conflict["vehicle_evidence"]["preceding_travel_rows"]
+
+note_with_prior_conflict = single(
+    [row("note-conflict-current", description="684 Jayden\n685 Jayden")],
+    person_identity=JAYDEN,
+    preceding_rows=conflict_prior_raw,
+    preceding_structured_rows=conflict_prior_structured,
+)
+assert note_with_prior_conflict["vehicle"] == ""
+assert note_with_prior_conflict["vehicle_evidence"]["roster_note_conflict"] is True
+assert note_with_prior_conflict["vehicle_evidence"]["preceding_travel_value"] == "Rav91"
+
 print("combined Deputy vehicle interpretation smoke ok")

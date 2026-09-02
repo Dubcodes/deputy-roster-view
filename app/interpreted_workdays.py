@@ -389,10 +389,13 @@ def interpret_deputy_workdays(
         prior_vehicle, prior_source, prior_rows, prior_note_only = _preceding_vehicle(
             preceding, preceding_structured, identities, person, date_text,
         )
-        vehicle = canonical_vehicle_label(note_vehicle or structured_vehicle or prior_vehicle)
+        current_vehicle = note_vehicle or structured_vehicle
+        prior_blocked = not current_vehicle and (structured_conflict or note_conflict)
+        vehicle = canonical_vehicle_label(current_vehicle or ("" if prior_blocked else prior_vehicle))
         vehicle_source = (
             "current_roster_note" if note_vehicle
             else "structured_deputy_conflict" if structured_conflict
+            else "current_roster_note_conflict" if note_conflict
             else "structured_deputy" if structured_vehicle
             else prior_source
         )
