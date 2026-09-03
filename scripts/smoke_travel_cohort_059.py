@@ -58,6 +58,7 @@ def main() -> None:
         get_shift_changes_for_date,
         init_db,
         save_deputy_web_schedule,
+        upsert_travel_route,
     )
     from app.deputy_web import _extract_management_shifts, _travel_family_location_ids
     from app.interpreted_workdays import interpret_deputy_workdays, interpret_deputy_workdays_for_people
@@ -65,6 +66,7 @@ def main() -> None:
     from app.main import (
         app,
         aggregate_global_schedule,
+        build_race_day_calculation,
         combine_adjacent_shifts,
         decorate_shift,
         effective_schedule_items,
@@ -534,6 +536,20 @@ def main() -> None:
     ]})
     if [row["id"] for row in personal_source] != [9401, 9402, 9403, 9404]:
         raise AssertionError(f"Management extraction lost the returned own-roster rows: {personal_source!r}")
+    overnight_source = _extract_management_shifts({"data": [
+        {"id": 9400, "employee": 17, "area": 683, "areaName": "Overnighter", "areaLocationId": 64,
+         "location": 64, "locationName": "T-Ruakaka", "role": "Overnighter",
+         "start": "2026-09-01T12:00:00+12:00", "end": "2026-09-01T17:00:00+12:00", "duration": 18000, "isPublished": True},
+    ]})
+    save_deputy_web_schedule({
+        "captured_at": "2026-08-31T15:28:00+12:00",
+        "areas": [{"id": 683, "name": "Overnighter", "locationId": 64, "rosterSortOrder": 1}],
+        "locations": [{"id": 64, "name": "T-Ruakaka", "address": ""}],
+        "extracted_shifts": overnight_source,
+        "own_roster_coverage": [{"start_date": "2026-09-01", "end_date": "2026-09-01", "employee_id": 17,
+                                   "status": "complete", "pagination_complete": True, "records_returned": 1}],
+        "extracted_schedule_shifts": [], "schedule_coverage": [],
+    }, owner_user_id=1)
     save_deputy_web_schedule({
         "captured_at": "2026-08-31T15:29:00+12:00",
         "areas": [
@@ -564,6 +580,18 @@ def main() -> None:
     if [(segment["role"], segment["start_label"], segment["end_label"])
             for segment in rendered_ruakaka["role_segments"]] != [("684", "09:00", "09:30"), ("Director", "10:00", "22:00")]:
         raise AssertionError(f"The 30-minute Deputy gap was fabricated or lost: {rendered_ruakaka!r}")
+    upsert_travel_route(origin_label="Office / Clow Place", destination_label="Ruakaka", travel_minutes=300)
+    rendered_ruakaka["roster_summary"] = main_module.parse_roster_summary([
+        "On track 1000", "7 races 1200 | 1600",
+    ])
+    overnight_calculation = build_race_day_calculation(rendered_ruakaka)
+    if (
+        overnight_calculation.get("start_label"),
+        overnight_calculation.get("travel_label"),
+        overnight_calculation.get("start_origin"),
+        overnight_calculation.get("used_default_travel"),
+    ) != ("09:00", "0h 30m", "Overnight near Ruakaka", False):
+        raise AssertionError(f"Overnight provenance fabricated Office travel: {overnight_calculation!r}")
 
     role_before = [row for row in personal_source if row["id"] == 9402]
     role_after = [{**role_before[0], "areaName": "Overnighter", "roleName": "Overnighter"}]

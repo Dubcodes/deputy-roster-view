@@ -1333,21 +1333,20 @@ def adjacent_overnight_context_for_shift(shift: dict[str, object]) -> dict[str, 
     )
     for row in previous_rows:
         values = dict(row)
-        title_and_note = f"{values.get('title', '')} {values.get('description', '')}".lower()
-        if "travel then overnighter" not in title_and_note:
+        if not is_overnight_travel_day([values]):
             continue
         labels = accommodation_base_labels_for_shift(
             {"description_lines": description_lines(str(values.get("description") or ""))}
         )
         if labels:
-            return {"origin": labels[0], "evidence": "adjacent Travel then Overnighter day"}
+            return {"origin": labels[0], "evidence": "adjacent overnight travel day"}
         previous_location = str(values.get("location") or "").strip()
         current_track = str(shift.get("track_label") or shift.get("location_label") or "").strip()
         if previous_location and current_track and travel_default_key(previous_location) == travel_default_key(current_track):
-            return {"origin": f"Overnight near {current_track}", "evidence": "adjacent Travel then Overnighter day"}
+            return {"origin": f"Overnight near {current_track}", "evidence": "adjacent overnight travel day"}
         # The same user's explicit overnight travel is strong enough to suppress an
         # office departure, but not strong enough to invent a hotel or travel time.
-        return {"origin": f"Overnight near {current_track or 'destination'}", "evidence": "adjacent Travel then Overnighter day"}
+        return {"origin": f"Overnight near {current_track or 'destination'}", "evidence": "adjacent overnight travel day"}
     return {}
 
 
@@ -1933,6 +1932,28 @@ def duration_hours_between(start_text: str | None, end_text: str | None) -> floa
     return max(0.0, round((end_at - start_at).total_seconds() / 3600, 2))
 
 
+def current_day_preproduction_vehicle_segment(
+    shift: dict[str, object],
+    on_track_clock: str,
+) -> tuple[datetime, int] | None:
+    roster_start_at = parse_iso_datetime(str(shift.get("start_at") or ""))
+    on_track_at = clock_datetime_for_shift(shift, on_track_clock)
+    if roster_start_at is None or on_track_at is None:
+        return None
+    for segment in list(shift.get("role_segments") or []):
+        if not isinstance(segment, dict) or str(segment.get("kind") or "") != "vehicle":
+            continue
+        segment_start = clock_datetime_for_shift(shift, str(segment.get("start_label") or ""))
+        segment_end = clock_datetime_for_shift(shift, str(segment.get("end_label") or ""), segment_start)
+        if (
+            segment_start == roster_start_at
+            and segment_end is not None
+            and segment_start < segment_end <= on_track_at
+        ):
+            return segment_start, int(round((segment_end - segment_start).total_seconds() / 60))
+    return None
+
+
 def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     summary = shift.get("roster_summary") if isinstance(shift.get("roster_summary"), dict) else {}
     timings = timing_lookup(summary)
@@ -1983,7 +2004,7 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
     track_label = context["track"]
     outbound_route = get_travel_route(start_origin, track_label)
     outbound_default = dict(outbound_route) if outbound_route else None
-    overnight_origin = str(context.get("start_evidence") or "") == "adjacent Travel then Overnighter day"
+    overnight_origin = str(context.get("start_evidence") or "") == "adjacent overnight travel day"
     if outbound_default is None and not overnight_origin:
         if accommodation_base_labels_for_shift(shift):
             outbound_default = accommodation_default_for_shift(shift)
@@ -2000,6 +2021,9 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
 
     roster_start_at = parse_iso_datetime(str(shift.get("start_at") or ""))
     start_at = clock_datetime_for_shift(shift, base_clock) if base_clock else None
+    preproduction_vehicle = current_day_preproduction_vehicle_segment(shift, on_track_clock)
+    if start_at is None and preproduction_vehicle is not None:
+        start_at = preproduction_vehicle[0]
     inferred_start = False
     inferred_on_track = False
     if start_at is None and on_track_clock and default_travel_minutes:
@@ -2076,6 +2100,7 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
 
     outbound_minutes = (
         (None if admin_outbound_conflict else admin_outbound_minutes)
+        or (preproduction_vehicle[1] if preproduction_vehicle is not None else None)
         or max(0, int(round((on_track_at - start_at).total_seconds() / 60)))
     )
     race_clear_at = ceil_datetime_to_quarter(last_race_at + timedelta(minutes=RACE_RUN_MINUTES))
