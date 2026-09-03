@@ -5140,6 +5140,55 @@ def safe_next_url(value: str | None, fallback: str = "/month") -> str:
     return fallback
 
 
+def _default_team_identity_scope() -> tuple[set[int], set[int], set[str]]:
+    selected_team_id = get_default_team_id()
+    if selected_team_id is None:
+        return set(), set(), set()
+    person_ids: set[int] = set()
+    employee_ids: set[int] = set()
+    canonical_names: set[str] = set()
+    for person in crew_picker_records(selected_team_id):
+        if not person.get("selected_team_member"):
+            continue
+        person_id = safe_int(person.get("id"))
+        employee_id = safe_int(person.get("deputy_employee_id"))
+        canonical_name = schedule_label_key(str(person.get("canonical_display_name") or ""))
+        if person_id is not None:
+            person_ids.add(person_id)
+        if employee_id is not None:
+            employee_ids.add(employee_id)
+        if canonical_name:
+            canonical_names.add(canonical_name)
+    return person_ids, employee_ids, canonical_names
+
+
+def _is_generic_travel_schedule_row(row: object) -> bool:
+    return schedule_label_key(str(dict(row).get("location_name") or "")) == "travel"
+
+
+def _matches_default_team_identity(
+    row: object, scope: tuple[set[int], set[int], set[str]],
+) -> bool:
+    person_ids, employee_ids, canonical_names = scope
+    item = dict(row)
+    employee_id = safe_int(item.get("employee_id") or item.get("deputy_employee_id"))
+    if employee_id is not None:
+        return employee_id in employee_ids
+    canonical_person_id = safe_int(item.get("canonical_person_id"))
+    if canonical_person_id is not None:
+        return canonical_person_id in person_ids
+    return schedule_label_key(str(item.get("employee_name") or item.get("canonical_display_name") or "")) in canonical_names
+
+
+def global_crew_schedule_rows(rows: list[object]) -> list[object]:
+    """Keep generic Deputy Travel buckets within the default team's boundary."""
+    scope = _default_team_identity_scope()
+    return [
+        row for row in rows
+        if not _is_generic_travel_schedule_row(row) or _matches_default_team_identity(row, scope)
+    ]
+
+
 def aggregate_global_schedule(rows: list[object]) -> list[dict[str, object]]:
     grouped: dict[tuple[str, str], dict[str, object]] = {}
     for row in rows:
@@ -7053,7 +7102,10 @@ def month_view(
     )
 
     shifts_by_date: dict[str, list[dict[str, object]]] = {}
-    display_rows = aggregate_global_schedule(schedule_role_rows) if global_view else [decorate_shift(row) for row in rows]
+    display_rows = (
+        aggregate_global_schedule(global_crew_schedule_rows(schedule_role_rows))
+        if global_view else [decorate_shift(row) for row in rows]
+    )
     for row in display_rows:
         shifts_by_date.setdefault(str(row["date"]), []).append(row)
     for date_key, day_shifts in list(shifts_by_date.items()):
@@ -7403,7 +7455,9 @@ def day_view(
     if global_view:
         global_manual_rosters = published_rosters_by_date(date_text, date_text, None).get(date_text, [])
         selected_manual_rosters = [item for item in global_manual_rosters if manual_id is not None and int(item.get("id") or 0) == manual_id]
-        global_events = aggregate_global_schedule(fetch_deputy_schedule_between(date_text, date_text))
+        global_events = aggregate_global_schedule(
+            global_crew_schedule_rows(fetch_deputy_schedule_between(date_text, date_text))
+        )
         selected_event = next(
             (
                 event
@@ -7415,11 +7469,16 @@ def day_view(
         if selected_event is None and not selected_manual_rosters and len(global_events) == 1:
             selected_event = global_events[0]
         selected_location_id = int(selected_event.get("schedule_location_id") or 0) if selected_event else 0
-        global_schedule_rows = (
+        unfiltered_global_schedule_rows = (
             fetch_deputy_schedule_for_date(date_text, location_ids=[selected_location_id])
             if selected_location_id
             else []
         )
+        global_generic_travel = bool(
+            unfiltered_global_schedule_rows
+            and all(_is_generic_travel_schedule_row(row) for row in unfiltered_global_schedule_rows)
+        )
+        global_schedule_rows = global_crew_schedule_rows(unfiltered_global_schedule_rows)
         global_schedule_people = schedule_people(
             global_schedule_rows,
             expected_areas=(
@@ -7445,6 +7504,12 @@ def day_view(
                 }],
                 global_schedule_rows,
             )
+            if global_generic_travel:
+                default_team_scope = _default_team_identity_scope()
+                global_evidence_rows = [
+                    row for row in global_evidence_rows
+                    if _matches_default_team_identity(row, default_team_scope)
+                ]
         reconcile_personal_assignment_evidence(
             global_schedule_people,
             global_evidence_rows,

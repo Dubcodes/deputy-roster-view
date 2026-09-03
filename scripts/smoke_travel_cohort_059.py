@@ -64,9 +64,11 @@ def main() -> None:
     import app.main as main_module
     from app.main import (
         app,
+        aggregate_global_schedule,
         combine_adjacent_shifts,
         decorate_shift,
         effective_schedule_items,
+        global_crew_schedule_rows,
         reconcile_personal_assignment_evidence,
         schedule_people,
         travel_cohort_schedule_rows,
@@ -103,6 +105,19 @@ def main() -> None:
                 "INSERT INTO crew_aliases(person_id, alias, normalized_alias, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
                 (person_id, alias, alias.casefold(), "2026-08-31T15:29:00+12:00", "2026-08-31T15:29:00+12:00"),
             )
+        northern_team_id = conn.execute(
+            "SELECT id FROM crew_teams WHERE stable_key='northern-team' AND active=1"
+        ).fetchone()[0]
+        for employee_id in (17, 106, 110):
+            person_id = conn.execute(
+                "SELECT id FROM crew_people WHERE deputy_employee_id=?", (employee_id,)
+            ).fetchone()[0]
+            conn.execute(
+                """INSERT INTO crew_person_teams
+                   (crew_person_id,team_id,is_primary,active,created_at,updated_at)
+                   VALUES (?,?,0,1,?,?)""",
+                (person_id, northern_team_id, "2026-08-31T15:29:00+12:00", "2026-08-31T15:29:00+12:00"),
+            )
 
     def schedule_row(employee_id: int, name: str, source_shift_id: int, area_name: str) -> dict[str, object]:
         return {
@@ -121,6 +136,30 @@ def main() -> None:
             "changed_since_viewed": 0,
             "change_summary": "",
         }
+
+    global_scope_rows = [
+        {**schedule_row(106, "Dylan Holden", 9901, "Travel"), "location_name": "Travel", "is_published": 1},
+        {**schedule_row(101, "Grant Woolston", 9902, "Out of Region"), "location_name": "Travel", "is_published": 1},
+        {**schedule_row(102, "Elliot", 9903, "Travel then Overnighter"), "location_name": "Travel", "is_published": 1},
+    ]
+    scoped_global_rows = global_crew_schedule_rows(global_scope_rows)
+    if [row["employee_id"] for row in scoped_global_rows] != [106]:
+        raise AssertionError(f"Generic Global Travel leaked non-Northern crew: {scoped_global_rows!r}")
+    if aggregate_global_schedule(scoped_global_rows)[0]["crew_count"] != 1:
+        raise AssertionError("Mixed generic Global Travel did not retain its Northern Team member.")
+    non_team_travel_only = [{
+        **schedule_row(101, "Grant Woolston", 9904, "Travel"),
+        "date": "2026-09-05", "start_at": "2026-09-05T12:00:00+12:00",
+        "end_at": "2026-09-05T17:00:00+12:00", "location_name": "Travel", "is_published": 1,
+    }]
+    if aggregate_global_schedule(global_crew_schedule_rows(non_team_travel_only)):
+        raise AssertionError("A non-Northern-only generic Travel event remained in Global aggregation.")
+    ordinary_global_rows = [
+        {**schedule_row(106, "Dylan Holden", 9905, "Director"), "location_name": "T-Ruakaka", "is_published": 1},
+        {**schedule_row(101, "Grant Woolston", 9906, "Sound"), "location_name": "T-Ruakaka", "is_published": 1},
+    ]
+    if len(global_crew_schedule_rows(ordinary_global_rows)) != 2:
+        raise AssertionError("Ordinary Global race-location crew was incorrectly filtered by team.")
 
     def cohort(area_name: str) -> list[dict[str, object]]:
         return [
@@ -447,12 +486,37 @@ def main() -> None:
     rendered_crew_names = re.findall(r'class="crew-name"[^>]*>\s*<span>([^<]+)</span>', page_text)
     if "Unknown" in rendered_crew_names:
         raise AssertionError("Unresolved note-only evidence became a fabricated Travel crew member.")
+    with sqlite3.connect(get_settings().db_path) as conn:
+        conn.execute(
+            """INSERT INTO app_users
+               (id,deputy_email,display_name,pin_hash,deputy_web_url,is_active,created_at,updated_at)
+               VALUES (2,'grant@example.test','Grant Woolston',?,'https://example.test',1,?,?)""",
+            (hash_pin("1234"), "2026-08-31T15:29:00+12:00", "2026-08-31T15:29:00+12:00"),
+        )
+        grant_person_id = conn.execute(
+            "SELECT id FROM crew_people WHERE deputy_employee_id=101"
+        ).fetchone()[0]
+        conn.execute(
+            """INSERT INTO deputy_personal_assignment_evidence
+               (owner_user_id,deputy_employee_id,canonical_person_id,source_shift_uid,source_shift_id,
+                date,area_location_id,position_key,position_label,raw_role_label,evidence_type,
+                production_position,participant_evidence,cohort_type,start_at,end_at,first_seen_at,
+                last_seen_at,last_confirmed_at,status,provenance)
+               VALUES (2,101,?,'non-team-travel','non-team-travel',?,158,'overnighter','Overnighter',
+                       'Overnighter','participant_cohort',0,1,'travel',?,?,?,?,?,'confirmed','{}')""",
+            (grant_person_id, DATE, START, END, "2026-08-31T15:29:00+12:00",
+             "2026-08-31T15:29:00+12:00", "2026-08-31T15:29:00+12:00"),
+        )
+        conn.commit()
     global_page = client.get(f"/day/{DATE}?scope=global&location_id=105")
     if global_page.status_code != 200:
         raise AssertionError(f"Global Travel day view did not render: {global_page.status_code}")
-    for _employee_id, name in PEOPLE:
+    for _employee_id, name in ((17, "Jayden-lee"), (106, "Dylan Holden"), (110, "Matt Blackmore")):
         if global_page.text.count(name) != 1:
-            raise AssertionError(f"Global Travel union did not contain {name!r} exactly once.")
+            raise AssertionError(f"Global Northern Travel did not contain {name!r} exactly once.")
+    for _employee_id, name in PEOPLE:
+        if _employee_id not in {17, 106, 110} and name in global_page.text:
+            raise AssertionError(f"Global Travel leaked non-Northern member {name!r}.")
 
     personal_source = _extract_management_shifts({"data": [
         {"id": 9401, "employee": 17, "area": 684, "areaName": "684", "areaLocationId": 64,
