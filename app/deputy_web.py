@@ -1728,6 +1728,8 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
             key=lambda item: (str(item.get("start") or ""), str(item.get("id") or "")),
         ),
         "extracted_schedule_shifts": extracted_schedule_shifts,
+        "native_schedule_shift_ids": sorted(native_schedule_ids),
+        "direct_schedule_shift_ids": sorted(direct_schedule_ids),
         "schedule_coverage": schedule_coverage,
         "travel_schedule_coverage": travel_schedule_coverage,
         "own_roster_coverage": own_roster_coverage,

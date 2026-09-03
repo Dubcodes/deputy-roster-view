@@ -179,8 +179,8 @@ def main() -> None:
     save_deputy_web_schedule(account_one_absence, owner_user_id=1)
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT employee_name FROM deputy_schedule_shifts WHERE source_shift_id=33635").fetchone() == ("Alf",)
-        assert conn.execute("SELECT active FROM deputy_schedule_observations WHERE source_shift_id=33635 AND observer_key='user:1'").fetchone() == (0,)
-        assert conn.execute("SELECT active FROM deputy_schedule_observations WHERE source_shift_id=33635 AND observer_key='user:2'").fetchone() == (1,)
+        assert conn.execute("SELECT active FROM deputy_schedule_observations WHERE source_shift_id=33635 AND observer_key='user:1:direct_schedule'").fetchone() == (0,)
+        assert conn.execute("SELECT active FROM deputy_schedule_observations WHERE source_shift_id=33635 AND observer_key='user:2:direct_schedule'").fetchone() == (1,)
         assert conn.execute("SELECT COUNT(*) FROM deputy_schedule_event_changes WHERE date=?", (observer_date,)).fetchone()[0] == events_before_personalized_absence
     from app.database import fetch_open_deputy_schedule_between
     assert all(int(row["source_shift_id"]) != 33635 for row in fetch_open_deputy_schedule_between(observer_date, observer_date))
@@ -188,11 +188,33 @@ def main() -> None:
     save_deputy_web_schedule({**observer_payload, "captured_at": alf_refresh_at}, owner_user_id=2)
     with sqlite3.connect(db_path) as conn:
         assert conn.execute(
-            "SELECT last_seen_at FROM deputy_schedule_observations WHERE source_shift_id=33635 AND observer_key='user:2'"
+            "SELECT last_seen_at FROM deputy_schedule_observations WHERE source_shift_id=33635 AND observer_key='user:2:direct_schedule'"
         ).fetchone() == (alf_refresh_at,)
     save_deputy_web_schedule({**account_one_absence, "captured_at": (now + timedelta(seconds=4)).isoformat()}, owner_user_id=2)
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT 1 FROM deputy_schedule_shifts WHERE source_shift_id=33635").fetchone() is None
+
+    # A complete direct search may retire only direct evidence: it cannot negate
+    # an earlier native Schedule-grid observation from the same account.
+    source_provenance_date = (now + timedelta(days=20)).date().isoformat()
+    provenance_base = {**assigned_open, "start": f"{source_provenance_date}T07:30:00+12:00", "end": f"{source_provenance_date}T16:00:00+12:00"}
+    native_row = {**provenance_base, "id": 9001, "isOpen": False}
+    direct_row = {**provenance_base, "id": 9002, "area": 901, "areaName": "Different Direct Role", "areaLocationId": 902, "location": 902, "locationName": "Different Direct Location"}
+    native_coverage = [{"start_date": source_provenance_date, "end_date": source_provenance_date, "mode": "selected", "location_ids": [900]}]
+    direct_coverage = [{"start_date": source_provenance_date, "end_date": source_provenance_date, "mode": "selected", "location_ids": [902]}]
+    native_payload = {**observer_payload, "captured_at": (now + timedelta(seconds=5)).isoformat(), "extracted_schedule_shifts": [native_row], "native_schedule_shift_ids": [9001], "direct_schedule_shift_ids": [], "schedule_coverage": native_coverage}
+    save_deputy_web_schedule(native_payload, owner_user_id=1)
+    save_deputy_web_schedule({**native_payload, "captured_at": (now + timedelta(seconds=6)).isoformat(), "extracted_schedule_shifts": [], "native_schedule_shift_ids": []}, owner_user_id=1)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT active FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1:native_get_rosters'").fetchone() == (1,)
+        assert conn.execute("SELECT 1 FROM deputy_schedule_shifts WHERE source_shift_id=9001").fetchone() is not None
+    direct_payload = {**observer_payload, "captured_at": (now + timedelta(seconds=7)).isoformat(), "extracted_schedule_shifts": [direct_row], "native_schedule_shift_ids": [], "direct_schedule_shift_ids": [9002], "schedule_coverage": direct_coverage}
+    save_deputy_web_schedule(direct_payload, owner_user_id=1)
+    save_deputy_web_schedule({**direct_payload, "captured_at": (now + timedelta(seconds=8)).isoformat(), "extracted_schedule_shifts": [], "direct_schedule_shift_ids": []}, owner_user_id=1)
+    with sqlite3.connect(db_path) as conn:
+        direct_observation = conn.execute("SELECT active FROM deputy_schedule_observations WHERE source_shift_id=9002 AND observer_key='user:1:direct_schedule'").fetchone()
+        assert direct_observation is None, direct_observation
+        assert conn.execute("SELECT 1 FROM deputy_schedule_shifts WHERE source_shift_id=9002").fetchone() is None
 
     conflict_people = [{
         "position_label": "CCU2", "employee_name": "Other Crew", "employee_id": 88,

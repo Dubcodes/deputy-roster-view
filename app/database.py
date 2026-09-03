@@ -8100,7 +8100,10 @@ def _prune_missing_deputy_schedule_rows(
         return 0
 
     remove_ids: set[int] = set()
-    observer_key = f"user:{owner_user_id}" if owner_user_id is not None else "system"
+    observer_key = (
+        f"user:{owner_user_id}:direct_schedule"
+        if owner_user_id is not None else "system:direct_schedule"
+    )
     partial_scopes = partial_scopes or set()
     known_travel_location_ids = _known_travel_family_location_ids(conn)
     for coverage in coverage_rows:
@@ -8196,6 +8199,10 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
         for shift in shifts
         if isinstance(shift, dict) and shift.get("id") not in (None, "")
     }
+    native_schedule_shift_ids = {int(value) for value in payload.get("native_schedule_shift_ids") or [] if str(value).isdigit()}
+    direct_schedule_shift_ids = {int(value) for value in payload.get("direct_schedule_shift_ids") or [] if str(value).isdigit()}
+    if "native_schedule_shift_ids" not in payload and "direct_schedule_shift_ids" not in payload:
+        direct_schedule_shift_ids = {int(shift_id) for shift_id in schedule_shift_lookup if str(shift_id).isdigit()}
 
     with get_connection() as conn:
         lock_completed_events(conn)
@@ -8489,20 +8496,35 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                     change_summary,
                 ),
             )
-            observer_key = f"user:{owner_user_id}" if owner_user_id is not None else "system"
-            conn.execute(
-                """
-                INSERT INTO deputy_schedule_observations (
-                    source_shift_id,observer_key,observer_user_id,first_seen_at,last_seen_at,active,last_absent_at
-                ) VALUES (?,?,?,?,?,1,NULL)
-                ON CONFLICT(source_shift_id,observer_key) DO UPDATE SET
-                    observer_user_id=excluded.observer_user_id,
-                    last_seen_at=excluded.last_seen_at,
-                    active=1,
-                    last_absent_at=NULL
-                """,
-                (source_shift_id, observer_key, owner_user_id, captured_at, captured_at),
-            )
+            sources = set()
+            if source_shift_id in native_schedule_shift_ids:
+                sources.add("native_get_rosters")
+            if source_shift_id in direct_schedule_shift_ids:
+                sources.add("direct_schedule")
+            for source in sources:
+                observer_key = (
+                    f"user:{owner_user_id}:{source}"
+                    if owner_user_id is not None else f"system:{source}"
+                )
+                conn.execute(
+                    """
+                    INSERT INTO deputy_schedule_observations (
+                        source_shift_id,observer_key,observer_user_id,first_seen_at,last_seen_at,active,last_absent_at
+                    ) VALUES (?,?,?,?,?,1,NULL)
+                    ON CONFLICT(source_shift_id,observer_key) DO UPDATE SET
+                        observer_user_id=excluded.observer_user_id,
+                        last_seen_at=excluded.last_seen_at,
+                        active=1,
+                        last_absent_at=NULL
+                    """,
+                    (source_shift_id, observer_key, owner_user_id, captured_at, captured_at),
+                )
+                if source == "direct_schedule":
+                    legacy_key = f"user:{owner_user_id}" if owner_user_id is not None else "system"
+                    conn.execute(
+                        "UPDATE deputy_schedule_observations SET active=0,last_absent_at=? WHERE source_shift_id=? AND observer_key=?",
+                        (captured_at, source_shift_id, legacy_key),
+                    )
             employee_id = _optional_int(shift.get("employee"))
             employee_name = str(shift.get("employeeName") or "").strip()
             if employee_id is not None and employee_name:
@@ -8529,8 +8551,7 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
             payload,
             {
                 int(shift_id)
-                for shift_id in schedule_shift_lookup
-                if str(shift_id).isdigit()
+                for shift_id in direct_schedule_shift_ids
             },
             owner_user_id,
             partial_scopes,
