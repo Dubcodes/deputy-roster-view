@@ -460,8 +460,11 @@ def _direct_schedule_location_ids(location_refs_by_id: dict[str, dict[str, Any]]
     return sorted(ids)
 
 
-def _travel_family_location_ids(area_refs_by_id: dict[str, dict[str, Any]]) -> list[int]:
-    """Derive dedicated shared Travel locations from Deputy's participant areas."""
+def _travel_family_location_ids(
+    area_refs_by_id: dict[str, dict[str, Any]],
+    *shift_collections: Any,
+) -> list[int]:
+    """Derive dedicated shared Travel locations from all captured Travel evidence."""
     ids = set()
     for area in area_refs_by_id.values():
         if not is_travel_participant_cohort(area.get("name")):
@@ -470,6 +473,22 @@ def _travel_family_location_ids(area_refs_by_id: dict[str, dict[str, Any]]) -> l
             ids.add(int(area.get("locationId")))
         except (TypeError, ValueError):
             continue
+    for shifts in shift_collections:
+        values = shifts.values() if isinstance(shifts, dict) else shifts
+        if not isinstance(values, (list, tuple, type({}.values()))):
+            continue
+        for shift in values:
+            if not isinstance(shift, dict) or not is_travel_participant_cohort(
+                shift.get("areaName") or shift.get("roleName")
+            ):
+                continue
+            location_id = _first_value(
+                shift, ("location", "locationId", "areaLocationId", "location_id")
+            )
+            try:
+                ids.add(int(location_id))
+            except (TypeError, ValueError):
+                continue
     return sorted(ids)
 
 
@@ -656,6 +675,10 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     captured_employee_id = ""
     events: list[str] = []
     page_texts: list[dict[str, Any]] = []
+    native_schedule_response_count = 0
+    native_schedule_rows_seen = 0
+    native_schedule_ids: set[str] = set()
+    direct_schedule_ids: set[str] = set()
     login_problem_message = ""
     login_response_events: list[str] = []
     target_track_groups = _target_schedule_track_groups(settings)
@@ -1174,6 +1197,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         shift_id = str(shift.get("id") or "")
                         if shift_id:
                             extracted_schedule_shifts_by_id[shift_id] = shift
+                            direct_schedule_ids.add(shift_id)
                             remember_employee_id(shift.get("employee"))
                     return len(shifts)
 
@@ -1242,7 +1266,11 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
 
                 async def capture_direct_schedule_searches() -> None:
                     location_ids = _direct_schedule_location_ids(location_refs_by_id)
-                    travel_location_ids = _travel_family_location_ids(area_refs_by_id)
+                    travel_location_ids = _travel_family_location_ids(
+                        area_refs_by_id,
+                        extracted_shifts_by_id,
+                        extracted_schedule_shifts_by_id,
+                    )
                     start_at, end_at = schedule_capture_bounds()
                     initial_shift_ids = set(extracted_schedule_shifts_by_id)
                     request_count = 0
@@ -1496,6 +1524,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         )
 
                 async def capture_response(response: Any) -> None:
+                    nonlocal native_schedule_response_count, native_schedule_rows_seen
                     try:
                         response_url = response.url
                         if _is_login_diagnostic_url(response_url, settings) and len(login_response_events) < 16:
@@ -1513,7 +1542,8 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             data = await response.json()
                         except Exception:
                             return
-                        is_schedule_response = _is_schedule_api_url(response_url)
+                        is_native_schedule_response = "/api/management/v2/shifts:getRosters" in response_url
+                        is_schedule_response = _is_schedule_api_url(response_url) or is_native_schedule_response
                         sample_kwargs = (
                             {
                                 "max_depth": SCHEDULE_SAMPLE_DEPTH,
@@ -1538,7 +1568,17 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 captured_item["request_sample"] = redacted_text(post_data[:SCHEDULE_SAMPLE_TEXT])
                         if len(captured) < MAX_CAPTURED_RESPONSES:
                             captured.append(captured_item)
-                        if "/api/management/v2/shifts" in response_url:
+                        if is_native_schedule_response:
+                            native_schedule_response_count += 1
+                            native_shifts = _extract_schedule_shifts(data)
+                            native_schedule_rows_seen += len(native_shifts)
+                            for shift in native_shifts:
+                                shift_id = str(shift.get("id") or "")
+                                if shift_id:
+                                    remember_employee_id(shift.get("employee"))
+                                    extracted_schedule_shifts_by_id[shift_id] = shift
+                                    native_schedule_ids.add(shift_id)
+                        elif "/api/management/v2/shifts" in response_url:
                             query_params = dict(parse_qsl(urlsplit(response_url).query))
                             remember_employee_id(query_params.get("employee"))
                             for shift in _extract_management_shifts(data):
@@ -1563,7 +1603,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 location_id = str(location.get("id") or "")
                                 if location_id:
                                     location_refs_by_id[location_id] = location
-                        if is_schedule_response:
+                        if is_schedule_response and not is_native_schedule_response:
                             for area in _extract_area_refs(data):
                                 area_id = str(area.get("id") or "")
                                 if area_id:
@@ -1656,6 +1696,24 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
             shift["areaName"] = area_ref.get("name") or ""
             shift["areaLocationId"] = area_ref.get("locationId")
             shift["areaRosterSortOrder"] = area_ref.get("rosterSortOrder")
+
+    events.append(
+        "Native getRosters: "
+        f"responses {native_schedule_response_count}, rows seen {native_schedule_rows_seen}, "
+        f"unique rows added {len(native_schedule_ids)}. Direct schedule search: "
+        f"unique rows {len(direct_schedule_ids)}. Native-only rows: "
+        f"{len(native_schedule_ids - direct_schedule_ids)}. Direct-only rows: "
+        f"{len(direct_schedule_ids - native_schedule_ids)}."
+    )
+    events.append(
+        "Dedicated Travel locations: "
+        + ", ".join(
+            str(location_id)
+            for location_id in _travel_family_location_ids(
+                area_refs_by_id, extracted_shifts_by_id, extracted_schedule_shifts_by_id
+            )
+        )
+    )
 
     payload = {
         "captured_at": captured_at,

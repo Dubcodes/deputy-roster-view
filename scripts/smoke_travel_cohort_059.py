@@ -60,7 +60,7 @@ def main() -> None:
         save_deputy_web_schedule,
         upsert_travel_route,
     )
-    from app.deputy_web import _extract_management_shifts, _travel_family_location_ids
+    from app.deputy_web import _extract_management_shifts, _extract_schedule_shifts, _travel_family_location_ids
     from app.interpreted_workdays import interpret_deputy_workdays, interpret_deputy_workdays_for_people
     import app.main as main_module
     from app.main import (
@@ -305,6 +305,23 @@ def main() -> None:
     }
     if _travel_family_location_ids(travel_area_refs) != [105]:
         raise AssertionError("Travel selected-location scope was not derived from participant-area references.")
+    native_roster_payload = {"data": {"shifts": [{
+        "id": 771, "employee": 912, "area": 770, "areaName": "RTS", "areaLocationId": 58,
+        "location": 58, "locationName": "T-Ellerslie", "role": "RTS",
+        "start": "2026-09-05T09:00:00+12:00", "end": "2026-09-05T19:30:00+12:00",
+        "duration": 37800, "isPublished": False, "isOpen": False,
+    }]}, "metadata": {"employee": [{"id": 912, "displayName": "Fixture Supervisor"}]}}
+    if _extract_management_shifts(native_roster_payload):
+        raise AssertionError("Nested native roster data unexpectedly entered the personal-shift parser.")
+    native_rows = _extract_schedule_shifts(native_roster_payload)
+    if len(native_rows) != 1 or (
+        native_rows[0]["employeeName"], native_rows[0]["area"], native_rows[0]["areaLocationId"],
+        native_rows[0]["isPublished"], native_rows[0]["isOpen"],
+    ) != ("Fixture Supervisor", 770, 58, False, False):
+        raise AssertionError(f"Native supervisor roster row was not preserved as shared schedule evidence: {native_rows!r}")
+    personal_travel = [{"areaName": "Overnighter", "location": 158}]
+    if _travel_family_location_ids(travel_area_refs, personal_travel) != [105, 158]:
+        raise AssertionError("Personal Travel evidence did not extend dedicated Travel capture locations.")
     if not travel_family_locations_match("T-Travel", "Overnighter", "Travel", "Travel then Overnighter"):
         raise AssertionError("The proven Travel/T-Travel participant alias was not recognised.")
     if travel_family_locations_match("T-Ruakaka", "Director", "Ruakaka", "Director"):
