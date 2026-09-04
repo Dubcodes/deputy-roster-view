@@ -23,6 +23,7 @@ def main() -> None:
     )
 
     from app.config import get_settings
+    from app.deputy_web import _extract_schedule_shifts, _meaningful_management_schedule_shift
     from app.database import (
         fetch_deputy_schedule_for_date,
         fetch_personal_assignment_evidence_for_date,
@@ -34,6 +35,7 @@ def main() -> None:
         save_deputy_web_schedule,
     )
     from app.main import reconcile_personal_assignment_evidence
+    from app.scheduler import _combined_sync_status
 
     init_db()
     now = datetime.now(get_settings().timezone)
@@ -116,6 +118,70 @@ def main() -> None:
         "schedule_coverage": coverage, "own_roster_coverage": own_coverage,
         "event_retry_coverage": [{"date": future, "location_id": 64, "status": "partial"}],
     }
+
+    # Sanitised production-shaped management Schedule fixture: 40 assigned
+    # Ellerslie rows, including the positions the direct source omitted, plus
+    # one genuine open Back row.  The direct subset intentionally has 30 rows.
+    management_ids = [
+        35839, 35897, 33576, 33618, 33620, 33624, 33628, 33632, 34294, 34380,
+        *range(50001, 50031),
+    ]
+    recovered_roles = ["684", "685", "Head On", "IV / BP", "Director", "VT", "Slow Low", "VT", "Start", "RTS"]
+    management_raw = []
+    employee_metadata = []
+    for index, shift_id in enumerate(management_ids):
+        role = recovered_roles[index] if index < len(recovered_roles) else f"Crew {index + 1}"
+        employee_id = 1000 + index
+        management_raw.append({
+            "id": shift_id, "employee": employee_id, "area": 101 + (index % 12),
+            "areaName": role, "areaLocationId": 64, "location": 64,
+            "start": f"{future}T09:00:00+12:00", "end": f"{future}T17:00:00+12:00",
+            "duration": 28800, "isPublished": True, "isOpen": False,
+            "note": "Sanitised management note" if shift_id == 34380 else "",
+        })
+        employee_metadata.append({"id": employee_id, "displayName": f"Management Crew {index + 1}"})
+    management_raw.extend([
+        {"id": 32586, "employee": 0, "area": 104, "areaName": "Back", "areaLocationId": 64,
+         "location": 64, "start": f"{future}T09:00:00+12:00", "end": f"{future}T17:00:00+12:00",
+         "duration": 28800, "isPublished": False, "isOpen": True, "note": ""},
+        {"id": 59999, "employee": 0, "area": 104, "areaName": "Back", "areaLocationId": 64,
+         "location": 64, "start": f"{future}T09:00:00+12:00", "end": f"{future}T17:00:00+12:00",
+         "duration": 28800, "isPublished": False, "isOpen": False, "note": ""},
+    ])
+    parsed_management = _extract_schedule_shifts({
+        "success": True, "data": {"shifts": management_raw},
+        "metadata": {"employee": employee_metadata, "customFields": []},
+    })
+    meaningful_management = [row for row in parsed_management if _meaningful_management_schedule_shift(row)]
+    assert len(meaningful_management) == 41
+    assert next(row for row in meaningful_management if row["id"] == 34380)["employeeName"] == "Management Crew 10"
+    assert next(row for row in meaningful_management if row["id"] == 34380)["note"] == "Sanitised management note"
+    assert not _meaningful_management_schedule_shift(next(row for row in parsed_management if row["id"] == 59999))
+    direct_subset = [row for row in meaningful_management if int(row["id"]) not in {32586, *management_ids[:10]}]
+    management_payload = {
+        **payload, "captured_at": (now + timedelta(seconds=1)).isoformat(),
+        "extracted_schedule_shifts": meaningful_management,
+        "native_schedule_shift_ids": [row["id"] for row in meaningful_management],
+        "direct_schedule_shift_ids": [row["id"] for row in direct_subset],
+        "schedule_coverage": coverage,
+        "management_schedule_coverage": [{"start_date": future, "end_date": future, "status": "complete", "row_count": 41}],
+    }
+    save_deputy_web_schedule(management_payload, owner_user_id=1)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM deputy_schedule_shifts WHERE source_shift_id IN ({})".format(",".join("?" * 41)), tuple([row["id"] for row in meaningful_management])).fetchone()[0] == 41
+        open_row = conn.execute("SELECT employee_id,is_open,is_published,employee_name FROM deputy_schedule_shifts WHERE source_shift_id=32586").fetchone()
+        assert open_row == (0, 1, 0, ""), open_row
+        assert conn.execute("SELECT COUNT(*) FROM deputy_schedule_shifts WHERE source_shift_id=34380").fetchone()[0] == 1
+    # A later complete direct omission cannot retire the independent positive
+    # management/getRosters observation, while existing direct pruning remains unchanged below.
+    save_deputy_web_schedule({**management_payload, "captured_at": (now + timedelta(seconds=2)).isoformat(), "extracted_schedule_shifts": meaningful_management, "direct_schedule_shift_ids": []}, owner_user_id=1)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT active FROM deputy_schedule_observations WHERE source_shift_id=34380 AND observer_key='user:1:native_get_rosters'").fetchone() == (1,)
+        assert conn.execute("SELECT 1 FROM deputy_schedule_shifts WHERE source_shift_id=34380").fetchone() is not None
+    health_payload = {"own_roster_coverage": [{"status": "complete"}], "direct_schedule_coverage": [{"status": "complete"}], "travel_schedule_coverage": [{"status": "complete"}]}
+    assert _combined_sync_status({}, {"status": "ok", "payload": {**health_payload, "management_schedule_coverage": [{"status": "complete", "row_count": 41}]}}) == "ok"
+    assert _combined_sync_status({}, {"status": "ok", "payload": {**health_payload, "management_schedule_coverage": [{"status": "partial", "row_count": 0}]}}) == "partial"
+
     first = save_deputy_web_schedule(payload, owner_user_id=1)
     second = save_deputy_web_schedule({**payload, "captured_at": (now + timedelta(minutes=1)).isoformat()}, owner_user_id=1)
     evidence = fetch_personal_assignment_evidence_for_date(future, [64])

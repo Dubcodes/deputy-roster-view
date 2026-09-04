@@ -593,6 +593,11 @@ def _extract_schedule_shifts(data: Any) -> list[dict[str, Any]]:
     return shifts
 
 
+def _meaningful_management_schedule_shift(shift: dict[str, Any]) -> bool:
+    """Keep assigned rows and real open work; ignore empty Deputy placeholders."""
+    return bool(shift.get("employee")) or bool(shift.get("isOpen"))
+
+
 async def _paginate_schedule_search(
     fetch_page: Any,
     body_data: dict[str, Any],
@@ -668,6 +673,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     extracted_schedule_shifts_by_id: dict[str, dict[str, Any]] = {}
     schedule_coverage: list[dict[str, Any]] = []
     direct_schedule_coverage: list[dict[str, Any]] = []
+    management_schedule_coverage: list[dict[str, Any]] = []
     travel_schedule_coverage: list[dict[str, Any]] = []
     own_roster_coverage: list[dict[str, Any]] = []
     event_retry_coverage: list[dict[str, Any]] = []
@@ -1188,6 +1194,27 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         {"path": "/api/schedule/v2/me/shifts:search", "body": body_data},
                     )
 
+                async def fetch_management_rosters(body_data: dict[str, Any]) -> dict[str, Any]:
+                    return await page.evaluate(
+                        """
+                        async ({ path, body }) => {
+                          const response = await fetch(path, {
+                            method: "POST",
+                            credentials: "include",
+                            headers: {
+                              "accept": "application/json",
+                              "content-type": "application/json"
+                            },
+                            body: JSON.stringify(body)
+                          });
+                          let payload = null;
+                          try { payload = await response.json(); } catch (error) {}
+                          return { ok: response.ok, status: response.status, body: payload };
+                        }
+                        """,
+                        {"path": "/api/management/v2/shifts:getRosters", "body": body_data},
+                    )
+
                 def store_schedule_search_body(body: Any) -> int:
                     for area in _extract_area_refs(body):
                         area_id = str(area.get("id") or "")
@@ -1197,7 +1224,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     for shift in shifts:
                         shift_id = str(shift.get("id") or "")
                         if shift_id:
-                            extracted_schedule_shifts_by_id[shift_id] = shift
+                            extracted_schedule_shifts_by_id.setdefault(shift_id, shift)
                             direct_schedule_ids.add(shift_id)
                             remember_employee_id(shift.get("employee"))
                     return len(shifts)
@@ -1264,6 +1291,61 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     )
                     if failed_requests:
                         events.append(f"Expanded reference capture had {failed_requests} failed requests.")
+
+                async def capture_management_schedule_rosters() -> None:
+                    """Read the observed default Schedule contract, as positive-only evidence."""
+                    nonlocal native_schedule_response_count, native_schedule_rows_seen
+                    start_at, end_at = schedule_capture_bounds()
+                    window_start = start_at
+                    rows_seen = 0
+                    while window_start <= end_at:
+                        next_week_start = window_start + timedelta(days=7)
+                        body_data = {
+                            "start": window_start.isoformat(),
+                            "end": next_week_start.isoformat(),
+                            "includeEmployeePhoto": True,
+                            "expandMetadata": True,
+                        }
+                        try:
+                            result = await fetch_management_rosters(body_data)
+                        except Exception as exc:
+                            result = {"ok": False, "status": 0, "body": None, "error": redacted_text(str(exc))[:180]}
+                        body = result.get("body") if isinstance(result, dict) else None
+                        valid = (
+                            isinstance(result, dict)
+                            and bool(result.get("ok"))
+                            and isinstance(body, dict)
+                            and bool(body.get("success"))
+                            and isinstance((body.get("data") or {}).get("shifts"), list)
+                        )
+                        shifts = _extract_schedule_shifts(body) if valid else []
+                        meaningful = [shift for shift in shifts if _meaningful_management_schedule_shift(shift)]
+                        if valid:
+                            native_schedule_response_count += 1
+                            native_schedule_rows_seen += len(meaningful)
+                            for shift in meaningful:
+                                shift_id = str(shift.get("id") or "")
+                                if not shift_id:
+                                    continue
+                                extracted_schedule_shifts_by_id[shift_id] = shift
+                                native_schedule_ids.add(shift_id)
+                                remember_employee_id(shift.get("employee"))
+                            rows_seen += len(meaningful)
+                        management_schedule_coverage.append({
+                            "start_date": window_start.date().isoformat(),
+                            "end_date": (next_week_start - timedelta(days=1)).date().isoformat(),
+                            "status": "complete" if valid else "partial",
+                            "row_count": len(meaningful),
+                            "note": "Deterministic getRosters completed." if valid else (
+                                f"Deterministic getRosters incomplete: {str((result or {}).get('error') or (result or {}).get('status') or 'invalid response')[:180]}."
+                            ),
+                        })
+                        window_start = next_week_start
+                    events.append(
+                        "Deterministic getRosters covered "
+                        f"{start_at.date().isoformat()} to {end_at.date().isoformat()} "
+                        f"in {len(management_schedule_coverage)} weekly requests and saw {rows_seen} meaningful rows."
+                    )
 
                 async def capture_direct_schedule_searches() -> None:
                     location_ids = _direct_schedule_location_ids(location_refs_by_id)
@@ -1682,6 +1764,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     await page.wait_for_timeout(4_000)
                     await capture_extended_own_roster()
                     await capture_expanded_area_refs()
+                    await capture_management_schedule_rosters()
                     await capture_direct_schedule_searches()
                     await retry_personal_events_missing_from_schedule()
             finally:
@@ -1756,6 +1839,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
         "direct_schedule_shift_ids": sorted(direct_schedule_ids),
         "schedule_coverage": schedule_coverage,
         "direct_schedule_coverage": direct_schedule_coverage,
+        "management_schedule_coverage": management_schedule_coverage,
         "travel_schedule_coverage": travel_schedule_coverage,
         "own_roster_coverage": own_roster_coverage,
         "event_retry_coverage": event_retry_coverage,

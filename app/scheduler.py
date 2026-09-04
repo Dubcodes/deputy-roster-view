@@ -387,6 +387,9 @@ def _combined_sync_status(calendar_result: dict[str, object], web_result: dict[s
                     return "partial"
             elif not payload.get("schedule_coverage"):
                 return "partial"
+            management_coverage = payload.get("management_schedule_coverage")
+            if management_coverage is not None and not coverage_complete(management_coverage):
+                return "partial"
             own_coverage = payload.get("own_roster_coverage")
             if own_coverage and not coverage_complete(own_coverage):
                 return "partial"
