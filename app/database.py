@@ -6823,7 +6823,14 @@ def fetch_deputy_schedule_for_date(
             f"""
             SELECT s.*,
                    COALESCE(s.area_location_id, a.location_id) AS schedule_location_id,
-                   COALESCE(locations.name, '') AS location_name
+                   COALESCE(locations.name, '') AS location_name,
+                   (
+                     SELECT GROUP_CONCAT(observer_key || char(31) || last_seen_at, char(30))
+                     FROM deputy_schedule_observations observation
+                     WHERE observation.source_shift_id = s.source_shift_id
+                       AND observation.active = 1
+                       AND observation.observer_key LIKE '%:native_get_rosters'
+                   ) AS native_observation_contexts
             FROM deputy_schedule_shifts s
             LEFT JOIN deputy_schedule_areas a ON a.area_id = s.area_id
             LEFT JOIN deputy_schedule_locations locations
@@ -7033,7 +7040,14 @@ def fetch_deputy_schedule_between(start_date: str, end_date: str) -> list[sqlite
             """
             SELECT s.*,
                    COALESCE(s.area_location_id, a.location_id) AS schedule_location_id,
-                   l.name AS location_name
+                   l.name AS location_name,
+                   (
+                     SELECT GROUP_CONCAT(observer_key || char(31) || last_seen_at, char(30))
+                     FROM deputy_schedule_observations observation
+                     WHERE observation.source_shift_id = s.source_shift_id
+                       AND observation.active = 1
+                       AND observation.observer_key LIKE '%:native_get_rosters'
+                   ) AS native_observation_contexts
             FROM deputy_schedule_shifts s
             LEFT JOIN deputy_schedule_areas a
               ON a.area_id = s.area_id

@@ -34,7 +34,10 @@ def main() -> None:
         recover_historical_schedule_from_captures,
         save_deputy_web_schedule,
     )
-    from app.main import reconcile_personal_assignment_evidence
+    from app.main import (
+        effective_schedule_items, reconcile_personal_assignment_evidence,
+        replacement_change_summary, schedule_people,
+    )
     from app.scheduler import _combined_sync_status
 
     init_db()
@@ -451,6 +454,69 @@ def main() -> None:
     save_deputy_web_schedule({**clean_payload, "captured_at": (now + timedelta(minutes=8)).isoformat(), "extracted_shifts": [changed]}, owner_user_id=1)
     visible_fields = {row["field_name"] for row in get_shift_changes_for_date(clean_date)}
     assert {"role", "start_at", "end_at", "description"}.issubset(visible_fields), visible_fields
+
+    # Same-role occupants are retained only when a native Schedule capture saw
+    # each distinct Deputy row together.  Presentation numbering is source-ID
+    # ordered and never changes the canonical role used by history/dedupe.
+    vt_date = (now + timedelta(days=35)).date().isoformat()
+    vt_capture_at = (now + timedelta(minutes=20)).isoformat()
+    vt_area = {"id": 776, "name": "VT", "locationId": 64, "rosterSortOrder": 9}
+    vt_rows = [
+        {"id": 33624, "area": 776, "areaName": "VT", "areaLocationId": 64, "employee": 59,
+         "employeeName": "Darryl Cribb", "start": f"{vt_date}T09:00:00+12:00", "end": f"{vt_date}T19:30:00+12:00", "duration": 37800, "isPublished": True},
+        {"id": 33632, "area": 776, "areaName": "VT", "areaLocationId": 64, "employee": 77,
+         "employeeName": "James Topping", "start": f"{vt_date}T09:00:00+12:00", "end": f"{vt_date}T19:30:00+12:00", "duration": 37800, "isPublished": True},
+    ]
+    save_deputy_web_schedule({
+        "captured_at": vt_capture_at, "areas": [*areas, vt_area],
+        "locations": [{"id": 64, "name": "T-Cambridge"}], "extracted_shifts": [],
+        "extracted_schedule_shifts": vt_rows, "native_schedule_shift_ids": [33624, 33632],
+        "direct_schedule_shift_ids": [], "schedule_coverage": [], "own_roster_coverage": [],
+    }, owner_user_id=1)
+    native_vt_rows = [row for row in fetch_deputy_schedule_for_date(vt_date) if int(row["source_shift_id"]) in {33624, 33632}]
+    vt_people = schedule_people(native_vt_rows, include_placeholders=False)
+    if [(row["position_label"], row["employee_name"]) for row in vt_people] != [
+        ("VT 1", "Darryl Cribb"), ("VT 2", "James Topping"),
+    ]:
+        raise AssertionError(f"Native co-observed VT pair was not retained and source-ordered: {vt_people!r}")
+    vt_items, _contexts = effective_schedule_items(native_vt_rows)
+    if any(item["area_display"] != "VT" or item.get("display_area_label") not in {"VT 1", "VT 2"} for item in vt_items):
+        raise AssertionError(f"Display suffix leaked into canonical VT identity: {vt_items!r}")
+    if replacement_change_summary(
+        {"area_display": vt_items[0]["area_display"], "employee_name": "Darryl Cribb"},
+        {"area_display": vt_items[1]["area_display"], "employee_name": "James Topping"},
+    ) != "VT: Darryl Cribb → James Topping":
+        raise AssertionError("Concurrent display suffix contaminated semantic change-history labels.")
+
+    def concurrent_row(source_id: int, employee_id: int, *, context: str = "user:1:native_get_rosters", captured_at: str = "2026-09-01T10:00:00+12:00") -> dict[str, object]:
+        return {
+            "source_shift_id": source_id, "employee_id": employee_id, "employee_name": f"Crew {employee_id}",
+            "area_id": 776, "area_name": "VT", "schedule_location_id": 64, "date": "2026-09-01",
+            "start_at": "2026-09-01T09:00:00+12:00", "end_at": "2026-09-01T19:30:00+12:00",
+            "captured_at": captured_at, "native_observation_contexts": f"{context}\x1f{captured_at}",
+        }
+
+    one_vt, _contexts = effective_schedule_items([concurrent_row(40001, 501)])
+    if len(one_vt) != 1 or one_vt[0].get("display_area_label") or one_vt[0]["area_display"] != "VT":
+        raise AssertionError(f"A singleton VT was numbered: {one_vt!r}")
+    three_vt, _contexts = effective_schedule_items([concurrent_row(40001, 501), concurrent_row(40002, 502), concurrent_row(40003, 503)])
+    if [row.get("display_area_label") for row in three_vt] != ["VT 1", "VT 2", "VT 3"]:
+        raise AssertionError(f"Three native co-observed VTs were not numbered deterministically: {three_vt!r}")
+    replacement_rows, _contexts = effective_schedule_items([
+        concurrent_row(41001, 601, context="", captured_at="2026-09-01T09:00:00+12:00"),
+        concurrent_row(41002, 602, context="", captured_at="2026-09-01T10:00:00+12:00"),
+    ])
+    if [row["employee_id"] for row in replacement_rows] != [602]:
+        raise AssertionError(f"Ordinary VT replacement was incorrectly treated as concurrent: {replacement_rows!r}")
+    disagreement_rows, _contexts = effective_schedule_items([
+        concurrent_row(42001, 701, context="user:1:native_get_rosters"),
+        concurrent_row(42002, 702, context="user:2:native_get_rosters"),
+    ])
+    if [row["employee_id"] for row in disagreement_rows] != [702]:
+        raise AssertionError(f"Different native capture contexts fabricated concurrency: {disagreement_rows!r}")
+    four_vt, _contexts = effective_schedule_items([concurrent_row(43000 + index, 800 + index) for index in range(1, 5)])
+    if len(four_vt) != 4 or any(row.get("display_area_label") for row in four_vt) or not all(row.get("concurrent_assignment_warning") for row in four_vt):
+        raise AssertionError(f"Over-cap concurrent VT evidence was dropped, numbered, or not flagged: {four_vt!r}")
 
     diagnostics = get_roster_integrity_diagnostics()
     assert diagnostics["partial_upcoming"] >= 1

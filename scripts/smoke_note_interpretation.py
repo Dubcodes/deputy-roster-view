@@ -236,6 +236,45 @@ def main() -> None:
         raise AssertionError(f"Truncated dotted time leaked into output: {race_summary!r}")
     if raw_note != original_note:
         raise AssertionError("Parsing changed the original raw roster note.")
+
+    ellerslie_lines = [
+        "Trucks & ET in place",
+        "0730 Clow Place",
+        "0900 On track",
+        "Records to be done via Stanley St production",
+        "1130 live on air.",
+        "10 races 1155 | 1709",
+        "Group One Prosir Plate",
+    ]
+    ellerslie_summary = build_race_day_summary({"description_lines": ellerslie_lines}, {})
+    if ellerslie_summary["rows"] != [
+        {"label": "Clow Place", "value": "07:30"},
+        {"label": "On track", "value": "09:00"},
+        {"label": "Live", "value": "11:30"},
+        {"label": "10 races", "value": "11:55 | 17:09"},
+    ]:
+        raise AssertionError(f"Ellerslie race-day facts were wrong: {ellerslie_summary!r}")
+    if ellerslie_summary["note_lines"] != [
+        "Trucks & ET in place",
+        "Records to be done via Stanley St production",
+        "Group One Prosir Plate",
+    ]:
+        raise AssertionError(f"Ellerslie prose was lost or duplicated: {ellerslie_summary!r}")
+    if ellerslie_lines != [
+        "Trucks & ET in place", "0730 Clow Place", "0900 On track",
+        "Records to be done via Stanley St production", "1130 live on air.",
+        "10 races 1155 | 1709", "Group One Prosir Plate",
+    ]:
+        raise AssertionError("Race-day extraction changed the raw Deputy note.")
+    mixed_summary = build_race_day_summary({"description_lines": ["Office 0830 - Dylan and Matt driving trucks"]}, {})
+    if mixed_summary["rows"] != [{"label": "Office", "value": "08:30"}] or mixed_summary["note_lines"] != ["Dylan and Matt driving trucks"]:
+        raise AssertionError(f"Mixed timing/prose line was not preserved safely: {mixed_summary!r}")
+    prose_summary = build_race_day_summary({"description_lines": ["Group One Prosir Plate"]}, {})
+    if not prose_summary["has_items"] or prose_summary["rows"] or prose_summary["note_lines"] != ["Group One Prosir Plate"]:
+        raise AssertionError(f"Prose-only roster note disappeared: {prose_summary!r}")
+    timing_only_summary = build_race_day_summary({"description_lines": ["0900 On track"]}, {})
+    if timing_only_summary["note_lines"] or timing_only_summary["rows"] != [{"label": "On track", "value": "09:00"}]:
+        raise AssertionError(f"Timing-only note gained duplicate prose: {timing_only_summary!r}")
     with sqlite3.connect(get_settings().db_path) as conn:
         visible_changes = conn.execute("SELECT COUNT(*) FROM shift_changes").fetchone()[0]
     if visible_changes:

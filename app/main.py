@@ -2235,6 +2235,7 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
 
 def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object]) -> dict[str, object]:
     rows: list[dict[str, str]] = []
+    note_lines: list[str] = []
     wanted_patterns = (
         re.compile(
             r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+cross|fx|records?|on\s+air|live)\b",
@@ -2283,22 +2284,26 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
     def display_time(value: str) -> str:
         return clean_timing_value(value)
 
+    def add_note(value: str) -> None:
+        clean_value = re.sub(r"\s+", " ", value).strip()
+        if clean_value:
+            note_lines.append(clean_value)
+
     for line in shift.get("description_lines") or []:
         line_text = str(line or "").strip()
         if not line_text:
             continue
         time_first = TIME_FIRST_TIMING_RE.match(line_text)
         if time_first:
-            add_row(display_label(time_first.group(2)), display_time(time_first.group(1)))
+            value = display_time(time_first.group(1))
+            if value:
+                add_row(display_label(time_first.group(2)), value)
+            else:
+                add_note(line_text)
             continue
         if not any(pattern.search(line_text) for pattern in wanted_patterns):
+            add_note(line_text)
             continue
-        if re.match(
-            r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track)\b",
-            line_text,
-            re.IGNORECASE,
-        ):
-            line_text = re.split(r"\s+[-–]\s+", line_text, maxsplit=1)[0].strip()
 
         race_times = RACE_COUNT_WITH_TIMES_RE.search(line_text)
         if race_times:
@@ -2306,6 +2311,8 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
             last_race = display_time(race_times.group(3))
             if first_race and last_race:
                 add_row(f"{race_times.group(1)} races", f"{first_race} | {last_race}")
+            else:
+                add_note(line_text)
             continue
 
         race_count = RACE_COUNT_RE.search(line_text)
@@ -2315,10 +2322,14 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
 
         paired_timings = list(paired_timing_re.finditer(line_text))
         if paired_timings:
+            added = False
             for match in paired_timings:
                 value = display_time(match.group(2))
                 if value:
                     add_row(display_label(match.group(1)), value)
+                    added = True
+            if not added:
+                add_note(line_text)
             continue
 
         simple_timing = simple_timing_re.match(line_text)
@@ -2326,6 +2337,11 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
             value = display_time(simple_timing.group(2))
             if value:
                 add_row(display_label(simple_timing.group(1)), value)
+                fragments = re.split(r"\s+[-–]\s+", line_text, maxsplit=1)
+                if len(fragments) == 2 and fragments[1].strip():
+                    add_note(fragments[1])
+                continue
+        add_note(line_text)
 
     effective = (
         shift.get("effective_race_timing")
@@ -2394,7 +2410,8 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
 
     return {
         "rows": rows,
-        "has_items": bool(rows),
+        "note_lines": note_lines,
+        "has_items": bool(rows or note_lines),
         "source_note": str(effective.get("source_note") or ""),
     }
 
@@ -2839,7 +2856,11 @@ def schedule_area_is_travel_participant_cohort(value: str | None) -> bool:
 
 
 def schedule_item_is_multi_assignee_context(item: dict[str, object]) -> bool:
-    return bool(item.get("is_vehicle_area") or item.get("is_travel_participant_cohort"))
+    return bool(
+        item.get("is_vehicle_area")
+        or item.get("is_travel_participant_cohort")
+        or item.get("proven_concurrent_assignment")
+    )
 
 
 def schedule_area_is_hidden(value: str | None) -> bool:
@@ -3565,6 +3586,69 @@ def schedule_items_overlap(left: dict[str, object], right: dict[str, object]) ->
     return left_start < right_end and right_start < left_end
 
 
+def native_current_observation_contexts(item: dict[str, object]) -> set[str]:
+    """Native observations that positively saw this exact persisted row capture."""
+    captured_at = str(item.get("captured_at") or "")
+    if not captured_at:
+        return set()
+    contexts = set()
+    for value in str(item.get("native_observation_contexts") or "").split("\x1e"):
+        observer_key, separator, observed_at = value.partition("\x1f")
+        if separator and observer_key and observed_at == captured_at:
+            contexts.add(observer_key)
+    return contexts
+
+
+def mark_proven_concurrent_assignments(items: list[dict[str, object]]) -> None:
+    """Retain same-role rows only when one native capture positively saw them together."""
+    groups: dict[tuple[str, object, str, str], list[dict[str, object]]] = {}
+    for item in items:
+        if schedule_item_is_multi_assignee_context(item):
+            continue
+        employee_id = safe_int(item.get("employee_id"))
+        source_shift_id = safe_int(item.get("source_shift_id"))
+        location_id = item.get("schedule_location_id")
+        date_text = str(item.get("date") or "")
+        position_key = schedule_item_position_key(item)
+        if employee_id is None or source_shift_id is None or location_id in (None, "") or not date_text or not position_key:
+            continue
+        for context in native_current_observation_contexts(item):
+            groups.setdefault((date_text, location_id, position_key, context), []).append(item)
+
+    for group in groups.values():
+        source_ids = {safe_int(item.get("source_shift_id")) for item in group}
+        employee_ids = {safe_int(item.get("employee_id")) for item in group}
+        if (
+            len(group) < 2
+            or len(source_ids) != len(group)
+            or len(employee_ids) != len(group)
+            or any(left is not right and not schedule_items_overlap(left, right) for left in group for right in group)
+        ):
+            continue
+        for item in group:
+            item["proven_concurrent_assignment"] = True
+
+
+def apply_concurrent_assignment_display_labels(items: list[dict[str, object]]) -> None:
+    """Add presentation-only labels after canonical role resolution is complete."""
+    groups: dict[tuple[str, object, str], list[dict[str, object]]] = {}
+    for item in items:
+        if item.get("proven_concurrent_assignment"):
+            groups.setdefault(
+                (str(item.get("date") or ""), item.get("schedule_location_id"), schedule_item_position_key(item)),
+                [],
+            ).append(item)
+    for group in groups.values():
+        if len(group) > 3:
+            label = str(group[0].get("area_display") or "Role")
+            warning = f"{len(group)} concurrent {label} assignments captured; review roster."
+            for item in group:
+                item["concurrent_assignment_warning"] = warning
+            continue
+        for index, item in enumerate(sorted(group, key=lambda value: int(value.get("source_shift_id") or 0)), start=1):
+            item["display_area_label"] = f"{item.get('area_display') or 'Role'} {index}"
+
+
 def schedule_item_newer(left: dict[str, object], right: dict[str, object]) -> bool:
     left_key = (str(left.get("captured_at") or ""), int(left.get("source_shift_id") or 0))
     right_key = (str(right.get("captured_at") or ""), int(right.get("source_shift_id") or 0))
@@ -3694,9 +3778,12 @@ def effective_schedule_items(rows: list[object]) -> tuple[list[dict[str, object]
         item = decorate_schedule_row(row)
         if not schedule_area_is_hidden(str(item.get("area_display") or "Role")):
             items.append(item)
+    mark_proven_concurrent_assignments(items)
     person_focused_schedule_changes(items)
     items = suppress_stale_overlapping_employee_roles(dedupe_schedule_items(items))
-    return items, split_sound_vt_assignments(items)
+    split_contexts = split_sound_vt_assignments(items)
+    apply_concurrent_assignment_display_labels(items)
+    return items, split_contexts
 
 
 def apply_schedule_role_context(shifts: list[dict[str, object]], schedule_rows: list[object]) -> None:
@@ -3792,7 +3879,7 @@ def schedule_people(
     placeholders = expected_schedule_placeholders(expected_areas, items) if include_placeholders else []
 
     for item in items:
-        area_label = str(item.get("area_display") or "Role")
+        area_label = str(item.get("display_area_label") or item.get("area_display") or "Role")
         area_sort = schedule_sort_value(item.get("display_sort_order"))
         employee_name = str(item.get("employee_name") or "").strip()
         is_vehicle = bool(item.get("is_vehicle_area"))
@@ -3828,6 +3915,7 @@ def schedule_people(
                 "changed": False,
                 "position_sort": 999999,
                 "vehicle_sort": 999999,
+                "concurrent_assignment_warnings": [],
             },
         )
         if item.get("assignment_changed"):
@@ -3841,6 +3929,7 @@ def schedule_people(
         else:
             append_unique(person["position_parts"], area_label)
             person["position_sort"] = min(schedule_sort_value(person.get("position_sort")), area_sort)
+            append_unique(person["concurrent_assignment_warnings"], str(item.get("concurrent_assignment_warning") or ""))
 
     people = []
     for person in people_by_key.values():
@@ -3866,6 +3955,7 @@ def schedule_people(
                 "change_summary": "; ".join(list(person.get("change_parts") or [])),
                 "change_time_label": format_datetime(latest_iso_datetime(*list(person.get("change_times") or [])), "%d %b %H:%M"),
                 "placeholder": False,
+                "concurrent_assignment_warning": "; ".join(list(person.get("concurrent_assignment_warnings") or [])),
             }
         )
     people.extend(placeholders)

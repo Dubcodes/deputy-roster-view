@@ -42,6 +42,7 @@
                   {% if person.provenance_label %}<small>{{ person.provenance_label }}</small>{% endif %}
                   {% if person.possibly_missing %}<small class="warning-text">Possibly missing from latest capture</small>{% endif %}
                   {% if person.conflict_warning %}<small class="warning-text">{{ person.conflict_warning }}</small>{% endif %}
+                  {% if person.concurrent_assignment_warning %}<small class="warning-text">{{ person.concurrent_assignment_warning }}</small>{% endif %}
                   {% if person.vehicle_conflict_warning %}<small class="warning-text">{{ person.vehicle_conflict_warning }}</small>{% endif %}
                 </strong>
                 <span role="cell">{{ person.vehicle_label or "-" }}</span>
@@ -241,6 +242,13 @@
                 </div>
               {% endfor %}
             </dl>
+            {% if shift.race_day_summary.note_lines %}
+              <div class="roster-note-lines">
+                {% for line in shift.race_day_summary.note_lines %}
+                  <p>{{ line }}</p>
+                {% endfor %}
+              </div>
+            {% endif %}
             {% if shift.race_day_summary.source_note %}
               <p class="muted">{{ shift.race_day_summary.source_note }}</p>
             {% endif %}
@@ -284,6 +292,7 @@
                     {% if person.provenance_label %}<small>{{ person.provenance_label }}</small>{% endif %}
                     {% if person.possibly_missing %}<small class="warning-text">Possibly missing from latest capture</small>{% endif %}
                     {% if person.conflict_warning %}<small class="warning-text">{{ person.conflict_warning }}</small>{% endif %}
+                    {% if person.concurrent_assignment_warning %}<small class="warning-text">{{ person.concurrent_assignment_warning }}</small>{% endif %}
                     {% if person.vehicle_conflict_warning %}<small class="warning-text">{{ person.vehicle_conflict_warning }}</small>{% endif %}
                     {% if person.changed %}
                       <details class="crew-change-details">
