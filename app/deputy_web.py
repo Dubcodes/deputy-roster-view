@@ -1569,6 +1569,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         if len(captured) < MAX_CAPTURED_RESPONSES:
                             captured.append(captured_item)
                         if is_native_schedule_response:
+                            # getRosters is positive-only evidence until its request scope is verified.
                             native_schedule_response_count += 1
                             native_shifts = _extract_schedule_shifts(data)
                             native_schedule_rows_seen += len(native_shifts)

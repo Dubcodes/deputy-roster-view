@@ -8186,6 +8186,41 @@ def _prune_missing_deputy_schedule_rows(
     return len(remove_ids)
 
 
+def _migrate_legacy_schedule_observations(conn: sqlite3.Connection) -> None:
+    """Move pre-source-aware shared observations into the direct evidence channel."""
+    rows = conn.execute(
+        """SELECT * FROM deputy_schedule_observations
+           WHERE observer_key='system'
+              OR (observer_key GLOB 'user:[0-9]*' AND instr(substr(observer_key, 6), ':')=0)"""
+    ).fetchall()
+    for row in rows:
+        legacy_key = str(row["observer_key"])
+        destination = f"{legacy_key}:direct_schedule"
+        existing = conn.execute(
+            "SELECT * FROM deputy_schedule_observations WHERE source_shift_id=? AND observer_key=?",
+            (row["source_shift_id"], destination),
+        ).fetchone()
+        first_seen = min(str(row["first_seen_at"]), str(existing["first_seen_at"])) if existing else str(row["first_seen_at"])
+        last_seen = max(str(row["last_seen_at"]), str(existing["last_seen_at"])) if existing else str(row["last_seen_at"])
+        newest = row if not existing or str(row["last_seen_at"]) >= str(existing["last_seen_at"]) else existing
+        active = int(newest["active"])
+        absent_values = [str(value) for value in (row["last_absent_at"], existing["last_absent_at"] if existing else None) if value]
+        last_absent = None if active else (max(absent_values) if absent_values else None)
+        conn.execute(
+            """INSERT INTO deputy_schedule_observations
+               (source_shift_id,observer_key,observer_user_id,first_seen_at,last_seen_at,active,last_absent_at)
+               VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(source_shift_id,observer_key) DO UPDATE SET
+                 observer_user_id=excluded.observer_user_id,first_seen_at=excluded.first_seen_at,
+                 last_seen_at=excluded.last_seen_at,active=excluded.active,last_absent_at=excluded.last_absent_at""",
+            (row["source_shift_id"], destination, row["observer_user_id"], first_seen, last_seen, active, last_absent),
+        )
+        conn.execute(
+            "DELETE FROM deputy_schedule_observations WHERE source_shift_id=? AND observer_key=?",
+            (row["source_shift_id"], legacy_key),
+        )
+
+
 def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | None = None) -> dict[str, int]:
     captured_at = str(payload.get("captured_at") or datetime.now().isoformat(timespec="seconds"))
     areas = payload.get("areas") if isinstance(payload.get("areas"), list) else []
@@ -8205,6 +8240,7 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
         direct_schedule_shift_ids = {int(shift_id) for shift_id in schedule_shift_lookup if str(shift_id).isdigit()}
 
     with get_connection() as conn:
+        _migrate_legacy_schedule_observations(conn)
         lock_completed_events(conn)
         authoritative_coverage = _authoritative_schedule_coverage(payload)
         known_travel_location_ids = _known_travel_family_location_ids(conn)

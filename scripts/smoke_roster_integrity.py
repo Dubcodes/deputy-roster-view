@@ -208,6 +208,33 @@ def main() -> None:
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT active FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1:native_get_rosters'").fetchone() == (1,)
         assert conn.execute("SELECT 1 FROM deputy_schedule_shifts WHERE source_shift_id=9001").fetchone() is not None
+        conn.execute("INSERT INTO deputy_schedule_observations VALUES (9001,'user:1',1,'2026-01-01T00:00:00+12:00','2026-01-02T00:00:00+12:00',0,'2026-01-02T00:00:00+12:00')")
+        conn.execute("INSERT INTO deputy_schedule_observations VALUES (9001,'user:1:direct_schedule',1,'2026-01-03T00:00:00+12:00','2026-01-04T00:00:00+12:00',1,NULL)")
+        conn.commit()
+    save_deputy_web_schedule({"captured_at": "2026-01-05T00:00:00+12:00"}, owner_user_id=1)
+    with sqlite3.connect(db_path) as conn:
+        direct_collision = conn.execute("SELECT observer_key,first_seen_at,last_seen_at,active,last_absent_at FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'").fetchone()
+        assert direct_collision == ('user:1:direct_schedule','2026-01-01T00:00:00+12:00','2026-01-04T00:00:00+12:00',1,None), direct_collision
+        assert conn.execute("SELECT 1 FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1'").fetchone() is None
+        before_repeat = direct_collision
+    save_deputy_web_schedule({"captured_at": "2026-01-06T00:00:00+12:00"}, owner_user_id=1)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT observer_key,first_seen_at,last_seen_at,active,last_absent_at FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'").fetchone() == before_repeat
+        # Newer inactive legacy evidence wins over an older active direct row.
+        conn.execute("INSERT INTO deputy_schedule_observations VALUES (9001,'user:1',1,'2026-02-01T00:00:00+12:00','2026-02-04T00:00:00+12:00',0,'2026-02-04T00:00:00+12:00')")
+        conn.execute("UPDATE deputy_schedule_observations SET first_seen_at='2026-02-02T00:00:00+12:00',last_seen_at='2026-02-03T00:00:00+12:00',active=1,last_absent_at=NULL WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'")
+        conn.commit()
+    save_deputy_web_schedule({"captured_at": "2026-02-05T00:00:00+12:00"}, owner_user_id=1)
+    with sqlite3.connect(db_path) as conn:
+        inactive_collision = conn.execute("SELECT first_seen_at,last_seen_at,active,last_absent_at FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'").fetchone()
+        assert inactive_collision == ('2026-02-01T00:00:00+12:00','2026-02-04T00:00:00+12:00',0,'2026-02-04T00:00:00+12:00'), inactive_collision
+        # Equal last_seen ties choose the legacy row because migration uses >=.
+        conn.execute("INSERT INTO deputy_schedule_observations VALUES (9001,'user:1',1,'2026-03-01T00:00:00+12:00','2026-03-04T00:00:00+12:00',0,'2026-03-04T00:00:00+12:00')")
+        conn.execute("UPDATE deputy_schedule_observations SET first_seen_at='2026-03-02T00:00:00+12:00',last_seen_at='2026-03-04T00:00:00+12:00',active=1,last_absent_at=NULL WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'")
+        conn.commit()
+    save_deputy_web_schedule({"captured_at": "2026-03-05T00:00:00+12:00"}, owner_user_id=1)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT first_seen_at,last_seen_at,active,last_absent_at FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'").fetchone() == ('2026-03-01T00:00:00+12:00','2026-03-04T00:00:00+12:00',0,'2026-03-04T00:00:00+12:00')
     direct_payload = {**observer_payload, "captured_at": (now + timedelta(seconds=7)).isoformat(), "extracted_schedule_shifts": [direct_row], "native_schedule_shift_ids": [], "direct_schedule_shift_ids": [9002], "schedule_coverage": direct_coverage}
     save_deputy_web_schedule(direct_payload, owner_user_id=1)
     save_deputy_web_schedule({**direct_payload, "captured_at": (now + timedelta(seconds=8)).isoformat(), "extracted_schedule_shifts": [], "direct_schedule_shift_ids": []}, owner_user_id=1)
@@ -215,6 +242,20 @@ def main() -> None:
         direct_observation = conn.execute("SELECT active FROM deputy_schedule_observations WHERE source_shift_id=9002 AND observer_key='user:1:direct_schedule'").fetchone()
         assert direct_observation is None, direct_observation
         assert conn.execute("SELECT 1 FROM deputy_schedule_shifts WHERE source_shift_id=9002").fetchone() is None
+
+    # Upgrade legacy generic observations through the real save/pruning path.
+    legacy_row = {**direct_row, "id": 9101}
+    legacy_payload = {**direct_payload, "captured_at": (now + timedelta(seconds=9)).isoformat(), "extracted_schedule_shifts": [legacy_row], "direct_schedule_shift_ids": [9101]}
+    save_deputy_web_schedule(legacy_payload, owner_user_id=1)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE deputy_schedule_observations SET observer_key='user:1' WHERE source_shift_id=9101 AND observer_key='user:1:direct_schedule'")
+        conn.commit()
+    save_deputy_web_schedule({**legacy_payload, "captured_at": (now + timedelta(seconds=10)).isoformat(), "extracted_schedule_shifts": [], "direct_schedule_shift_ids": []}, owner_user_id=1)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT 1 FROM deputy_schedule_observations WHERE source_shift_id=9101 AND observer_key='user:1'").fetchone() is None
+        assert conn.execute("SELECT 1 FROM deputy_schedule_shifts WHERE source_shift_id=9101").fetchone() is None
+    # A native observation is independent of direct migration and absence.
+    assert conn.execute("SELECT active FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1:native_get_rosters'").fetchone() == (1,)
 
     conflict_people = [{
         "position_label": "CCU2", "employee_name": "Other Crew", "employee_id": 88,
