@@ -13,6 +13,8 @@ os.environ.update({"DB_PATH": str(tmp / "security.sqlite3"), "DATA_DIR": str(tmp
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.auth import clear_login_failures, login_is_throttled, record_login_failure
+from app.account_invitations import account_invite_details, create_account_invite
+from app.contractors import create_invite, invite_details
 from app.config import get_settings
 from app.database import count_app_users, get_connection, init_db
 from app.deputy_web import run_deputy_web_capture
@@ -146,13 +148,38 @@ init_db()
 main_module.queue_manual_sync = lambda *_args, **_kwargs: None
 signup_client = TestClient(app, follow_redirects=False)
 assert signup_client.get("/signup").status_code == 200
-first_signup = signup_client.post("/signup", data={"deputy_email": "first@example.invalid", "deputy_password": "fixture-password",
+cross_site = {"sec-fetch-site": "cross-site", "origin": "https://evil.example"}
+same_origin = {"origin": "http://testserver"}
+cross_signup = signup_client.post("/signup", headers=cross_site, data={"deputy_email": "blocked@example.invalid", "deputy_password": "fixture-password", "pin": "1234", "pin_confirm": "1234"})
+assert cross_signup.status_code == 403 and count_app_users() == 0 and not signup_client.cookies
+first_signup = signup_client.post("/signup", headers=same_origin, data={"deputy_email": "first@example.invalid", "deputy_password": "fixture-password",
     "deputy_web_url": "https://example.au.deputy.com/", "pin": "1234", "pin_confirm": "1234", "next_url": "/month"})
 assert first_signup.status_code == 303 and count_app_users() == 1
+with get_connection() as conn:
+    admin_id = int(conn.execute("SELECT id FROM app_users WHERE deputy_email='first@example.invalid'").fetchone()["id"])
+    now = datetime.now(get_settings().timezone).isoformat()
+    contractor_person_id = int(conn.execute("INSERT INTO crew_people(canonical_display_name, person_type, is_active, created_at, updated_at) VALUES('Origin Fixture', 'contractor', 1, ?, ?)", (now, now)).lastrowid)
+contractor_invite = create_invite(contractor_person_id, admin_id)
+account_invite = create_account_invite("origin.invite@example.invalid", "Origin Invite", admin_id)
+assert signup_client.post(f"/contractor/invite/{contractor_invite['token']}", headers=cross_site, data={"pin": "1234", "pin_confirm": "1234"}).status_code == 403
+assert invite_details(str(contractor_invite["token"]))["available"]
+assert signup_client.post(f"/account/invite/{account_invite['token']}", headers=cross_site, data={"pin": "1234", "pin_confirm": "1234"}).status_code == 403
+assert account_invite_details(str(account_invite["token"]))["available"]
+assert signup_client.post("/login", headers={"origin": "https://evil.example"}, data={"deputy_email": "first@example.invalid", "pin": "1234"}).status_code == 403
+normal_login = TestClient(app, follow_redirects=False)
+assert normal_login.post("/login", headers=same_origin, data={"deputy_email": "first@example.invalid", "pin": "1234"}).status_code == 303
+assert normal_login.cookies
+normal_contractor = TestClient(app, follow_redirects=False)
+assert normal_contractor.post(f"/contractor/invite/{contractor_invite['token']}", headers=same_origin, data={"pin": "1234", "pin_confirm": "1234"}).status_code == 303
+assert not invite_details(str(contractor_invite["token"]))["available"]
+normal_account = TestClient(app, follow_redirects=False)
+assert normal_account.post(f"/account/invite/{account_invite['token']}", headers=same_origin, data={"display_name": "Origin Invite", "pin": "1234", "pin_confirm": "1234", "deputy_email": "", "deputy_password": ""}).status_code == 303
+assert not account_invite_details(str(account_invite["token"]))["available"]
 assert signup_client.get("/signup").status_code == 303
+users_before_closed_signup = count_app_users()
 second_signup = signup_client.post("/signup", data={"deputy_email": "second@example.invalid", "deputy_password": "fixture-password",
     "deputy_web_url": "https://example.au.deputy.com/", "pin": "1234", "pin_confirm": "1234"})
-assert second_signup.status_code == 303 and count_app_users() == 1 and "Signup+is+currently+closed" in second_signup.headers["location"]
+assert second_signup.status_code == 303 and count_app_users() == users_before_closed_signup and "Signup+is+currently+closed" in second_signup.headers["location"]
 moment = datetime.now(get_settings().timezone).replace(microsecond=0)
 email = "fixture@example.invalid"
 for index in range(5):

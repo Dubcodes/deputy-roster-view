@@ -5767,6 +5767,7 @@ def contractor_invite_head(token: str) -> PlainTextResponse:
 
 @app.post("/contractor/invite/{token}")
 async def contractor_invite_activate(request: Request, token: str) -> RedirectResponse:
+    require_same_origin(request)
     form = await request.form()
     pin = str(form.get("pin") or "")
     details = invite_details(token)
@@ -5815,6 +5816,7 @@ def account_invite_error(request: Request, invite: object, notice: str) -> objec
 
 @app.post("/account/invite/{token}")
 async def account_invite_activate(request: Request, token: str) -> object:
+    require_same_origin(request)
     form = await request.form()
     invite = account_invite_details(token)
     if not invite or not invite.get("available"):
@@ -5892,6 +5894,7 @@ def signup_view(request: Request, next: str | None = None, notice: str | None = 
 
 @app.post("/signup")
 async def signup_submit(request: Request, background_tasks: BackgroundTasks) -> RedirectResponse:
+    require_same_origin(request)
     form = await request.form()
     next_url = safe_next_url(str(form.get("next_url") or ""))
     settings = get_settings()
@@ -5949,6 +5952,7 @@ def login_view(request: Request, next: str | None = None, notice: str | None = N
 
 @app.post("/login")
 async def login_submit(request: Request) -> RedirectResponse:
+    require_same_origin(request)
     form = await request.form()
     next_url = safe_next_url(str(form.get("next_url") or ""))
     deputy_email = str(form.get("deputy_email") or "").strip().lower()

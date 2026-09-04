@@ -374,15 +374,28 @@ def _combined_sync_status(calendar_result: dict[str, object], web_result: dict[s
     web_status = str(web_result.get("status") or "")
     if web_status == "ok":
         payload = web_result.get("payload") if isinstance(web_result.get("payload"), dict) else {}
-        if payload and (
-            not payload.get("schedule_coverage")
-            or any(
+        if payload:
+            def coverage_complete(items: object) -> bool:
+                return isinstance(items, list) and bool(items) and all(
+                    isinstance(item, dict) and str(item.get("status") or "complete") == "complete"
+                    for item in items
+                )
+
+            direct_coverage = payload.get("direct_schedule_coverage")
+            if direct_coverage is not None:
+                if not coverage_complete(direct_coverage):
+                    return "partial"
+            elif not payload.get("schedule_coverage"):
+                return "partial"
+            own_coverage = payload.get("own_roster_coverage")
+            if own_coverage and not coverage_complete(own_coverage):
+                return "partial"
+            if any(
                 str(item.get("status") or "") != "complete"
                 for item in payload.get("travel_schedule_coverage") or []
                 if isinstance(item, dict)
-            )
-        ):
-            return "partial"
+            ):
+                return "partial"
         return "ok"
     if web_status and web_status != "skipped":
         return "error"

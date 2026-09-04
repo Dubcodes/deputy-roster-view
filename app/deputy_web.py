@@ -667,6 +667,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     extracted_shifts_by_id: dict[str, dict[str, Any]] = {}
     extracted_schedule_shifts_by_id: dict[str, dict[str, Any]] = {}
     schedule_coverage: list[dict[str, Any]] = []
+    direct_schedule_coverage: list[dict[str, Any]] = []
     travel_schedule_coverage: list[dict[str, Any]] = []
     own_roster_coverage: list[dict[str, Any]] = []
     event_retry_coverage: list[dict[str, Any]] = []
@@ -1298,8 +1299,12 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         status = int(page_result.get("status") or 0)
                         for body in page_result["pages"]:
                             rows_seen += store_schedule_search_body(body)
+                        direct_complete = False
+                        direct_note = ""
                         if page_result["pages"]:
                             if page_result["complete"]:
+                                direct_complete = True
+                                direct_note = "All-locations schedule capture completed."
                                 schedule_coverage.append(
                                     {
                                         "start_date": window_start.date().isoformat(),
@@ -1310,6 +1315,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                     }
                                 )
                             else:
+                                direct_note = f"All-locations schedule capture incomplete: {page_result.get('error') or 'later page failed'}."
                                 events.append(
                                     "Direct all-locations schedule pagination was partial for "
                                     f"{window_start.date().isoformat()} to {window_end.date().isoformat()}; "
@@ -1323,6 +1329,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 f"{window_start.date().isoformat()} to {window_end.date().isoformat()}; "
                                 "falling back to selected racing locations."
                             )
+                            fallback_complete = True
                             for batch_location_ids in _chunks(location_ids, DIRECT_SCHEDULE_LOCATION_BATCH_SIZE):
                                 fallback_body = {
                                     "start": window_start.isoformat(),
@@ -1335,6 +1342,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 request_count += max(1, len(fallback_result["pages"]))
                                 fallback_status = int(fallback_result.get("status") or 0)
                                 if not fallback_result["pages"]:
+                                    fallback_complete = False
                                     failed_requests += 1
                                     events.append(
                                         "Selected-location schedule search returned "
@@ -1354,11 +1362,18 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                         }
                                     )
                                 else:
+                                    fallback_complete = False
                                     events.append(
                                         "Selected-location schedule pagination was partial for "
                                         f"{window_start.date().isoformat()} to {window_end.date().isoformat()}; "
                                         f"{fallback_result.get('error') or 'later page failed'}; saved pages were retained without pruning."
                                     )
+                            direct_complete = fallback_complete
+                            direct_note = (
+                                "Selected-location fallback completed."
+                                if direct_complete
+                                else "Selected-location fallback was incomplete."
+                            )
                         else:
                             failed_requests += 1
                             events.append(
@@ -1366,6 +1381,14 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 f"HTTP {status or 'unknown'} and no fallback location list was available for "
                                 f"{window_start.date().isoformat()} to {window_end.date().isoformat()}."
                             )
+                            direct_note = "All-locations schedule capture failed and no fallback location list was available."
+
+                        direct_schedule_coverage.append({
+                            "start_date": window_start.date().isoformat(),
+                            "end_date": window_end.date().isoformat(),
+                            "status": "complete" if direct_complete else "partial",
+                            "note": direct_note,
+                        })
 
                         if not travel_location_ids:
                             travel_schedule_coverage.append({
@@ -1732,6 +1755,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
         "native_schedule_shift_ids": sorted(native_schedule_ids),
         "direct_schedule_shift_ids": sorted(direct_schedule_ids),
         "schedule_coverage": schedule_coverage,
+        "direct_schedule_coverage": direct_schedule_coverage,
         "travel_schedule_coverage": travel_schedule_coverage,
         "own_roster_coverage": own_roster_coverage,
         "event_retry_coverage": event_retry_coverage,

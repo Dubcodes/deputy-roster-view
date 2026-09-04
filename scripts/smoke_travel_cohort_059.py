@@ -328,6 +328,32 @@ def main() -> None:
         raise AssertionError("Travel matching broadened to an unrelated production location.")
     if _combined_sync_status({}, {"status": "ok", "payload": {"schedule_coverage": [{}], "travel_schedule_coverage": [{"status": "partial"}]}}) != "partial":
         raise AssertionError("Incomplete dedicated Travel capture was not surfaced as partial sync coverage.")
+    complete_coverage = {
+        "own_roster_coverage": [{"status": "complete"}],
+        "direct_schedule_coverage": [{"status": "complete", "note": "All-locations schedule capture completed."}],
+        "travel_schedule_coverage": [{"status": "complete"}],
+    }
+    assert _combined_sync_status({}, {"status": "ok", "payload": complete_coverage}) == "ok"
+    assert _combined_sync_status({}, {"status": "ok", "payload": {
+        **complete_coverage,
+        "direct_schedule_coverage": [{"status": "complete"}, {"status": "partial"}],
+    }}) == "partial", "An unresolved direct Schedule window must make sync health partial."
+    assert _combined_sync_status({}, {"status": "ok", "payload": {
+        **complete_coverage,
+        "own_roster_coverage": [{"status": "partial"}],
+    }}) == "partial", "A partial own-roster window must make sync health partial."
+    assert _combined_sync_status({}, {"status": "ok", "payload": {
+        **complete_coverage,
+        "own_roster_coverage": [{"status": "failed"}],
+    }}) == "partial", "A failed own-roster window must make sync health partial."
+    assert _combined_sync_status({}, {"status": "ok", "payload": {
+        **complete_coverage,
+        "direct_schedule_coverage": [{"status": "complete", "note": "Selected-location fallback completed."}],
+    }}) == "ok", "A fully recovered selected-location fallback must not leave sync health partial."
+    assert _combined_sync_status({}, {"status": "ok", "payload": {
+        **complete_coverage,
+        "direct_schedule_coverage": [{"status": "partial", "note": "Selected-location fallback was incomplete."}],
+    }}) == "partial", "An incomplete selected-location fallback must remain partial."
 
     shared_people = tuple(person for person in PEOPLE if person[0] != 17)
     mixed_shared = [
