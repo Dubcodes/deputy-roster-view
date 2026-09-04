@@ -7705,7 +7705,6 @@ def day_view(
             for change in changes_by_shift.get(shift_id, [])
         ]
         shift["changes"] = compact_shift_changes(list(shift.get("changes") or []))
-        merge_description_change_lines(shift)
         latest_change_at = latest_iso_datetime(
             shift.get("last_changed_at"),
             *(change.get("changed_at") for change in shift.get("changes") or []),

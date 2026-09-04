@@ -86,7 +86,6 @@ def main() -> None:
         build_roster_insights,
         build_race_day_calculation,
         build_race_day_summary,
-        merge_description_change_lines,
         parse_roster_summary,
         refresh_learned_travel_defaults,
         roster_builder_positions,
@@ -683,24 +682,56 @@ def main() -> None:
     if unknown_hotel_calc.get("available"):
         raise AssertionError(f"Unknown hotels must not fall back to office travel defaults, got {unknown_hotel_calc!r}")
 
+    # The Day route keeps old/new descriptions in Change History only.  They
+    # must never be merged back into current roster-note interpretation.
+    if "merge_description_change_lines" in main_module.day_view.__code__.co_names:
+        raise AssertionError("Day route still merges historical description changes into current notes.")
+    reschedule_note = "*Rescheduled from Te Aroha 30th August\nIf you can't work this new date, please advise your manager"
+    current_te_aroha_lines = ["Trucks 0830", "Clow Pl 0845", "On track 0945", "10 races 1145 | 1704"]
     changed_note_shift = {
-        "track_label": "Ruakaka",
-        "source_code": "T-Ruakaka",
-        "start_at": "2026-07-17T13:00:00+12:00",
-        "end_at": "2026-07-17T17:00:00+12:00",
-        "description_lines": ["Accommodation Beachfront Motel"],
-        "roster_summary": parse_roster_summary(["Accommodation Beachfront Motel"]),
-        "changes": [
-            {
-                "field_name": "description",
-                "old_value": "1pm Gaz reckons...don't argue",
-                "new_value": "Accommodation Beachfront Motel",
-            }
-        ],
+        "track_label": "Te Aroha", "source_code": "T-Te Aroha",
+        "start_at": "2026-09-05T08:30:00+12:00", "end_at": "2026-09-05T18:00:00+12:00",
+        "description_lines": current_te_aroha_lines,
+        "roster_summary": parse_roster_summary(current_te_aroha_lines),
+        "changes": [{"field_name": "description", "old_value": reschedule_note, "new_value": "\n".join(current_te_aroha_lines)}],
     }
-    merge_description_change_lines(changed_note_shift)
-    if "1pm Gaz reckons...don't argue" not in changed_note_shift.get("description_lines", []):
-        raise AssertionError(f"Expected overwritten roster note line to stay visible, got {changed_note_shift!r}")
+    changed_note_shift["race_day_summary"] = build_race_day_summary(changed_note_shift, {})
+    changed_note_shift["race_day_calculation"] = build_race_day_calculation(changed_note_shift)
+    if reschedule_note in "\n".join(changed_note_shift["race_day_summary"]["note_lines"]):
+        raise AssertionError(f"Historical reschedule note leaked into Race Day: {changed_note_shift!r}")
+    if {("On track", "09:45"), ("10 races", "11:45 | 17:04")} - {
+        (row["label"], row["value"]) for row in changed_note_shift["race_day_summary"]["rows"]
+    }:
+        raise AssertionError(f"Current Te Aroha timing was not retained: {changed_note_shift!r}")
+    if changed_note_shift["race_day_calculation"].get("on_track_label") != "09:45":
+        raise AssertionError(f"Historical timing overrode current timing: {changed_note_shift!r}")
+    if changed_note_shift["changes"][0]["old_value"] != reschedule_note:
+        raise AssertionError("Description change history was not retained.")
+
+    ellerslie_lines = [
+        "Trucks & ET in place", "0730 Clow Place", "0900 On track",
+        "Records to be done via Stanley St production", "1130 live on air.",
+        "10 races 1155 | 1709", "Group One Prosir Plate",
+    ]
+    ellerslie_shift = {
+        "description_lines": ellerslie_lines,
+        "roster_summary": parse_roster_summary(ellerslie_lines),
+        "changes": [{"field_name": "description", "old_value": "jayden josh and todd", "new_value": "\n".join(ellerslie_lines)}],
+    }
+    ellerslie_race_day = build_race_day_summary(ellerslie_shift, {})
+    rendered_ellerslie = repr(ellerslie_race_day)
+    if "jayden josh and todd" in rendered_ellerslie or ellerslie_race_day["note_lines"] != [
+        "Trucks & ET in place", "Records to be done via Stanley St production", "Group One Prosir Plate",
+    ]:
+        raise AssertionError(f"Historical Ellerslie text leaked or current prose regressed: {ellerslie_race_day!r}")
+
+    blank_current_shift = {
+        "description_lines": [], "roster_summary": parse_roster_summary([]),
+        "changes": [{"field_name": "description", "old_value": "Generated from custom service via Deputy API", "new_value": ""}],
+    }
+    blank_race_day = build_race_day_summary(blank_current_shift, {})
+    if blank_race_day["has_items"] or blank_race_day["note_lines"] or "Generated" in repr(blank_race_day):
+        raise AssertionError(f"Blank current note resurrected historical text: {blank_race_day!r}")
 
     settings_page = client.get("/settings")
     if settings_page.status_code != 200 or "Your Roster" not in settings_page.text:
