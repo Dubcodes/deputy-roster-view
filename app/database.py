@@ -8202,10 +8202,12 @@ def _migrate_legacy_schedule_observations(conn: sqlite3.Connection) -> None:
         ).fetchone()
         first_seen = min(str(row["first_seen_at"]), str(existing["first_seen_at"])) if existing else str(row["first_seen_at"])
         last_seen = max(str(row["last_seen_at"]), str(existing["last_seen_at"])) if existing else str(row["last_seen_at"])
-        newest = row if not existing or str(row["last_seen_at"]) >= str(existing["last_seen_at"]) else existing
-        active = int(newest["active"])
         absent_values = [str(value) for value in (row["last_absent_at"], existing["last_absent_at"] if existing else None) if value]
-        last_absent = None if active else (max(absent_values) if absent_values else None)
+        latest_absent = max(absent_values) if absent_values else None
+        newest = row if not existing or str(row["last_seen_at"]) >= str(existing["last_seen_at"]) else existing
+        # A later absence is the current state; a same-time positive sighting wins.
+        active = (0 if latest_absent > last_seen else 1) if latest_absent else int(newest["active"])
+        last_absent = latest_absent if not active else None
         conn.execute(
             """INSERT INTO deputy_schedule_observations
                (source_shift_id,observer_key,observer_user_id,first_seen_at,last_seen_at,active,last_absent_at)

@@ -221,20 +221,20 @@ def main() -> None:
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT observer_key,first_seen_at,last_seen_at,active,last_absent_at FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'").fetchone() == before_repeat
         # Newer inactive legacy evidence wins over an older active direct row.
-        conn.execute("INSERT INTO deputy_schedule_observations VALUES (9001,'user:1',1,'2026-02-01T00:00:00+12:00','2026-02-04T00:00:00+12:00',0,'2026-02-04T00:00:00+12:00')")
-        conn.execute("UPDATE deputy_schedule_observations SET first_seen_at='2026-02-02T00:00:00+12:00',last_seen_at='2026-02-03T00:00:00+12:00',active=1,last_absent_at=NULL WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'")
+        conn.execute("INSERT INTO deputy_schedule_observations VALUES (9001,'user:1',1,'2026-02-01T00:00:00+12:00','2026-02-02T00:00:00+12:00',0,'2026-02-05T00:00:00+12:00')")
+        conn.execute("UPDATE deputy_schedule_observations SET first_seen_at='2026-02-03T00:00:00+12:00',last_seen_at='2026-02-04T00:00:00+12:00',active=1,last_absent_at=NULL WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'")
         conn.commit()
     save_deputy_web_schedule({"captured_at": "2026-02-05T00:00:00+12:00"}, owner_user_id=1)
     with sqlite3.connect(db_path) as conn:
         inactive_collision = conn.execute("SELECT first_seen_at,last_seen_at,active,last_absent_at FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'").fetchone()
-        assert inactive_collision == ('2026-02-01T00:00:00+12:00','2026-02-04T00:00:00+12:00',0,'2026-02-04T00:00:00+12:00'), inactive_collision
-        # Equal last_seen ties choose the legacy row because migration uses >=.
+        assert inactive_collision == ('2026-02-01T00:00:00+12:00','2026-02-04T00:00:00+12:00',0,'2026-02-05T00:00:00+12:00'), inactive_collision
+        # A same-time positive sighting wins an absence tie.
         conn.execute("INSERT INTO deputy_schedule_observations VALUES (9001,'user:1',1,'2026-03-01T00:00:00+12:00','2026-03-04T00:00:00+12:00',0,'2026-03-04T00:00:00+12:00')")
         conn.execute("UPDATE deputy_schedule_observations SET first_seen_at='2026-03-02T00:00:00+12:00',last_seen_at='2026-03-04T00:00:00+12:00',active=1,last_absent_at=NULL WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'")
         conn.commit()
     save_deputy_web_schedule({"captured_at": "2026-03-05T00:00:00+12:00"}, owner_user_id=1)
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("SELECT first_seen_at,last_seen_at,active,last_absent_at FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'").fetchone() == ('2026-03-01T00:00:00+12:00','2026-03-04T00:00:00+12:00',0,'2026-03-04T00:00:00+12:00')
+        assert conn.execute("SELECT first_seen_at,last_seen_at,active,last_absent_at FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'").fetchone() == ('2026-03-01T00:00:00+12:00','2026-03-04T00:00:00+12:00',1,None)
     direct_payload = {**observer_payload, "captured_at": (now + timedelta(seconds=7)).isoformat(), "extracted_schedule_shifts": [direct_row], "native_schedule_shift_ids": [], "direct_schedule_shift_ids": [9002], "schedule_coverage": direct_coverage}
     save_deputy_web_schedule(direct_payload, owner_user_id=1)
     save_deputy_web_schedule({**direct_payload, "captured_at": (now + timedelta(seconds=8)).isoformat(), "extracted_schedule_shifts": [], "direct_schedule_shift_ids": []}, owner_user_id=1)
