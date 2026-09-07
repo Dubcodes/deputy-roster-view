@@ -6963,7 +6963,8 @@ def get_deputy_schedule_snapshot() -> dict[str, object]:
             SELECT
                 COUNT(*) AS total_rows,
                 SUM(CASE WHEN is_published = 1 THEN 1 ELSE 0 END) AS published_rows,
-                SUM(CASE WHEN is_open = 1 AND employee_id IS NULL AND TRIM(COALESCE(employee_name, '')) = '' THEN 1 ELSE 0 END) AS open_rows,
+                SUM(CASE WHEN is_open = 1 AND (employee_id IS NULL OR employee_id = 0)
+                         AND TRIM(COALESCE(employee_name, '')) = '' THEN 1 ELSE 0 END) AS open_rows,
                 SUM(CASE WHEN is_published = 0 THEN 1 ELSE 0 END) AS unpublished_rows,
                 SUM(CASE WHEN changed_since_viewed = 1 THEN 1 ELSE 0 END) AS changed_rows,
                 MIN(date) AS first_date,
@@ -6996,7 +6997,7 @@ def fetch_open_deputy_schedule_shifts(limit: int = 8) -> list[sqlite3.Row]:
             LEFT JOIN deputy_schedule_areas a ON a.area_id=s.area_id
             LEFT JOIN deputy_schedule_locations l ON l.location_id=COALESCE(s.area_location_id,a.location_id)
             WHERE s.is_open = 1
-              AND s.employee_id IS NULL
+              AND (s.employee_id IS NULL OR s.employee_id = 0)
               AND TRIM(COALESCE(s.employee_name, '')) = ''
             ORDER BY
                 s.date ASC,
@@ -7021,7 +7022,7 @@ def fetch_open_deputy_schedule_between(start_date: str, end_date: str) -> list[s
             LEFT JOIN deputy_schedule_locations l ON l.location_id=COALESCE(s.area_location_id,a.location_id)
             WHERE s.date BETWEEN ? AND ?
               AND s.is_open = 1
-              AND s.employee_id IS NULL
+              AND (s.employee_id IS NULL OR s.employee_id = 0)
               AND TRIM(COALESCE(s.employee_name, '')) = ''
             ORDER BY
                 s.date ASC,
@@ -8312,6 +8313,77 @@ def _migrate_legacy_schedule_observations(conn: sqlite3.Connection) -> None:
         )
 
 
+def _retire_positive_schedule_replacements(
+    conn: sqlite3.Connection,
+    values: dict[str, object],
+    source_shift_id: int,
+    observer_key: str,
+    current_source_shift_ids: set[int],
+    captured_at: str,
+) -> None:
+    """Retire only older same-observer rows disproved by a positive replacement."""
+    position = _event_position(values.get("area_name"))
+    if (
+        position is None
+        or position[0] == "vt"
+        or not _event_item_has_named_person(values)
+        or _event_lock_row(
+            conn,
+            str(values.get("date") or ""),
+            _optional_int(values.get("area_location_id")),
+            str(values.get("start_at") or ""),
+            str(values.get("end_at") or ""),
+        ) is not None
+    ):
+        return
+
+    replaced_ids: list[int] = []
+    rows = conn.execute(
+        """
+        SELECT s.*, observation.last_seen_at AS observation_last_seen_at
+        FROM deputy_schedule_observations observation
+        JOIN deputy_schedule_shifts s ON s.source_shift_id=observation.source_shift_id
+        WHERE observation.observer_key=? AND observation.active=1
+          AND observation.source_shift_id!=?
+          AND observation.last_seen_at < ?
+          AND s.date=? AND s.area_location_id=?
+        """,
+        (
+            observer_key, source_shift_id, captured_at,
+            values.get("date"), values.get("area_location_id"),
+        ),
+    ).fetchall()
+    incoming_window = {
+        "start_at": values.get("start_at"),
+        "end_at": values.get("end_at"),
+    }
+    for row in rows:
+        old_id = int(row["source_shift_id"])
+        old_position = _event_position(row["area_name"])
+        if (
+            old_id in current_source_shift_ids
+            or old_position is None
+            or old_position[0] != position[0]
+            or not _event_item_has_named_person(dict(row))
+            or not _event_rows_overlap(dict(row), incoming_window)
+        ):
+            continue
+        conn.execute(
+            """UPDATE deputy_schedule_observations
+               SET active=0,last_absent_at=?
+               WHERE source_shift_id=? AND observer_key=?""",
+            (captured_at, old_id, observer_key),
+        )
+        replaced_ids.append(old_id)
+
+    for old_id in replaced_ids:
+        if conn.execute(
+            "SELECT 1 FROM deputy_schedule_observations WHERE source_shift_id=? AND active=1 LIMIT 1",
+            (old_id,),
+        ).fetchone() is None:
+            conn.execute("DELETE FROM deputy_schedule_shifts WHERE source_shift_id=?", (old_id,))
+
+
 def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | None = None) -> dict[str, int]:
     captured_at = str(payload.get("captured_at") or datetime.now().isoformat(timespec="seconds"))
     areas = payload.get("areas") if isinstance(payload.get("areas"), list) else []
@@ -8645,6 +8717,14 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                         last_absent_at=NULL
                     """,
                     (source_shift_id, observer_key, owner_user_id, captured_at, captured_at),
+                )
+                _retire_positive_schedule_replacements(
+                    conn,
+                    values,
+                    source_shift_id,
+                    observer_key,
+                    native_schedule_shift_ids if source == "native_get_rosters" else direct_schedule_shift_ids,
+                    captured_at,
                 )
                 if source == "direct_schedule":
                     legacy_key = f"user:{owner_user_id}" if owner_user_id is not None else "system"

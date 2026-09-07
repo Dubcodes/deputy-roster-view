@@ -2237,6 +2237,16 @@ def build_race_day_calculation(shift: dict[str, object]) -> dict[str, object]:
 def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object]) -> dict[str, object]:
     rows: list[dict[str, str]] = []
     note_lines: list[str] = []
+    prose_source_lines = shift.get("race_day_prose_lines")
+    allowed_prose = (
+        {
+            re.sub(r"\s+", " ", str(line or "").strip()).casefold()
+            for line in prose_source_lines
+            if str(line or "").strip()
+        }
+        if isinstance(prose_source_lines, list)
+        else None
+    )
     wanted_patterns = (
         re.compile(
             r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+(?:cross|x)|fx|records?|on\s+air|live)\b",
@@ -2286,7 +2296,10 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
     def display_time(value: str) -> str:
         return clean_timing_value(value)
 
-    def add_note(value: str) -> None:
+    def add_note(value: str, source_line: str | None = None) -> None:
+        source_key = re.sub(r"\s+", " ", str(source_line or value).strip()).casefold()
+        if allowed_prose is not None and source_key not in allowed_prose:
+            return
         clean_value = re.sub(r"\s+", " ", value).strip()
         if clean_value:
             note_lines.append(clean_value)
@@ -2301,10 +2314,10 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
             if value:
                 add_row(display_label(time_first.group(2)), value)
             else:
-                add_note(line_text)
+                add_note(line_text, line_text)
             continue
         if not any(pattern.search(line_text) for pattern in wanted_patterns):
-            add_note(line_text)
+            add_note(line_text, line_text)
             continue
 
         race_times = RACE_COUNT_WITH_TIMES_RE.search(line_text)
@@ -2314,7 +2327,7 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
             if first_race and last_race:
                 add_row(f"{race_times.group(1)} races", f"{first_race} | {last_race}")
             else:
-                add_note(line_text)
+                add_note(line_text, line_text)
             continue
 
         race_count = RACE_COUNT_RE.search(line_text)
@@ -2331,7 +2344,7 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
                     add_row(display_label(match.group(1)), value)
                     added = True
             if not added:
-                add_note(line_text)
+                add_note(line_text, line_text)
             continue
 
         simple_timing = simple_timing_re.match(line_text)
@@ -2341,9 +2354,9 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
                 add_row(display_label(simple_timing.group(1)), value)
                 fragments = re.split(r"\s+[-–]\s+", line_text, maxsplit=1)
                 if len(fragments) == 2 and fragments[1].strip():
-                    add_note(fragments[1])
+                    add_note(fragments[1], line_text)
                 continue
-        add_note(line_text)
+        add_note(line_text, line_text)
 
     effective = (
         shift.get("effective_race_timing")
@@ -2564,6 +2577,14 @@ def decorate_shift(row: object) -> dict[str, object]:
         f"--location-colour: var(--location-colour-{location_colour_index});"
     )
     shift["description_lines"] = description_lines(str(shift.get("description") or ""))
+    current_note_is_production = not (
+        is_vehicle
+        or role_is_context_only(role_short)
+        or is_travel_participant_cohort(role_short)
+    )
+    shift["race_day_prose_lines"] = (
+        list(shift["description_lines"]) if current_note_is_production else []
+    )
     shift["current_source_notes"] = [{
         "shift_id": int(shift.get("id") or 0),
         "source_uid": str(shift.get("source_uid") or ""),
@@ -2794,6 +2815,10 @@ def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[
     merged["description_lines"] = unique_description_lines(
         list(left.get("description_lines") or []),
         list(right.get("description_lines") or []),
+    )
+    merged["race_day_prose_lines"] = unique_description_lines(
+        list(left.get("race_day_prose_lines") or []),
+        list(right.get("race_day_prose_lines") or []),
     )
     merged["roster_summary"] = parse_roster_summary(list(merged.get("description_lines") or []))
     merged["role_segments"] = clean_merged_role_segments(
@@ -3631,7 +3656,14 @@ def mark_proven_concurrent_assignments(items: list[dict[str, object]]) -> None:
         position_key = schedule_item_position_key(item)
         if position_key != "vt":
             continue
-        if employee_id is None or source_shift_id is None or location_id in (None, "") or not date_text or not position_key:
+        if (
+            employee_id in (None, 0)
+            or not schedule_item_is_named(item)
+            or source_shift_id is None
+            or location_id in (None, "")
+            or not date_text
+            or not position_key
+        ):
             continue
         for context in native_current_observation_contexts(item):
             groups.setdefault((date_text, location_id, position_key, context), []).append(item)
@@ -3742,6 +3774,25 @@ def dedupe_schedule_items(items: list[dict[str, object]]) -> list[dict[str, obje
             continue
 
         existing = deduped[replacement_index]
+        named_conflict = (
+            schedule_item_is_named(existing)
+            and schedule_item_is_named(item)
+            and not (
+                safe_int(existing.get("employee_id")) not in (None, 0)
+                and safe_int(existing.get("employee_id")) == safe_int(item.get("employee_id"))
+            )
+            and schedule_label_key(str(existing.get("employee_name") or ""))
+            != schedule_label_key(str(item.get("employee_name") or ""))
+        )
+        conflict_warning = ""
+        if named_conflict:
+            names = sorted({
+                str(existing.get("employee_name") or "").strip(),
+                str(item.get("employee_name") or "").strip(),
+            })
+            conflict_warning = (
+                f"Shared schedule evidence conflict: {' / '.join(names)} are both positively current."
+            )
         if schedule_item_preferred(item, existing):
             if existing.get("assignment_changed") or existing.get("changed"):
                 item["assignment_changed"] = True
@@ -3749,6 +3800,8 @@ def dedupe_schedule_items(items: list[dict[str, object]]) -> list[dict[str, obje
                 item["assignment_change_summary"] = replacement_change_summary(existing, item)
                 item["last_changed_at"] = latest_iso_datetime(existing.get("last_changed_at"), item.get("last_changed_at"))
                 item["change_time_label"] = format_datetime(str(item.get("last_changed_at") or ""), "%d %b %H:%M")
+            if conflict_warning:
+                item["shared_evidence_conflict_warning"] = conflict_warning
             deduped[replacement_index] = item
         elif item.get("assignment_changed") and not existing.get("assignment_changed"):
             existing["assignment_changed"] = True
@@ -3756,6 +3809,8 @@ def dedupe_schedule_items(items: list[dict[str, object]]) -> list[dict[str, obje
             existing["assignment_change_summary"] = replacement_change_summary(item, existing)
             existing["last_changed_at"] = latest_iso_datetime(existing.get("last_changed_at"), item.get("last_changed_at"))
             existing["change_time_label"] = format_datetime(str(existing.get("last_changed_at") or ""), "%d %b %H:%M")
+        if conflict_warning and deduped[replacement_index] is existing:
+            existing["shared_evidence_conflict_warning"] = conflict_warning
     return deduped
 
 
@@ -3903,6 +3958,7 @@ def expected_schedule_placeholders(
         (item.get("schedule_location_id"), schedule_item_position_key(item))
         for item in items
         if not item.get("is_vehicle_area")
+        and (schedule_item_is_named(item) or bool(item.get("is_open")))
     }
     present_position_keys = {position_key for _, position_key in present_keys}
     placeholders = []
@@ -3965,6 +4021,8 @@ def schedule_people(
                 continue
             if schedule_item_position_key(item) in ASSIGNED_ONLY_SCHEDULE_POSITION_KEYS:
                 continue
+            if not bool(item.get("is_open")):
+                continue
             vehicle_label = area_label if is_vehicle else ""
             open_entries.append(
                 {
@@ -3994,6 +4052,7 @@ def schedule_people(
                 "position_sort": 999999,
                 "vehicle_sort": 999999,
                 "concurrent_assignment_warnings": [],
+                "conflict_warnings": [],
             },
         )
         if item.get("assignment_changed"):
@@ -4008,6 +4067,7 @@ def schedule_people(
             append_unique(person["position_parts"], area_label)
             person["position_sort"] = min(schedule_sort_value(person.get("position_sort")), area_sort)
             append_unique(person["concurrent_assignment_warnings"], str(item.get("concurrent_assignment_warning") or ""))
+            append_unique(person["conflict_warnings"], str(item.get("shared_evidence_conflict_warning") or ""))
 
     people = []
     for person in people_by_key.values():
@@ -4034,6 +4094,7 @@ def schedule_people(
                 "change_time_label": format_datetime(latest_iso_datetime(*list(person.get("change_times") or [])), "%d %b %H:%M"),
                 "placeholder": False,
                 "concurrent_assignment_warning": "; ".join(list(person.get("concurrent_assignment_warnings") or [])),
+                "conflict_warning": "; ".join(list(person.get("conflict_warnings") or [])),
             }
         )
     people.extend(placeholders)
@@ -4258,6 +4319,34 @@ def event_change_display_line(change: dict[str, object]) -> str:
     return str(change.get("display_summary") or "Crew assignment changed.")
 
 
+def placeholder_assignment_key(value: object) -> str:
+    key = schedule_label_key(str(value or ""))
+    return "tbc" if key in {"", "tbc", "tbctbc", "tbc2tbc2"} else key
+
+
+def assignment_change_is_placeholder_noop(
+    old_name: object, new_name: object, old_position: object = "", new_position: object = "",
+) -> bool:
+    old_key = placeholder_assignment_key(old_name)
+    new_key = placeholder_assignment_key(new_name)
+    same_position = not old_position or not new_position or (
+        schedule_label_key(str(old_position)) == schedule_label_key(str(new_position))
+    )
+    return same_position and old_key == new_key == "tbc"
+
+
+def schedule_change_is_placeholder_noop(person: dict[str, object]) -> bool:
+    comparisons = []
+    for part in str(person.get("change_summary") or "").split(";"):
+        match = re.search(r"(?:Person:\s*)?(.*?)\s*(?:→|->)\s*(.*?)$", part.strip())
+        if match:
+            comparisons.append((match.group(1), match.group(2)))
+    return bool(comparisons) and all(
+        assignment_change_is_placeholder_noop(old_name, new_name)
+        for old_name, new_name in comparisons
+    )
+
+
 def decorate_event_changes(rows: list[object]) -> list[dict[str, object]]:
     changes = []
     identities = crew_identity_records()
@@ -4275,11 +4364,68 @@ def decorate_event_changes(rows: list[object]) -> list[dict[str, object]]:
         item["new_employee_name"] = canonical_crew_name(
             item.get("new_employee_name"), item.get("new_employee_id"), identities
         )
+        if assignment_change_is_placeholder_noop(
+            item.get("old_employee_name"), item.get("new_employee_name"),
+            event_change_position(item, "old_positions"),
+            event_change_position(item, "new_positions"),
+        ):
+            continue
         item["inline_summary"] = str(item.get("inline_summary") or "").replace(" -> ", " → ")
         item["display_summary"] = event_change_display_line(item)
         item["changed_at_label"] = format_datetime(str(item.get("changed_at") or ""), "%d %b %H:%M")
         changes.append(item)
     return changes
+
+
+def compact_event_changes_for_current_state(
+    changes: list[dict[str, object]], people: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Hide same-sync intermediate stories when one final group matches current crew."""
+    current: dict[str, set[str]] = {}
+    for person in people:
+        name_key = placeholder_assignment_key(person.get("employee_name"))
+        for position in str(person.get("position_label") or "").split(","):
+            position_key = schedule_label_key(position)
+            if position_key:
+                current.setdefault(position_key, set()).add(name_key)
+
+    def matches(change: dict[str, object]) -> bool:
+        change_type = str(change.get("change_type") or "")
+        positions = [
+            schedule_label_key(str(position))
+            for position in list(change.get("new_positions") or change.get("old_positions") or [])
+            if schedule_label_key(str(position))
+        ]
+        if not positions:
+            return False
+        if change_type == "opened":
+            return all("tbc" in current.get(position, set()) for position in positions)
+        if change_type == "roles_split":
+            return all(position in current for position in positions)
+        target = placeholder_assignment_key(change.get("new_employee_name"))
+        return any(target in current.get(position, set()) for position in positions)
+
+    by_capture: dict[str, list[dict[str, object]]] = {}
+    for change in changes:
+        by_capture.setdefault(str(change.get("changed_at") or ""), []).append(change)
+    compacted: list[dict[str, object]] = []
+    for batch in by_capture.values():
+        group_ids = {str(change.get("group_id") or "") for change in batch}
+        if len(group_ids) <= 1:
+            compacted.extend(batch)
+            continue
+        groups: dict[str, list[dict[str, object]]] = {}
+        for change in batch:
+            groups.setdefault(str(change.get("group_id") or ""), []).append(change)
+        matching_groups = {
+            group_id for group_id, rows in groups.items()
+            if rows and all(matches(change) for change in rows)
+        }
+        compacted.extend(
+            change for change in batch
+            if not matching_groups or str(change.get("group_id") or "") in matching_groups
+        )
+    return compacted
 
 
 def group_event_changes(changes: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -7899,6 +8045,9 @@ def day_view(
             if schedule_label_key(str(change.get("old_employee_name") or "")) in note_cohort_name_keys
             or schedule_label_key(str(change.get("new_employee_name") or "")) in note_cohort_name_keys
         ]
+    deputy_event_changes = compact_event_changes_for_current_state(
+        deputy_event_changes, deputy_schedule_people
+    )
     deputy_event_change_groups = group_event_changes(deputy_event_changes)
     if deputy_schedule_rows:
         apply_event_changes_to_schedule_people(deputy_schedule_people, deputy_event_change_groups)
@@ -7974,7 +8123,10 @@ def day_view(
         shifts[0].get("track_label") if shifts else "",
     )
     deputy_schedule_changed = any(bool(person.get("changed")) for person in deputy_schedule_people)
-    deputy_schedule_changes = [person for person in deputy_schedule_people if person.get("changed")]
+    deputy_schedule_changes = [
+        person for person in deputy_schedule_people
+        if person.get("changed") and not schedule_change_is_placeholder_noop(person)
+    ]
     change_identities = crew_identity_records()
     deputy_assignment_history = [
         {
@@ -7999,6 +8151,18 @@ def day_view(
             if schedule_label_key(item["old_employee_name"]) in note_cohort_name_keys
             or schedule_label_key(item["new_employee_name"]) in note_cohort_name_keys
         ]
+    deputy_assignment_history = [
+        item for item in deputy_assignment_history
+        if not assignment_change_is_placeholder_noop(
+            item["old_employee_name"], item["new_employee_name"]
+        )
+    ]
+    event_position_keys = {
+        schedule_label_key(position)
+        for item in deputy_event_changes
+        for position in list(item.get("old_positions") or []) + list(item.get("new_positions") or [])
+        if schedule_label_key(position)
+    }
     event_assignments = {
         (schedule_label_key(position), schedule_label_key(str(item.get("new_employee_name") or "TBC")))
         for item in deputy_event_changes
@@ -8007,7 +8171,8 @@ def day_view(
     deputy_assignment_history = [
         item
         for item in deputy_assignment_history
-        if (
+        if schedule_label_key(item["position_label"]) not in event_position_keys
+        and (
             schedule_label_key(item["position_label"]),
             schedule_label_key(item["new_employee_name"]),
         ) not in event_assignments
@@ -8019,7 +8184,12 @@ def day_view(
     deputy_schedule_changes = [
         person
         for person in deputy_schedule_changes
-        if (
+        if not {
+            schedule_label_key(position)
+            for position in str(person.get("position_label") or "").split(",")
+            if schedule_label_key(position)
+        } & event_position_keys
+        and (
             schedule_label_key(str(person.get("position_label") or "")),
             schedule_label_key(str(person.get("employee_name") or "")),
         )

@@ -23,7 +23,7 @@ def deputy_shift_is_available(row: dict[str, object]) -> bool:
     employee_id = row.get("employee_id", row.get("employee"))
     employee_name = str(row.get("employee_name", row.get("employeeName")) or "").strip()
     is_open = row.get("is_open", row.get("isOpen"))
-    return bool(is_open) and employee_id in (None, "") and not employee_name
+    return bool(is_open) and employee_id in (None, "", 0, "0") and not employee_name
 
 
 def _payload(row: dict[str, object]) -> dict[str, object]:

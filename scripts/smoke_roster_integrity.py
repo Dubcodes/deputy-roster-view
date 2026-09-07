@@ -344,6 +344,54 @@ def main() -> None:
         if conn.execute("SELECT COUNT(*) FROM deputy_schedule_event_changes WHERE date=?", (churn_date,)).fetchone()[0] != 0:
             raise AssertionError("Alternating observers created false James/TBC assignment history.")
 
+    # A later positive native row for the same observer and single-assignee
+    # event position proves the observer's older named row is no longer current.
+    named_replacement_date = (now + timedelta(days=21)).date().isoformat()
+    named_area = {"id": 904, "name": "SVT", "locationId": 905, "rosterSortOrder": 8}
+    grant_svt = {
+        "id": 9301, "area": 904, "areaName": "SVT", "areaLocationId": 905,
+        "employee": 930, "employeeName": "Grant Woolston", "isOpen": False, "isPublished": True,
+        "start": f"{named_replacement_date}T09:45:00+12:00",
+        "end": f"{named_replacement_date}T19:00:00+12:00",
+    }
+    jayden_svt = {
+        **grant_svt, "id": 9302, "employee": 17, "employeeName": "Jayden-lee",
+    }
+    named_base = {
+        "areas": [named_area], "locations": [{"id": 905, "name": "Te Aroha"}],
+        "extracted_shifts": [], "own_roster_coverage": [], "schedule_coverage": [],
+        "direct_schedule_shift_ids": [],
+    }
+    save_deputy_web_schedule({
+        **named_base, "captured_at": (now + timedelta(seconds=24)).isoformat(),
+        "extracted_schedule_shifts": [grant_svt], "native_schedule_shift_ids": [9301],
+    }, owner_user_id=1)
+    save_deputy_web_schedule({
+        **named_base, "captured_at": (now + timedelta(seconds=25)).isoformat(),
+        "extracted_schedule_shifts": [jayden_svt], "native_schedule_shift_ids": [9302],
+    }, owner_user_id=1)
+    named_people = schedule_people(
+        fetch_deputy_schedule_for_date(named_replacement_date, [905]), include_placeholders=False,
+    )
+    if [(row["position_label"], row["employee_name"]) for row in named_people] != [("Sound/VT", "Jayden-lee")]:
+        raise AssertionError(f"Older named SVT evidence beat a later positive replacement: {named_people!r}")
+    with sqlite3.connect(db_path) as conn:
+        if conn.execute("SELECT 1 FROM deputy_schedule_shifts WHERE source_shift_id=9301").fetchone():
+            raise AssertionError("Same-observer positive replacement left obsolete Grant evidence active.")
+
+    # A different observer's genuinely positive named disagreement remains
+    # conservative and visible instead of being silently treated as authority.
+    other_grant = {**grant_svt, "id": 9303}
+    save_deputy_web_schedule({
+        **named_base, "captured_at": (now + timedelta(seconds=26)).isoformat(),
+        "extracted_schedule_shifts": [other_grant], "native_schedule_shift_ids": [9303],
+    }, owner_user_id=2)
+    conflicted_people = schedule_people(
+        fetch_deputy_schedule_for_date(named_replacement_date, [905]), include_placeholders=False,
+    )
+    if len(conflicted_people) != 1 or "Grant Woolston" not in str(conflicted_people[0].get("conflict_warning")):
+        raise AssertionError(f"Cross-observer named disagreement was not reported: {conflicted_people!r}")
+
     # A complete direct search may retire only direct evidence: it cannot negate
     # an earlier native Schedule-grid observation from the same account.
     source_provenance_date = (now + timedelta(days=20)).date().isoformat()
@@ -592,6 +640,15 @@ def main() -> None:
     ])
     if len(assigned_plus_open_vt) != 1 or assigned_plus_open_vt[0]["employee_id"] != 501 or assigned_plus_open_vt[0].get("display_area_label"):
         raise AssertionError(f"Open VT was treated as a second operator: {assigned_plus_open_vt!r}")
+    lans_plus_blank = schedule_people([
+        {**concurrent_row(40011, 503), "employee_name": "Lans McGall"},
+        {
+            **concurrent_row(40012, 0), "employee_id": 0, "employee_name": "",
+            "is_open": 0, "is_published": 0,
+        },
+    ], include_placeholders=False)
+    if [(row["position_label"], row["employee_name"]) for row in lans_plus_blank] != [("VT", "Lans McGall")]:
+        raise AssertionError(f"Blank unpublished VT was treated as a second operator: {lans_plus_blank!r}")
     three_vt, _contexts = effective_schedule_items([concurrent_row(40001, 501), concurrent_row(40002, 502), concurrent_row(40003, 503)])
     if len(three_vt) != 1 or three_vt[0].get("display_area_label") or not three_vt[0].get("concurrent_assignment_warning"):
         raise AssertionError(f"Over-cap VT evidence was not handled conservatively: {three_vt!r}")
@@ -621,6 +678,29 @@ def main() -> None:
     ordinary_people = schedule_people(ordinary_rows, include_placeholders=False)
     if [(row["position_label"], row["employee_name"]) for row in ordinary_people] != [("Side 1", "Crew 901")]:
         raise AssertionError(f"Assigned/open or vehicle vacancy filtering regressed: {ordinary_people!r}")
+
+    # Deputy employee=0 is only Open when isOpen=true. Blank unpublished rows
+    # are either an expected TBC vacancy or hidden context, never advertised.
+    eng_named = {**concurrent_row(44101, 902), "area_id": 120, "area_name": "ENG"}
+    eng_blank = {
+        **concurrent_row(44102, 0), "area_id": 120, "area_name": "ENG",
+        "employee_id": 0, "employee_name": "", "is_open": 0, "is_published": 0,
+    }
+    expected_eng = [{"name": "ENG", "location_id": 64, "roster_sort_order": 10}]
+    named_with_blank = schedule_people([eng_named, eng_blank], expected_areas=expected_eng)
+    if [(row["position_label"], row["employee_name"]) for row in named_with_blank] != [("ENG", "Crew 902")]:
+        raise AssertionError(f"Blank ENG duplicated its named assignment: {named_with_blank!r}")
+    blank_only = schedule_people([eng_blank], expected_areas=expected_eng)
+    if [(row["position_label"], row["employee_name"]) for row in blank_only] != [("ENG", "TBC")]:
+        raise AssertionError(f"Expected blank ENG vacancy did not resolve to TBC: {blank_only!r}")
+    actual_open = schedule_people([{**eng_blank, "source_shift_id": 44103, "is_open": 1}], include_placeholders=False)
+    if [(row["position_label"], row["employee_name"]) for row in actual_open] != [("ENG", "Open shift")]:
+        raise AssertionError(f"Actual Deputy open shift was not retained: {actual_open!r}")
+    blank_vehicle = schedule_people([
+        {**eng_blank, "source_shift_id": 44104, "area_id": 121, "area_name": "684"},
+    ], include_placeholders=False)
+    if blank_vehicle:
+        raise AssertionError(f"Blank vehicle Area became crew: {blank_vehicle!r}")
 
     # Personal SVT evidence confirms the compatible shared audio row by
     # employee identity; an open VT vacancy cannot manufacture a duplicate.

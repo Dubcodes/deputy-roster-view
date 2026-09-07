@@ -31,11 +31,14 @@ def main() -> None:
         build_race_day_summary,
         build_shift_change_summary,
         canonical_crew_name,
+        compact_event_changes_for_current_state,
         decorate_change,
+        decorate_event_changes,
         extract_roster_time_token,
         group_event_changes,
         parse_roster_summary,
         parse_roster_time_token,
+        schedule_change_is_placeholder_noop,
         shift_hours_value,
     )
 
@@ -354,6 +357,47 @@ def main() -> None:
         raise AssertionError(f"Simple crew replacement was over-grouped: {simple_groups!r}")
     if simple_people[0].get("change_summary") != "TBC → Dylan Holden":
         raise AssertionError(f"Simple crew row lost its change summary: {simple_people!r}")
+
+    placeholder_noops = decorate_event_changes([
+        {
+            "group_id": "noop-1", "change_type": "replacement",
+            "old_positions": '["CCU2"]', "new_positions": '["CCU2"]',
+            "old_employee_name": "TBC TBC", "new_employee_name": "TBC",
+            "changed_at": "2026-09-07T17:01:00+12:00",
+        },
+        {
+            "group_id": "noop-2", "change_type": "replacement",
+            "old_positions": '["VT"]', "new_positions": '["VT"]',
+            "old_employee_name": "tbc2 tbc2", "new_employee_name": "TBC",
+            "changed_at": "2026-09-07T17:01:00+12:00",
+        },
+    ])
+    if placeholder_noops or not schedule_change_is_placeholder_noop({"change_summary": "Person: tbc2 tbc2 -> TBC"}):
+        raise AssertionError(f"Placeholder-equivalent history was not hidden semantically: {placeholder_noops!r}")
+
+    # One capture can leave intermediate event snapshots plus row-level audit.
+    # Presentation keeps only same-sync event groups that agree with final crew.
+    changed_at = "2026-09-07T17:01:00+12:00"
+    matamata_changes = [
+        {**base_change, "group_id": "gimbal-final", "changed_at": changed_at,
+         "change_type": "replacement", "old_positions": ["Gimbal"], "new_positions": ["Gimbal"],
+         "old_employee_name": "Alf", "new_employee_name": "Ryan Beaven"},
+        {**base_change, "group_id": "audio-intermediate", "changed_at": changed_at,
+         "change_type": "roles_split", "old_positions": ["Sound/VT"], "new_positions": ["Sound", "VT"],
+         "old_employee_name": "Ryan Beaven", "new_employee_name": "Ryan Beaven"},
+        {**base_change, "group_id": "audio-final", "changed_at": changed_at,
+         "change_type": "roles_merged", "old_positions": ["Sound", "VT"], "new_positions": ["Sound/VT"],
+         "old_employee_name": "Jayden-lee", "new_employee_name": "Ryan Beaven"},
+        {**base_change, "group_id": "gimbal-intermediate", "changed_at": changed_at,
+         "change_type": "opened", "old_positions": ["Gimbal"], "new_positions": ["Gimbal"],
+         "old_employee_name": "Alf", "new_employee_name": "TBC"},
+    ]
+    compacted = compact_event_changes_for_current_state(matamata_changes, [
+        {"position_label": "Gimbal", "employee_name": "Ryan Beaven"},
+        {"position_label": "Sound/VT", "employee_name": "Ryan Beaven"},
+    ])
+    if {row["group_id"] for row in compacted} != {"gimbal-final", "audio-final"}:
+        raise AssertionError(f"Same-sync intermediate history was not compacted to final state: {compacted!r}")
 
     event_base = {"position_key": "side2", "position_label": "Side 2", "start_at": "2026-09-01T09:00:00+12:00", "end_at": "2026-09-01T17:00:00+12:00"}
     initial = _compare_event_assignments(

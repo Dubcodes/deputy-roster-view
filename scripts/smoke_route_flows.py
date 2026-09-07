@@ -760,8 +760,10 @@ def main() -> None:
         raise AssertionError(f"Paired current source notes lost provenance: {paired!r}")
     if {("On track", "10:00"), ("First cross", "12:05"), ("8 races", "12:35 | 16:39")} - paired_rows:
         raise AssertionError(f"Timing from both current source notes was not parsed: {paired_summary!r}")
-    if paired_summary["note_lines"] != ["Current production instruction", "Companion current prose"]:
-        raise AssertionError(f"Current free prose from paired notes was not preserved: {paired_summary!r}")
+    if paired_summary["note_lines"] != ["Current production instruction"]:
+        raise AssertionError(f"Vehicle/context prose leaked into Race Day: {paired_summary!r}")
+    if "Companion current prose" not in repr(paired["display_current_source_notes"]):
+        raise AssertionError(f"Vehicle/context prose was not retained in Raw Deputy notes: {paired!r}")
     if paired["description"] != production_source["description"]:
         raise AssertionError("Current-note bundling overwrote the primary raw description.")
 
