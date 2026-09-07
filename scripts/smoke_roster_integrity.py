@@ -35,8 +35,9 @@ def main() -> None:
         save_deputy_web_schedule,
     )
     from app.main import (
-        effective_schedule_items, reconcile_personal_assignment_evidence,
-        replacement_change_summary, schedule_people,
+        aggregate_global_schedule, effective_schedule_items,
+        reconcile_personal_assignment_evidence, replacement_change_summary,
+        schedule_people,
     )
     from app.scheduler import _combined_sync_status
 
@@ -221,6 +222,58 @@ def main() -> None:
             (catalogue_date,),
         ).fetchone() == ("complete", 0)
 
+    # Coverage understands valid combined and split Sound/VT configurations;
+    # an open VT beside SVT is captured vacancy evidence, not operator #2.
+    audio_date = (now + timedelta(days=13)).date().isoformat()
+    audio_rows = [
+        {"id": 8801, "area": 108, "areaName": "Sound/VT", "areaLocationId": 64,
+         "employee": 17, "employeeName": "Jayden-lee", "start": f"{audio_date}T09:00:00+12:00", "end": f"{audio_date}T18:00:00+12:00", "isPublished": True},
+        {"id": 8802, "area": 776, "areaName": "VT", "areaLocationId": 64,
+         "employee": None, "employeeName": "", "start": f"{audio_date}T09:00:00+12:00", "end": f"{audio_date}T18:00:00+12:00", "isPublished": False, "isOpen": True},
+    ]
+    audio_payload = {
+        **payload, "captured_at": (now + timedelta(seconds=31)).isoformat(),
+        "extracted_shifts": [], "own_roster_coverage": [], "extracted_schedule_shifts": audio_rows,
+        "schedule_coverage": [{"start_date": audio_date, "end_date": audio_date, "mode": "selected", "location_ids": [64]}],
+        "event_retry_coverage": [],
+    }
+    assert save_deputy_web_schedule(audio_payload, owner_user_id=1)["partial_events"] == 0
+    split_audio_date = (now + timedelta(days=15)).date().isoformat()
+    split_audio_rows = [
+        {**audio_rows[0], "id": 8811, "areaName": "Sound", "start": f"{split_audio_date}T09:00:00+12:00", "end": f"{split_audio_date}T18:00:00+12:00"},
+        {**audio_rows[0], "id": 8812, "area": 776, "areaName": "VT", "employee": 18, "employeeName": "Gary McClure", "start": f"{split_audio_date}T09:00:00+12:00", "end": f"{split_audio_date}T18:00:00+12:00"},
+    ]
+    split_audio_payload = {
+        **audio_payload, "captured_at": (now + timedelta(seconds=32)).isoformat(),
+        "extracted_schedule_shifts": split_audio_rows,
+        "schedule_coverage": [{"start_date": split_audio_date, "end_date": split_audio_date, "mode": "selected", "location_ids": [64]}],
+    }
+    assert save_deputy_web_schedule(split_audio_payload, owner_user_id=1)["partial_events"] == 0
+
+    # TBC is vacancy evidence, not a named prior assignment. Once a later
+    # complete direct capture covers the event and omits it, it may retire.
+    tbc_date = (now + timedelta(days=16)).date().isoformat()
+    tbc_row = {
+        "id": 8821, "area": 776, "areaName": "VT", "areaLocationId": 64,
+        "employee": None, "employeeName": "TBC", "start": f"{tbc_date}T09:00:00+12:00",
+        "end": f"{tbc_date}T18:00:00+12:00", "isPublished": True,
+    }
+    tbc_payload = {
+        **payload, "captured_at": (now + timedelta(seconds=33)).isoformat(),
+        "extracted_shifts": [], "own_roster_coverage": [], "extracted_schedule_shifts": [tbc_row],
+        "schedule_coverage": [{"start_date": tbc_date, "end_date": tbc_date, "mode": "all", "location_ids": []}],
+        "event_retry_coverage": [],
+    }
+    assert save_deputy_web_schedule(tbc_payload, owner_user_id=1)["partial_events"] == 1
+    tbc_omitted = {
+        **tbc_payload, "captured_at": (now + timedelta(seconds=34)).isoformat(),
+        "extracted_schedule_shifts": [],
+    }
+    assert save_deputy_web_schedule(tbc_omitted, owner_user_id=1)["partial_events"] == 0
+    with sqlite3.connect(db_path) as conn:
+        if conn.execute("SELECT COUNT(*) FROM deputy_schedule_shifts WHERE source_shift_id=8821").fetchone()[0] != 0:
+            raise AssertionError("A covered TBC VT vacancy was preserved as named crew evidence.")
+
     # Shared rows retain per-account provenance. Account 1 not seeing a row
     # must not erase the copy still actively observed by account 2. Deputy can
     # also set isOpen=true on an assigned shift; that row is not a vacancy.
@@ -262,6 +315,34 @@ def main() -> None:
     save_deputy_web_schedule({**account_one_absence, "captured_at": (now + timedelta(seconds=4)).isoformat()}, owner_user_id=2)
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT 1 FROM deputy_schedule_shifts WHERE source_shift_id=33635").fetchone() is None
+
+    # Te Rapa-style observer churn: one account's active James evidence is not
+    # replaced by another account's active vacancy merely because B synced last.
+    churn_date = (now + timedelta(days=19)).date().isoformat()
+    churn_area = {"id": 902, "name": "Side 2", "locationId": 903, "rosterSortOrder": 2}
+    james_row = {
+        "id": 9201, "area": 902, "areaName": "Side 2", "areaLocationId": 903,
+        "employee": 920, "employeeName": "James", "isOpen": False, "isPublished": True,
+        "start": f"{churn_date}T09:00:00+12:00", "end": f"{churn_date}T18:00:00+12:00",
+    }
+    open_side_two = {
+        **james_row, "id": 9202, "employee": None, "employeeName": "", "isOpen": True,
+    }
+    churn_base = {
+        "areas": [churn_area], "locations": [{"id": 903, "name": "Te Rapa"}],
+        "extracted_shifts": [], "own_roster_coverage": [],
+        "schedule_coverage": [{"start_date": churn_date, "end_date": churn_date, "mode": "selected", "location_ids": [903]}],
+    }
+    save_deputy_web_schedule({**churn_base, "captured_at": (now + timedelta(seconds=20)).isoformat(), "extracted_schedule_shifts": [james_row]}, owner_user_id=1)
+    save_deputy_web_schedule({**churn_base, "captured_at": (now + timedelta(seconds=21)).isoformat(), "extracted_schedule_shifts": [open_side_two]}, owner_user_id=2)
+    save_deputy_web_schedule({**churn_base, "captured_at": (now + timedelta(seconds=22)).isoformat(), "extracted_schedule_shifts": [james_row]}, owner_user_id=1)
+    save_deputy_web_schedule({**churn_base, "captured_at": (now + timedelta(seconds=23)).isoformat(), "extracted_schedule_shifts": [open_side_two]}, owner_user_id=2)
+    churn_people = schedule_people(fetch_deputy_schedule_for_date(churn_date, [903]), include_placeholders=False)
+    if [(row["position_label"], row["employee_name"]) for row in churn_people] != [("Side 2", "James")]:
+        raise AssertionError(f"Observer order changed the effective Side 2 assignment: {churn_people!r}")
+    with sqlite3.connect(db_path) as conn:
+        if conn.execute("SELECT COUNT(*) FROM deputy_schedule_event_changes WHERE date=?", (churn_date,)).fetchone()[0] != 0:
+            raise AssertionError("Alternating observers created false James/TBC assignment history.")
 
     # A complete direct search may retire only direct evidence: it cannot negate
     # an earlier native Schedule-grid observation from the same account.
@@ -479,6 +560,12 @@ def main() -> None:
         ("VT 1", "Darryl Cribb"), ("VT 2", "James Topping"),
     ]:
         raise AssertionError(f"Native co-observed VT pair was not retained and source-ordered: {vt_people!r}")
+    reconcile_personal_assignment_evidence(vt_people, [{
+        "position_label": "VT", "employee_name": "James Topping", "deputy_employee_id": 77,
+        "evidence_type": "production_position", "status": "confirmed",
+    }])
+    if len(vt_people) != 2 or not next(row for row in vt_people if row["employee_id"] == 77).get("personal_evidence"):
+        raise AssertionError(f"Personal evidence for VT 2 created a duplicate instead of enriching it: {vt_people!r}")
     vt_items, _contexts = effective_schedule_items(native_vt_rows)
     if any(item["area_display"] != "VT" or item.get("display_area_label") not in {"VT 1", "VT 2"} for item in vt_items):
         raise AssertionError(f"Display suffix leaked into canonical VT identity: {vt_items!r}")
@@ -499,24 +586,69 @@ def main() -> None:
     one_vt, _contexts = effective_schedule_items([concurrent_row(40001, 501)])
     if len(one_vt) != 1 or one_vt[0].get("display_area_label") or one_vt[0]["area_display"] != "VT":
         raise AssertionError(f"A singleton VT was numbered: {one_vt!r}")
+    assigned_plus_open_vt, _contexts = effective_schedule_items([
+        concurrent_row(40001, 501),
+        {**concurrent_row(40002, 0), "employee_id": None, "employee_name": "", "is_open": 1},
+    ])
+    if len(assigned_plus_open_vt) != 1 or assigned_plus_open_vt[0]["employee_id"] != 501 or assigned_plus_open_vt[0].get("display_area_label"):
+        raise AssertionError(f"Open VT was treated as a second operator: {assigned_plus_open_vt!r}")
     three_vt, _contexts = effective_schedule_items([concurrent_row(40001, 501), concurrent_row(40002, 502), concurrent_row(40003, 503)])
-    if [row.get("display_area_label") for row in three_vt] != ["VT 1", "VT 2", "VT 3"]:
-        raise AssertionError(f"Three native co-observed VTs were not numbered deterministically: {three_vt!r}")
+    if len(three_vt) != 1 or three_vt[0].get("display_area_label") or not three_vt[0].get("concurrent_assignment_warning"):
+        raise AssertionError(f"Over-cap VT evidence was not handled conservatively: {three_vt!r}")
     replacement_rows, _contexts = effective_schedule_items([
         concurrent_row(41001, 601, context="", captured_at="2026-09-01T09:00:00+12:00"),
         concurrent_row(41002, 602, context="", captured_at="2026-09-01T10:00:00+12:00"),
     ])
-    if [row["employee_id"] for row in replacement_rows] != [602]:
-        raise AssertionError(f"Ordinary VT replacement was incorrectly treated as concurrent: {replacement_rows!r}")
+    if [row["employee_id"] for row in replacement_rows] != [601]:
+        raise AssertionError(f"Ambiguous VT evidence did not use stable source identity: {replacement_rows!r}")
     disagreement_rows, _contexts = effective_schedule_items([
         concurrent_row(42001, 701, context="user:1:native_get_rosters"),
         concurrent_row(42002, 702, context="user:2:native_get_rosters"),
     ])
-    if [row["employee_id"] for row in disagreement_rows] != [702]:
+    if [row["employee_id"] for row in disagreement_rows] != [701]:
         raise AssertionError(f"Different native capture contexts fabricated concurrency: {disagreement_rows!r}")
     four_vt, _contexts = effective_schedule_items([concurrent_row(43000 + index, 800 + index) for index in range(1, 5)])
-    if len(four_vt) != 4 or any(row.get("display_area_label") for row in four_vt) or not all(row.get("concurrent_assignment_warning") for row in four_vt):
-        raise AssertionError(f"Over-cap concurrent VT evidence was dropped, numbered, or not flagged: {four_vt!r}")
+    if len(four_vt) != 1 or any(str(row.get("display_area_label") or "").startswith("VT ") for row in four_vt):
+        raise AssertionError(f"Over-cap VT evidence invented a third displayed operator: {four_vt!r}")
+
+    # Generalized concurrency is forbidden: an assigned ordinary role wins
+    # over its active vacancy, and vehicle Areas never become crew vacancies.
+    ordinary_rows = [
+        {**concurrent_row(44001, 901), "area_id": 101, "area_name": "Side 1"},
+        {**concurrent_row(44002, 0), "area_id": 101, "area_name": "Side 1", "employee_id": None, "employee_name": "", "is_open": 1},
+        {**concurrent_row(44003, 0), "area_id": 112, "area_name": "684", "employee_id": None, "employee_name": "", "is_open": 1},
+    ]
+    ordinary_people = schedule_people(ordinary_rows, include_placeholders=False)
+    if [(row["position_label"], row["employee_name"]) for row in ordinary_people] != [("Side 1", "Crew 901")]:
+        raise AssertionError(f"Assigned/open or vehicle vacancy filtering regressed: {ordinary_people!r}")
+
+    # Personal SVT evidence confirms the compatible shared audio row by
+    # employee identity; an open VT vacancy cannot manufacture a duplicate.
+    audio_people = [
+        {"position_label": "Sound/VT", "employee_name": "Jayden-lee", "employee_id": 17, "placeholder": False, "sort_order": 8},
+        {"position_label": "VT", "employee_name": "Open shift", "employee_id": None, "placeholder": False, "sort_order": 9},
+    ]
+    reconcile_personal_assignment_evidence(audio_people, [{
+        "position_label": "Sound", "employee_name": "Jayden-lee", "deputy_employee_id": 17,
+        "canonical_person_id": 1, "evidence_type": "production_position", "status": "confirmed",
+    }])
+    if len([row for row in audio_people if row.get("employee_id") == 17]) != 1 or not audio_people[0].get("personal_evidence"):
+        raise AssertionError(f"Compatible personal audio evidence created a duplicate: {audio_people!r}")
+
+    # Vehicle/context timing cannot pull a real global production event early.
+    global_rows = [
+        {"source_shift_id": 45001, "date": vt_date, "location_name": "Matamata", "schedule_location_id": 64,
+         "area_name": "684", "employee_name": "Driver", "start_at": f"{vt_date}T01:00:00+12:00", "end_at": f"{vt_date}T03:00:00+12:00", "is_published": 1},
+        {"source_shift_id": 45002, "date": vt_date, "location_name": "Matamata", "schedule_location_id": 64,
+         "area_name": "Director", "employee_name": "Grant", "start_at": f"{vt_date}T09:00:00+12:00", "end_at": f"{vt_date}T18:00:00+12:00", "is_published": 1},
+        {"source_shift_id": 45003, "date": observer_date, "location_name": "Taupo", "schedule_location_id": 900,
+         "area_name": "CCU1", "employee_name": "Early One", "start_at": f"{observer_date}T07:45:00+12:00", "end_at": f"{observer_date}T18:00:00+12:00", "is_published": 1},
+        {"source_shift_id": 45004, "date": observer_date, "location_name": "Taupo", "schedule_location_id": 900,
+         "area_name": "CCU2", "employee_name": "Early Two", "start_at": f"{observer_date}T07:15:00+12:00", "end_at": f"{observer_date}T18:00:00+12:00", "is_published": 1},
+    ]
+    global_events = aggregate_global_schedule(global_rows)
+    assert next(row for row in global_events if row["date"] == vt_date)["start_label"] == "09:00"
+    assert next(row for row in global_events if row["date"] == observer_date)["start_label"] == "07:15"
 
     diagnostics = get_roster_integrity_diagnostics()
     assert diagnostics["partial_upcoming"] >= 1

@@ -499,19 +499,19 @@ TIMING_LINE_PATTERNS = (
     ("Office", re.compile(r"^office\s+(.+)$", re.IGNORECASE)),
     ("Clow Place", re.compile(r"^clow\s+(?:place|pl)\s+(.+)$", re.IGNORECASE)),
     ("On track", re.compile(r"^on\s+track\s+(.+)$", re.IGNORECASE)),
-    ("First cross", re.compile(r"^first\s+cross\s+(.+)$", re.IGNORECASE)),
+    ("First cross", re.compile(r"^first\s+(?:cross|x)\s+(.+)$", re.IGNORECASE)),
     ("Records", re.compile(r"^records?\s+(.+)$", re.IGNORECASE)),
     ("On Air", re.compile(r"^on\s+air\s+(.+)$", re.IGNORECASE)),
     ("Live", re.compile(r"^live\s+(.+)$", re.IGNORECASE)),
 )
 TIME_FIRST_TIMING_RE = re.compile(
     rf"^({ROSTER_TIME_TOKEN_PATTERN})\s+"
-    r"(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+cross|fx|records?|on\s+air|live)"
+    r"(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+(?:cross|x)|fx|records?|on\s+air|live)"
     r"\b(?:\s+(.+))?$",
     re.IGNORECASE,
 )
 INLINE_TIMING_RE = re.compile(
-    rf"\b(first race|last race|first cross|records?|on\s+air|live)\s+({ROSTER_TIME_TOKEN_PATTERN})",
+    rf"\b(first race|last race|first (?:cross|x)|records?|on\s+air|live)\s+({ROSTER_TIME_TOKEN_PATTERN})",
     re.IGNORECASE,
 )
 RACE_COUNT_RE = re.compile(r"\b(\d+)\s+races?\b", re.IGNORECASE)
@@ -529,6 +529,7 @@ TIMING_LABELS = {
     "clow pl": "Clow Place",
     "on track": "On track",
     "first cross": "First cross",
+    "first x": "First cross",
     "fx": "FX",
     "record": "Records",
     "records": "Records",
@@ -2238,17 +2239,17 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
     note_lines: list[str] = []
     wanted_patterns = (
         re.compile(
-            r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+cross|fx|records?|on\s+air|live)\b",
+            r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+(?:cross|x)|fx|records?|on\s+air|live)\b",
             re.IGNORECASE,
         ),
         re.compile(r"\b(records?|on\s+air|live|first race|last race|\d+\s+races?)\b", re.IGNORECASE),
     )
     simple_timing_re = re.compile(
-        r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+cross|fx|records?|on\s+air|live)\s+(.+)$",
+        r"^(trucks?|office|clow\s+(?:place|pl)|on\s+track|first\s+(?:cross|x)|fx|records?|on\s+air|live)\s+(.+)$",
         re.IGNORECASE,
     )
     paired_timing_re = re.compile(
-        rf"\b(records?|on\s+air|live|first\s+cross|first\s+race|last\s+race|fx)\s+"
+        rf"\b(records?|on\s+air|live|first\s+(?:cross|x)|first\s+race|last\s+race|fx)\s+"
         rf"({ROSTER_TIME_TOKEN_PATTERN})",
         re.IGNORECASE,
     )
@@ -2272,6 +2273,7 @@ def build_race_day_summary(shift: dict[str, object], _race_day: dict[str, object
             "clow pl": "Clow Place",
             "on track": "On track",
             "first cross": "First cross",
+            "first x": "First cross",
             "first race": "First race",
             "last race": "Last race",
             "record": "Records",
@@ -2562,6 +2564,15 @@ def decorate_shift(row: object) -> dict[str, object]:
         f"--location-colour: var(--location-colour-{location_colour_index});"
     )
     shift["description_lines"] = description_lines(str(shift.get("description") or ""))
+    shift["current_source_notes"] = [{
+        "shift_id": int(shift.get("id") or 0),
+        "source_uid": str(shift.get("source_uid") or ""),
+        "role": role_short,
+        "start_at": str(shift.get("start_at") or ""),
+        "end_at": str(shift.get("end_at") or ""),
+        "description": str(shift.get("description") or ""),
+    }]
+    shift["display_current_source_notes"] = [note for note in shift["current_source_notes"] if note["description"].strip()]
     shift["source_payload_pretty"] = pretty_source_payload(str(shift.get("source_payload") or ""))
     shift["source_diagnostics"] = source_payload_diagnostics(str(shift.get("source_payload") or ""))
     shift["source_link"] = redact_secret_text(str(shift.get("source_link") or ""))
@@ -2769,13 +2780,21 @@ def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[
                 "break_minutes": break_minutes,
             }
         )
-    if vehicle_context_pair and list(primary.get("description_lines") or []):
-        merged["description_lines"] = unique_description_lines(list(primary.get("description_lines") or []))
-    else:
-        merged["description_lines"] = unique_description_lines(
-            list(left.get("description_lines") or []),
-            list(right.get("description_lines") or []),
-        )
+    merged["current_source_notes"] = (
+        list(left.get("current_source_notes") or []) + list(right.get("current_source_notes") or [])
+    )
+    seen_note_text: set[str] = set()
+    merged["display_current_source_notes"] = []
+    for note in merged["current_source_notes"]:
+        note_text = re.sub(r"\s+", " ", str(note.get("description") or "").strip()).casefold()
+        if not note_text or note_text in seen_note_text:
+            continue
+        seen_note_text.add(note_text)
+        merged["display_current_source_notes"].append(note)
+    merged["description_lines"] = unique_description_lines(
+        list(left.get("description_lines") or []),
+        list(right.get("description_lines") or []),
+    )
     merged["roster_summary"] = parse_roster_summary(list(merged.get("description_lines") or []))
     merged["role_segments"] = clean_merged_role_segments(
         list(left.get("role_segments") or []) + list(right.get("role_segments") or [])
@@ -3600,7 +3619,7 @@ def native_current_observation_contexts(item: dict[str, object]) -> set[str]:
 
 
 def mark_proven_concurrent_assignments(items: list[dict[str, object]]) -> None:
-    """Retain same-role rows only when one native capture positively saw them together."""
+    """Retain at most two assigned VTs positively seen together natively."""
     groups: dict[tuple[str, object, str, str], list[dict[str, object]]] = {}
     for item in items:
         if schedule_item_is_multi_assignee_context(item):
@@ -3610,6 +3629,8 @@ def mark_proven_concurrent_assignments(items: list[dict[str, object]]) -> None:
         location_id = item.get("schedule_location_id")
         date_text = str(item.get("date") or "")
         position_key = schedule_item_position_key(item)
+        if position_key != "vt":
+            continue
         if employee_id is None or source_shift_id is None or location_id in (None, "") or not date_text or not position_key:
             continue
         for context in native_current_observation_contexts(item):
@@ -3618,15 +3639,21 @@ def mark_proven_concurrent_assignments(items: list[dict[str, object]]) -> None:
     for group in groups.values():
         source_ids = {safe_int(item.get("source_shift_id")) for item in group}
         employee_ids = {safe_int(item.get("employee_id")) for item in group}
-        if (
-            len(group) < 2
-            or len(source_ids) != len(group)
-            or len(employee_ids) != len(group)
-            or any(left is not right and not schedule_items_overlap(left, right) for left in group for right in group)
-        ):
+        valid = (
+            len(group) >= 2
+            and len(source_ids) == len(group)
+            and len(employee_ids) == len(group)
+            and not any(left is not right and not schedule_items_overlap(left, right) for left in group for right in group)
+        )
+        if not valid:
             continue
-        for item in group:
-            item["proven_concurrent_assignment"] = True
+        if len(group) == 2:
+            for item in group:
+                item["proven_concurrent_assignment"] = True
+        elif len(group) > 2:
+            warning = f"{len(group)} concurrent VT assignments captured; showing a conservative single VT."
+            for item in group:
+                item["concurrent_assignment_warning"] = warning
 
 
 def apply_concurrent_assignment_display_labels(items: list[dict[str, object]]) -> None:
@@ -3639,20 +3666,45 @@ def apply_concurrent_assignment_display_labels(items: list[dict[str, object]]) -
                 [],
             ).append(item)
     for group in groups.values():
-        if len(group) > 3:
-            label = str(group[0].get("area_display") or "Role")
-            warning = f"{len(group)} concurrent {label} assignments captured; review roster."
-            for item in group:
-                item["concurrent_assignment_warning"] = warning
-            continue
-        for index, item in enumerate(sorted(group, key=lambda value: int(value.get("source_shift_id") or 0)), start=1):
-            item["display_area_label"] = f"{item.get('area_display') or 'Role'} {index}"
+        if len(group) == 2:
+            for index, item in enumerate(sorted(group, key=lambda value: int(value.get("source_shift_id") or 0)), start=1):
+                item["display_area_label"] = f"VT {index}"
 
 
 def schedule_item_newer(left: dict[str, object], right: dict[str, object]) -> bool:
     left_key = (str(left.get("captured_at") or ""), int(left.get("source_shift_id") or 0))
     right_key = (str(right.get("captured_at") or ""), int(right.get("source_shift_id") or 0))
     return left_key > right_key
+
+
+def schedule_item_is_named(item: dict[str, object]) -> bool:
+    return safe_int(item.get("employee_id")) not in (None, 0) or not is_placeholder_crew_name(
+        str(item.get("employee_name") or "")
+    ) and schedule_label_key(str(item.get("employee_name") or "")) not in {"", "tbc", "openshift"}
+
+
+def schedule_item_preferred(left: dict[str, object], right: dict[str, object]) -> bool:
+    def change_direction(item: dict[str, object]) -> int:
+        current_name = schedule_label_key(str(item.get("employee_name") or ""))
+        for part in str(item.get("change_summary") or "").split(";"):
+            match = re.match(r"^Person:\s*(.*?)\s*->\s*(.*?)$", part.strip())
+            if not match:
+                continue
+            if current_name == schedule_label_key(match.group(2)):
+                return 1
+            if current_name == schedule_label_key(match.group(1)):
+                return -1
+        return 0
+
+    left_named = schedule_item_is_named(left)
+    right_named = schedule_item_is_named(right)
+    if left_named != right_named:
+        return left_named
+    left_direction = change_direction(left)
+    right_direction = change_direction(right)
+    if left_direction != right_direction:
+        return left_direction > right_direction
+    return int(left.get("source_shift_id") or 0) < int(right.get("source_shift_id") or 0)
 
 
 def replacement_change_summary(old_item: dict[str, object], new_item: dict[str, object]) -> str:
@@ -3690,7 +3742,7 @@ def dedupe_schedule_items(items: list[dict[str, object]]) -> list[dict[str, obje
             continue
 
         existing = deduped[replacement_index]
-        if schedule_item_newer(item, existing):
+        if schedule_item_preferred(item, existing):
             if existing.get("assignment_changed") or existing.get("changed"):
                 item["assignment_changed"] = True
                 item["changed"] = True
@@ -3772,6 +3824,27 @@ def split_sound_vt_assignments(items: list[dict[str, object]]) -> set[tuple[str,
     return contexts
 
 
+def suppress_satisfied_audio_vacancies(items: list[dict[str, object]]) -> list[dict[str, object]]:
+    named_by_context: dict[tuple[str, object], set[str]] = {}
+    for item in items:
+        if not schedule_item_is_named(item):
+            continue
+        context = (str(item.get("date") or ""), item.get("schedule_location_id"))
+        named_by_context.setdefault(context, set()).add(schedule_item_position_key(item))
+    result = []
+    for item in items:
+        key = schedule_item_position_key(item)
+        context = (str(item.get("date") or ""), item.get("schedule_location_id"))
+        named = named_by_context.get(context, set())
+        vacancy_satisfied = not schedule_item_is_named(item) and (
+            key in {"sound", "vt"} and "soundvt" in named
+            or key == "soundvt" and {"sound", "vt"} <= named
+        )
+        if not vacancy_satisfied:
+            result.append(item)
+    return result
+
+
 def effective_schedule_items(rows: list[object]) -> tuple[list[dict[str, object]], set[tuple[str, object]]]:
     items = []
     for row in rows:
@@ -3780,7 +3853,9 @@ def effective_schedule_items(rows: list[object]) -> tuple[list[dict[str, object]
             items.append(item)
     mark_proven_concurrent_assignments(items)
     person_focused_schedule_changes(items)
-    items = suppress_stale_overlapping_employee_roles(dedupe_schedule_items(items))
+    items = suppress_satisfied_audio_vacancies(
+        suppress_stale_overlapping_employee_roles(dedupe_schedule_items(items))
+    )
     split_contexts = split_sound_vt_assignments(items)
     apply_concurrent_assignment_display_labels(items)
     return items, split_contexts
@@ -3885,6 +3960,9 @@ def schedule_people(
         is_vehicle = bool(item.get("is_vehicle_area"))
 
         if not employee_name:
+            if is_vehicle:
+                # Vehicle Areas are preserved source context, never crew vacancies.
+                continue
             if schedule_item_position_key(item) in ASSIGNED_ONLY_SCHEDULE_POSITION_KEYS:
                 continue
             vehicle_label = area_label if is_vehicle else ""
@@ -4049,13 +4127,20 @@ def reconcile_personal_assignment_evidence(
             continue
         if evidence_type != "production_position":
             continue
-        matching_rows = [
-            person for person in people
-            if position_key in {
-                schedule_label_key(part)
+        def compatible_role(person: dict[str, object]) -> bool:
+            person_keys = {
+                "vt" if schedule_label_key(part) in {"vt1", "vt2"} else schedule_label_key(part)
                 for part in str(person.get("position_label") or "").split(",")
                 if part.strip()
             }
+            if position_key in person_keys:
+                return True
+            sound_keys = {"sound", "svt", "soundvt", "vt"}
+            return position_key in sound_keys and bool(person_keys & sound_keys)
+
+        matching_rows = [
+            person for person in people
+            if compatible_role(person)
         ]
         if not matching_rows:
             people.append({
@@ -4073,7 +4158,17 @@ def reconcile_personal_assignment_evidence(
                 "possibly_missing": str(evidence.get("status") or "") == "possibly_missing",
             })
             continue
-        shared = matching_rows[0]
+        identity_match = next((
+            person for person in matching_rows
+            if (
+                evidence_employee_id is not None
+                and safe_int(person.get("employee_id")) == evidence_employee_id
+            ) or (
+                evidence_person_id is not None
+                and safe_int(person.get("canonical_person_id")) == evidence_person_id
+            )
+        ), None)
+        shared = identity_match or matching_rows[0]
         if shared.get("placeholder") or schedule_label_key(str(shared.get("employee_name") or "")) in {"tbc", "openshift"}:
             shared.update({
                 "employee_name": employee_name,
@@ -5312,6 +5407,17 @@ def aggregate_global_schedule(rows: list[object]) -> list[dict[str, object]]:
             continue
         employee_name = str(schedule.get("employee_name") or "").strip()
         if not employee_name:
+            continue
+        area_label = display_schedule_area(str(schedule.get("area_name") or ""))
+        area_key = schedule_label_key(area_label)
+        if (
+            schedule_area_is_vehicle(area_label)
+            or area_key in CONTEXT_ONLY_ROLE_KEYS
+            or area_key == "hcambridge"
+            or area_key.startswith("fcr")
+        ):
+            # Context is still persisted and can enrich a real event, but it
+            # cannot create or extend the shared production time window.
             continue
         date_key = str(schedule.get("date") or "")
         location_name = str(schedule.get("location_name") or "Unknown").strip()

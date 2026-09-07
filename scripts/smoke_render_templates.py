@@ -203,7 +203,7 @@ def render_day_template() -> None:
         or "18:00 → 18:30" not in html
     ):
         raise AssertionError("Day template did not render compact personal roster changes.")
-    if "Deputy roster: 09:30–18:30 = 9h" not in html or "Calculated operational timing (supplemental)" not in html:
+    if "Hours calculation · 09:30–18:30 = 9h" not in html or "Rostered hours" not in html or "Calculated operational timing (supplemental)" not in html:
         raise AssertionError("Day template did not distinguish the Deputy roster window from calculated timing.")
     if any(label in html for label in ("Start origin evidence", "Finish destination evidence", "roster base timing")):
         raise AssertionError("Day template rendered internal timeline evidence labels.")
@@ -326,6 +326,11 @@ def render_roster_note_template() -> None:
             "timing_adjustment_labels": [],
             "description": description,
             "description_lines": lines,
+            "display_current_source_notes": ([{
+                "role": "SVT", "start_at": "2026-08-30T09:00:00+12:00",
+                "end_at": "2026-08-30T18:00:00+12:00", "description": description,
+            }] if description else []),
+            "display_window": {"start_label": "09:00", "end_label": "18:00", "hours_label": "9h"},
             "roster_summary": {"has_structured": has_structured},
             "race_day_summary": {
                 "has_items": race_day,
@@ -356,10 +361,10 @@ def render_roster_note_template() -> None:
         raise AssertionError("Current roster note did not retain the Te Aroha source lines.")
     if 'class="roster-note-panel"' not in note_html or 'class="roster-note-lines"' not in note_html:
         raise AssertionError("Current roster note did not render as one cohesive note panel.")
-    if '<details class="raw-source raw-roster-note">' not in note_html or "<summary>Raw roster note</summary>" not in note_html:
-        raise AssertionError("Raw roster note control is missing for an unstructured source note.")
-    if f'<div class="raw-roster-note-content">{te_aroha_note}</div>' not in note_html:
-        raise AssertionError("Raw roster note did not retain the persisted source text and line break.")
+    if '<details class="raw-source raw-roster-note">' not in note_html or "<summary>Raw Deputy notes</summary>" not in note_html:
+        raise AssertionError("Raw Deputy notes control is missing for an unstructured source note.")
+    if te_aroha_note not in note_html or "SVT" not in note_html:
+        raise AssertionError("Raw Deputy notes did not retain source text and provenance label.")
     if '<ul class="roster-lines">' in note_html:
         raise AssertionError("Roster-note panel must not use divider-oriented roster list markup.")
 
@@ -370,8 +375,8 @@ def render_roster_note_template() -> None:
     if '<details class="raw-source raw-roster-note">' not in informational_html:
         raise AssertionError("Unstructured informational note lost its Raw roster note control.")
     no_note_html = render_note("")
-    if "Raw roster note" in no_note_html:
-        raise AssertionError("Raw roster note control rendered without source note text.")
+    if "Raw Deputy notes" in no_note_html:
+        raise AssertionError("Raw Deputy notes control rendered without source note text.")
     race_day_html = render_note("Race briefing is at 09:00.", race_day=True)
     if "Race Day" not in race_day_html or '<details class="raw-source raw-roster-note">' not in race_day_html:
         raise AssertionError("Race Day source note lost its independent Raw roster note control.")

@@ -7474,7 +7474,8 @@ EVENT_POSITION_ALIASES = {
     "svt": ("soundvt", "Sound/VT"),
     "soundvt": ("soundvt", "Sound/VT"),
     "vt": ("vt", "VT"),
-    "vt2": ("vt2", "VT 2"),
+    # VT numbering is presentation-only; canonical role identity stays VT.
+    "vt2": ("vt", "VT"),
     "ccu1": ("ccu1", "CCU1"),
     "ccu2": ("ccu2", "CCU2"),
     "eng": ("eng", "ENG"),
@@ -7521,6 +7522,9 @@ def _event_person_identity(
 ) -> tuple[str, int | None, str]:
     numeric_id = _optional_int(employee_id)
     clean_name = str(employee_name or "").strip()
+    name_key = normalise_person_identity(clean_name)
+    if numeric_id in (0, None) and name_key in {"", "tbc", "tbctbc", "tbc2tbc2"}:
+        return "tbc", None, ""
     if numeric_id is not None:
         person = conn.execute(
             "SELECT canonical_display_name FROM crew_people WHERE deputy_employee_id = ? LIMIT 1",
@@ -7528,7 +7532,6 @@ def _event_person_identity(
         ).fetchone()
         canonical_name = str(person["canonical_display_name"] or "").strip() if person is not None else ""
         return f"employee:{numeric_id}", numeric_id, canonical_name or clean_name
-    name_key = normalise_person_identity(clean_name)
     if name_key:
         people = conn.execute(
             """
@@ -7545,7 +7548,7 @@ def _event_person_identity(
         ).fetchall()
         if len(people) == 1:
             return f"crew:{int(people[0]['id'])}", None, str(people[0]["canonical_display_name"] or clean_name)
-    return (f"name:{name_key}" if name_key else "open"), None, clean_name
+    return (f"name:{name_key}" if name_key else "tbc"), None, clean_name
 
 
 def _authoritative_schedule_coverage(payload: dict[str, object]) -> list[dict[str, object]]:
@@ -7623,6 +7626,11 @@ def _authoritative_schedule_rows(
             FROM deputy_schedule_shifts s
             LEFT JOIN deputy_schedule_areas a ON a.area_id = s.area_id
             WHERE s.date BETWEEN ? AND ? {location_sql}
+              AND EXISTS (
+                SELECT 1 FROM deputy_schedule_observations observation
+                WHERE observation.source_shift_id = s.source_shift_id
+                  AND observation.active = 1
+              )
             """,
             params,
         ).fetchall():
@@ -7644,13 +7652,16 @@ def _effective_event_snapshots(
         identity, employee_id, employee_name = _event_person_identity(
             conn, row.get("employee_id"), row.get("employee_name")
         )
+        advertised_open = bool(int(row.get("is_open") or 0)) and employee_id is None and not employee_name
+        if advertised_open:
+            identity = "open"
         item = {
             "position_key": position[0],
             "position_label": position[1],
             "identity": identity,
             "employee_id": employee_id,
             "employee_name": employee_name,
-            "is_open": bool(int(row.get("is_open") or 0)) and employee_id is None and not employee_name,
+            "is_open": advertised_open,
             "start_at": str(row.get("start_at") or ""),
             "end_at": str(row.get("end_at") or ""),
             "captured_at": str(row.get("captured_at") or ""),
@@ -7677,22 +7688,29 @@ def _effective_event_snapshots(
             if item["identity"] != "open" and any(
                 other["identity"] == item["identity"]
                 and other["position_key"] != item["position_key"]
-                and other["captured_at"] > item["captured_at"]
+                and other["identity"] not in {"open", "tbc"}
+                and other["source_shift_id"] < item["source_shift_id"]
                 and _event_rows_overlap(item, other)
                 for other in items
             ):
                 continue
             visible.append(item)
 
+        def authority_key(value: dict[str, object]) -> tuple[int, int]:
+            # Active named evidence outranks active vacancy evidence. Stable
+            # source identity prevents the syncing account from changing truth.
+            named_rank = 0 if value["identity"] not in {"open", "tbc"} else 1
+            return named_rank, int(value["source_shift_id"] or 0)
+
         deduped: list[dict[str, object]] = []
-        for item in sorted(visible, key=lambda value: (value["captured_at"], value["source_shift_id"])):
+        for item in sorted(visible, key=authority_key):
             match = next((
                 existing for existing in deduped
                 if existing["position_key"] == item["position_key"] and _event_rows_overlap(existing, item)
             ), None)
             if match is None:
                 deduped.append(item)
-            elif (item["captured_at"], item["source_shift_id"]) >= (match["captured_at"], match["source_shift_id"]):
+            elif authority_key(item) < authority_key(match):
                 deduped[deduped.index(match)] = item
         scopes[scope] = sorted(deduped, key=lambda item: (item["position_key"], item["identity"]))
     return scopes
@@ -7779,10 +7797,10 @@ def _compare_event_assignments(
     before_by_person: dict[str, list[dict[str, object]]] = {}
     after_by_person: dict[str, list[dict[str, object]]] = {}
     for item in before:
-        if item["identity"] != "open":
+        if item["identity"] not in {"open", "tbc"}:
             before_by_person.setdefault(str(item["identity"]), []).append(item)
     for item in after:
-        if item["identity"] != "open":
+        if item["identity"] not in {"open", "tbc"}:
             after_by_person.setdefault(str(item["identity"]), []).append(item)
 
     changes: list[dict[str, object]] = []
@@ -7855,21 +7873,23 @@ def _compare_event_assignments(
             continue
         old_item = before_by_position.get(position_key)
         new_item = after_by_position.get(position_key)
-        old_identity = str((old_item or {}).get("identity") or "open")
-        new_identity = str((new_item or {}).get("identity") or "open")
+        old_identity = str((old_item or {}).get("identity") or "tbc")
+        new_identity = str((new_item or {}).get("identity") or "tbc")
         if old_identity == new_identity:
             continue
         position_label = str((new_item or old_item or {}).get("position_label") or "Position")
         old_name = str((old_item or {}).get("employee_name") or "TBC")
         new_name = str((new_item or {}).get("employee_name") or "TBC")
-        if old_identity != "open" and new_identity != "open":
+        if old_identity not in {"open", "tbc"} and new_identity not in {"open", "tbc"}:
             if old_identity in moved_identities and new_identity in moved_identities:
                 continue
             change_type = "replacement"
-        elif old_identity != "open":
+        elif old_identity not in {"open", "tbc"}:
             change_type = "opened"
-        else:
+        elif new_identity not in {"open", "tbc"}:
             change_type = "filled"
+        else:
+            continue
         changes.append(_event_change_record(
             change_type=change_type,
             old_positions=[position_label],
@@ -7951,6 +7971,34 @@ def _coverage_contains_scope(coverage_rows: list[dict[str, object]], date_text: 
     return False
 
 
+def _event_item_has_named_person(item: dict[str, object]) -> bool:
+    employee_id = _optional_int(item.get("employee_id"))
+    name_key = normalise_person_identity(item.get("employee_name"))
+    return employee_id not in (None, 0) or name_key not in {"", "tbc", "tbctbc", "tbc2tbc2"}
+
+
+def _sound_position_satisfied(position_key: str, named_positions: set[str]) -> bool:
+    if position_key == "soundvt":
+        return "soundvt" in named_positions or {"sound", "vt"} <= named_positions
+    if position_key in {"sound", "vt"}:
+        return position_key in named_positions or "soundvt" in named_positions
+    return position_key in named_positions
+
+
+def _expected_position_satisfied(
+    position_key: str, captured_positions: set[str], named_positions: set[str],
+) -> bool:
+    if position_key == "soundvt":
+        return "soundvt" in captured_positions or {"sound", "vt"} <= named_positions
+    if position_key in {"sound", "vt"}:
+        return position_key in captured_positions or "soundvt" in named_positions
+    return position_key in captured_positions
+
+
+def _sound_positions_compatible(left: str, right: str) -> bool:
+    return left == right or (left in {"sound", "vt", "soundvt"} and right in {"sound", "vt", "soundvt"})
+
+
 def _evaluate_event_coverage(
     conn: sqlite3.Connection,
     payload: dict[str, object],
@@ -8008,18 +8056,20 @@ def _evaluate_event_coverage(
     for date_text, location_id in sorted(scopes):
         incoming = incoming_scopes.get((date_text, location_id), [])
         evidence_rows = evidence_scopes.get((date_text, location_id), [])
-        captured_by_position = {
-            str(item["position_key"]): item for item in incoming
-            if str(item.get("employee_name") or "").strip() or item.get("is_open")
-        }
-        named_positions = {
-            key for key, item in captured_by_position.items()
-            if str(item.get("employee_name") or "").strip()
-        }
+        captured_by_position: dict[str, dict[str, object]] = {}
+        for item in incoming:
+            key = str(item["position_key"])
+            if not (_event_item_has_named_person(item) or item.get("is_open")):
+                continue
+            existing = captured_by_position.get(key)
+            if existing is None or (_event_item_has_named_person(item) and not _event_item_has_named_person(existing)):
+                captured_by_position[key] = item
+        named_positions = {key for key, item in captured_by_position.items() if _event_item_has_named_person(item)}
+        captured_positions = set(captured_by_position)
         personal_positions = {str(row["position_key"]) for row in evidence_rows}
         previous_named = {
             str(item["position_key"]) for item in before_snapshots.get((date_text, location_id), [])
-            if item.get("identity") != "open"
+            if item.get("identity") not in {"open", "tbc"}
         }
         # A venue's Area catalogue is not an event roster: roles vary by event
         # and using every known Area creates false gaps. Current event rows and
@@ -8029,9 +8079,27 @@ def _evaluate_event_coverage(
             str(item["position_key"]) for item in incoming
             if str(item["position_key"]) in CORE_EVENT_POSITION_KEYS
         } | personal_positions
-        missing_expected = expected_positions - set(captured_by_position)
-        missing_personal = personal_positions - named_positions
-        missing_previous = previous_named - named_positions
+        missing_expected = {
+            key for key in expected_positions
+            if not _expected_position_satisfied(key, captured_positions, named_positions)
+        }
+        missing_personal = {
+            str(row["position_key"])
+            for row in evidence_rows
+            if not any(
+                _sound_positions_compatible(str(row["position_key"]), str(item["position_key"]))
+                and _event_item_has_named_person(item)
+                and (
+                    row["deputy_employee_id"] is not None
+                    and _optional_int(item.get("employee_id")) == _optional_int(row["deputy_employee_id"])
+                    or row["canonical_person_id"] is not None
+                    and normalise_person_identity(item.get("employee_name"))
+                    == normalise_person_identity(row["employee_name"])
+                )
+                for item in incoming
+            )
+        }
+        missing_previous = {key for key in previous_named if not _sound_position_satisfied(key, named_positions)}
         retry = retry_lookup.get((date_text, location_id))
         exact_selected_complete = any(
             coverage["mode"] == "selected"
@@ -8050,16 +8118,23 @@ def _evaluate_event_coverage(
             reasons.append("previous named assignments absent: " + ", ".join(sorted(missing_previous)))
         conflicts = 0
         for evidence in evidence_rows:
-            shared = captured_by_position.get(str(evidence["position_key"]))
-            if shared is None or not str(shared.get("employee_name") or "").strip():
+            shared_rows = [
+                item for item in incoming
+                if _sound_positions_compatible(str(evidence["position_key"]), str(item["position_key"]))
+                and _event_item_has_named_person(item)
+            ]
+            if not shared_rows:
                 continue
-            same_employee = (
-                evidence["deputy_employee_id"] is not None
-                and _optional_int(shared.get("employee_id")) == _optional_int(evidence["deputy_employee_id"])
-            ) or (
-                evidence["canonical_person_id"] is not None
-                and normalise_person_identity(str(shared.get("employee_name") or ""))
-                == normalise_person_identity(str(evidence["employee_name"] or ""))
+            same_employee = any(
+                (
+                    evidence["deputy_employee_id"] is not None
+                    and _optional_int(shared.get("employee_id")) == _optional_int(evidence["deputy_employee_id"])
+                ) or (
+                    evidence["canonical_person_id"] is not None
+                    and normalise_person_identity(str(shared.get("employee_name") or ""))
+                    == normalise_person_identity(str(evidence["employee_name"] or ""))
+                )
+                for shared in shared_rows
             )
             if not same_employee:
                 conflicts += 1

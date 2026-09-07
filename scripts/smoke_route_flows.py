@@ -86,6 +86,8 @@ def main() -> None:
         build_roster_insights,
         build_race_day_calculation,
         build_race_day_summary,
+        combine_adjacent_shifts,
+        decorate_shift,
         parse_roster_summary,
         refresh_learned_travel_defaults,
         roster_builder_positions,
@@ -732,6 +734,36 @@ def main() -> None:
     blank_race_day = build_race_day_summary(blank_current_shift, {})
     if blank_race_day["has_items"] or blank_race_day["note_lines"] or "Generated" in repr(blank_race_day):
         raise AssertionError(f"Blank current note resurrected historical text: {blank_race_day!r}")
+
+    # One human workday may have two current Deputy source rows. Preserve both
+    # raw notes/provenance and parse timing/prose from both, without history.
+    paired_base = {
+        "owner_user_id": int(other["id"]), "date": "2026-09-02", "location": "Ruakaka",
+        "raw_hours": 3.0, "paid_hours": 3.0, "break_minutes": 0,
+        "last_changed_at": "", "changed_since_viewed": 0, "deleted_from_source": 0,
+        "source_payload": '{"normalised":{"area_location_id":64}}', "source_link": "", "source_status": "published",
+    }
+    production_source = decorate_shift({
+        **paired_base, "id": 70001, "source_uid": "web:70001", "title": "[T-Ruakaka] CCU1",
+        "description": "On track 1000\nCurrent production instruction",
+        "start_at": "2026-09-02T09:00:00+12:00", "end_at": "2026-09-02T12:00:00+12:00",
+    })
+    companion_source = decorate_shift({
+        **paired_base, "id": 70002, "source_uid": "web:70002", "title": "[T-Ruakaka] 684",
+        "description": "First X 1205\n8 races 1235 | 1639\nCompanion current prose",
+        "start_at": "2026-09-02T12:00:00+12:00", "end_at": "2026-09-02T15:00:00+12:00",
+    })
+    paired = combine_adjacent_shifts([production_source, companion_source])[0]
+    paired_summary = build_race_day_summary(paired, {})
+    paired_rows = {(row["label"], row["value"]) for row in paired_summary["rows"]}
+    if len(paired["current_source_notes"]) != 2 or len(paired["display_current_source_notes"]) != 2:
+        raise AssertionError(f"Paired current source notes lost provenance: {paired!r}")
+    if {("On track", "10:00"), ("First cross", "12:05"), ("8 races", "12:35 | 16:39")} - paired_rows:
+        raise AssertionError(f"Timing from both current source notes was not parsed: {paired_summary!r}")
+    if paired_summary["note_lines"] != ["Current production instruction", "Companion current prose"]:
+        raise AssertionError(f"Current free prose from paired notes was not preserved: {paired_summary!r}")
+    if paired["description"] != production_source["description"]:
+        raise AssertionError("Current-note bundling overwrote the primary raw description.")
 
     settings_page = client.get("/settings")
     if settings_page.status_code != 200 or "Your Roster" not in settings_page.text:
@@ -1420,6 +1452,14 @@ def main() -> None:
     combined_sound_people = schedule_people(split_sound_vt_rows[:1])
     if len(combined_sound_people) != 1 or combined_sound_people[0]["position_label"] != "Sound/VT":
         raise AssertionError(f"Expected SVT to stay combined without a separate VT assignment, got {combined_sound_people!r}")
+
+    open_vt_row = {
+        **split_sound_vt_rows[1], "source_shift_id": 206, "employee_id": None,
+        "employee_name": "", "is_open": 1,
+    }
+    combined_with_open_vt = schedule_people([split_sound_vt_rows[0], open_vt_row])
+    if [(row["position_label"], row["employee_name"]) for row in combined_with_open_vt] != [("Sound/VT", "Jayden-lee")]:
+        raise AssertionError(f"Open VT vacancy split or duplicated a combined operator: {combined_with_open_vt!r}")
 
     same_employee_split_rows = [dict(row) for row in split_sound_vt_rows]
     same_employee_split_rows[1]["employee_id"] = 17

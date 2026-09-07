@@ -1,5 +1,13 @@
 # Domain Rules
 
+## Current shared roster interpretation
+
+- For one canonical ordinary position, retain one effective current assignment. Among still-active evidence a named employee outranks Open/TBC; observer-specific authoritative retirement must remove the named evidence before a vacancy can become effective.
+- VT is the only maximum-two exception: one assigned person displays `VT`; exactly two co-observed assigned people display `VT 1` and `VT 2`; an open row is not person two; excess rows are preserved diagnostically and never display `VT 3`.
+- Combined `Sound/VT` stays combined unless a different overlapping assigned VT employee proves a split. Personal Sound/SVT/VT evidence confirms a compatible shared row by employee identity instead of adding another person.
+- Vehicle/context Areas may enrich a person but are not crew vacancies and do not set global race-day start/finish. The earliest and latest genuine production assignments define that window; a real Travel cohort remains a legitimate Travel event.
+- Every paired current Deputy source row keeps its own current raw note in `current_source_notes`. Race Day timing and prose may use all notes in that bundle. Historical description changes remain history-only.
+
 ## Racing Codes
 
 - `T-` means Thoroughbred racing.
@@ -103,7 +111,7 @@ Generic schedule labels such as `Vehicle` or `Vehicles` are context, not vehicle
 
 Opening a changed badge or the Change History section must not automatically clear the changed flag. The app should only clear change flags through explicit clear actions, otherwise phone taps can make important changes disappear before the user has read them.
 
-Deputy schedule rows can leave stale local rows behind when an assignment is replaced with a new Deputy shift id. For display, overlapping rows for the same date/location/position should prefer the latest captured assignment and suppress the older one. If the older row carried an assignment-change flag, carry that change summary onto the displayed replacement row.
+Deputy schedule rows can leave stale local rows behind when an assignment is replaced with a new Deputy shift id. For display, overlapping active rows for the same date/location/position use explicit person-change direction when available, otherwise stable source identity; capture recency alone is not authority. Once observer-specific coverage retires the stale row, preserve its assignment-change summary on the displayed replacement.
 
 The same stale-row problem can leave one person with two overlapping production roles. If those roles came from different captures, show only the newer captured role. If both roles came from the same capture, preserve both because Deputy is explicitly reporting both assignments.
 

@@ -1,5 +1,7 @@
 # Testing
 
+The roster-integrity and route-flow smokes include source-shaped coverage for observer churn, named-plus-open positions, vehicle vacancies, the VT maximum-two rule, Sound/SVT/VT equivalence, compatible personal evidence, production-only global timing, paired current source notes, `First X`, and historical-note separation. Run them directly while changing these boundaries, then run `python scripts/release_gate.py`.
+
 ## Canonical release gate
 
 Run the deterministic offline suite locally and in CI with:

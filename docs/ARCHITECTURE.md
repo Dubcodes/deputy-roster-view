@@ -1,5 +1,15 @@
 # Architecture
 
+## Roster evidence to presentation pipeline
+
+Authenticated own-roster capture persists owner-scoped `shifts` and `deputy_personal_assignment_evidence`. Shared native `getRosters` and direct searches persist stable `deputy_schedule_shifts` plus source-specific rows in `deputy_schedule_observations`. Direct negative evidence is destructive only inside the observer and proven coverage scope that produced it; native evidence is currently positive-only.
+
+`_effective_event_snapshots()` reads rows with active observation support and produces stable event state for Change History. Named assignments rank above vacancies, and source identity—not the last syncing account—breaks unresolved named conflicts until coverage retires one source row. Presentation then canonicalizes one ordinary assignment per role, applies the bounded VT exception, resolves Sound/SVT/VT, attaches vehicle context, and reconciles compatible personal evidence by employee identity.
+
+Personal current source rows are decorated and grouped into human workdays. Grouping preserves each source description in `current_source_notes`; combined `description_lines` are derived only from that current bundle. Race Day timing/prose parsing, vehicle allocation, and day rendering consume current evidence. `shift_changes` remains a separate historical stream rendered only by Change History.
+
+Global Crew aggregation excludes vehicle and operational-context rows from event creation and time bounds. Genuine production rows define race-event bounds, while Travel participant rows retain Travel event behavior.
+
 ## Account identity and onboarding (0.5.1)
 
 `app_users.deputy_email` remains the historically named Re-Deputy account/login email. Actual Deputy email and password are optional encrypted values in `deputy_user_secrets`; updating them does not change the Re-Deputy login. An account, canonical `crew_people` identity, and Deputy connection are independent. Ordinary invited management accounts may therefore have no crew link and no Deputy connection while retaining the existing Crew/global view.

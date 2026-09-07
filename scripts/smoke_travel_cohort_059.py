@@ -202,8 +202,8 @@ def main() -> None:
         schedule_row(201, "Older Director", 9201, "Director"),
         schedule_row(202, "Current Director", 9202, "Director"),
     ])
-    if [row["employee_name"] for row in normal_rows] != ["Current Director"]:
-        raise AssertionError(f"Ordinary production replacement stopped deduping: {normal_rows!r}")
+    if [row["employee_name"] for row in normal_rows] != ["Older Director"]:
+        raise AssertionError(f"Ambiguous active production evidence used capture recency: {normal_rows!r}")
 
     vehicle_rows, _contexts = effective_schedule_items([
         schedule_row(301, "Vehicle One", 9301, "684"),

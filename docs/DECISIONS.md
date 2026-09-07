@@ -1,5 +1,13 @@
 # Decisions
 
+## 2026-09-07 — 0.5.18 roster evidence stabilization
+
+- Shared Schedule truth is the union of active observer/source evidence. Active named evidence outranks an active vacancy for the same ordinary position; sync recency alone is not authority. A complete direct capture can retire only its own direct observation, while native `getRosters` remains positive-only until its request scope is verified.
+- Ordinary production positions have one effective assignment. VT alone may show two distinct assigned employees when one native capture positively observed exactly two overlapping rows; display labels `VT 1`/`VT 2` never change the canonical `vt` key. Open VT is not an operator, and more than two rows remain diagnostic evidence with conservative display.
+- `SVT`/`Sound/VT` remains combined unless a different assigned employee occupies overlapping VT. Compatible personal evidence reconciles by Deputy employee ID, and open audio vacancies cannot split or duplicate a named combined assignment.
+- Vehicle Areas remain persisted enrichment evidence but never create crew vacancies or influence the shared production event window. Real production people define race-day bounds; Travel participant cohorts retain their own event semantics.
+- A combined human workday carries a provenance-preserving bundle of current source notes. Parsing consumes those current descriptions only; `shift_changes` description history remains Change History and is never current note, timing, vehicle, or prose evidence.
+
 ## 2026-09-02 — Deputy is the primary roster authority
 
 - Published shared Deputy rows and authenticated users' own Deputy rows determine roster membership, role, location, start, finish, and source state. Matching Travel evidence is additive only when the existing narrow Travel/T-Travel location semantics and an overlapping Deputy window prove the same event.

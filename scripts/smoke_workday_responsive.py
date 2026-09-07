@@ -62,10 +62,24 @@ def main() -> None:
             "id": 124, "deleted_from_source": 0,
             "colour_style": "--shift-location-colour: var(--location-colour-8);",
             "time_range": "09:00–18:00", "display_hours_label": "9h",
+            "display_window": {
+                "source": "roster", "start_label": "09:00", "end_label": "18:00",
+                "hours_label": "9h", "personal_override": False,
+            },
             "role_chain_label": "SVT", "role_full_label": "SVT", "role_label": "SVT", "title": "SVT",
             "track_label": "Te Aroha", "location": "Te Aroha", "race_type_label": "",
             "changed_since_viewed": 0, "source_status": "", "timing_adjustment_labels": [],
             "description": source_note, "description_lines": source_note.splitlines(),
+            "current_source_notes": [{
+                "shift_id": 124, "source_uid": "responsive:124", "role": "SVT",
+                "start_at": "2026-08-30T09:00:00+12:00", "end_at": "2026-08-30T18:00:00+12:00",
+                "description": source_note,
+            }],
+            "display_current_source_notes": [{
+                "shift_id": 124, "source_uid": "responsive:124", "role": "SVT",
+                "start_at": "2026-08-30T09:00:00+12:00", "end_at": "2026-08-30T18:00:00+12:00",
+                "description": source_note,
+            }],
             "roster_summary": {"has_structured": False},
             "race_day_summary": {"has_items": False, "source_note": "", "rows": []}, "changes": [],
             "timing_math": {
@@ -118,7 +132,7 @@ def main() -> None:
                     note_panel = page.locator(".roster-note-panel")
                     if note_panel.count() != 1 or page.locator(".roster-note-lines > p").count() != 2:
                         raise AssertionError(f"Roster-note panel did not preserve two source lines at {width}px / {theme}.")
-                    if page.locator(".raw-roster-note summary", has_text="Raw roster note").count() != 1:
+                    if page.locator(".raw-roster-note summary", has_text="Raw Deputy notes").count() != 1:
                         raise AssertionError(f"Raw roster-note disclosure is unavailable at {width}px / {theme}.")
                     if page.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1"):
                         raise AssertionError(f"Roster-note preview overflowed horizontally at {width}px / {theme}.")

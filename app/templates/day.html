@@ -266,10 +266,15 @@
           </section>
         {% endif %}
 
-        {% if shift.description and shift.description.strip() %}
+        {% if shift.display_current_source_notes %}
           <details class="raw-source raw-roster-note">
-            <summary>Raw roster note</summary>
-            <div class="raw-roster-note-content">{{ shift.description }}</div>
+            <summary>Raw Deputy notes</summary>
+            {% for note in shift.display_current_source_notes %}
+              <div class="raw-roster-note-content">
+                <small>{{ note.role or "Shift" }}{% if note.start_at and note.end_at %} · {{ note.start_at|time }}–{{ note.end_at|time }}{% endif %}</small>
+                <div>{{ note.description }}</div>
+              </div>
+            {% endfor %}
           </details>
         {% endif %}
 
@@ -364,15 +369,10 @@
 
         <details class="maths-panel maths-panel-compact">
           <summary>
-            {% if shift.timing_math.race_day.available and shift.timing_math.race_day.complete %}
-              Deputy roster: {{ shift.display_window.start_label }}–{{ shift.display_window.end_label }} = {{ shift.display_window.hours_label }}
-            {% elif shift.timing_math.race_day.available %}
-              Partial race-day calculation · {{ shift.timing_math.race_day.warning }}
-            {% else %}
-              Start {{ shift.timing_math.start_label }}, finish {{ shift.timing_math.end_label }} = {{ shift.timing_math.raw_label }}
-            {% endif %}
+            Hours calculation · {{ shift.display_window.start_label }}–{{ shift.display_window.end_label }} = {{ shift.display_window.hours_label }}
           </summary>
           <div class="maths-card">
+            <p><strong>Rostered hours</strong><br>{{ shift.display_window.start_label }}–{{ shift.display_window.end_label }} = {{ shift.display_window.hours_label }}</p>
             {% if shift.timing_math.segments|length > 1 and not shift.timing_math.race_day.available %}
               <dl class="timeline-list maths-segments">
                 {% for segment in shift.timing_math.segments %}
@@ -394,12 +394,7 @@
                 {% endfor %}
               </dl>
               <p>{{ shift.timing_math.race_day.formula }}</p>
-              <p class="muted">Roster shows {{ shift.timing_math.raw_label }}.</p>
-            {% else %}
-              <p>
-                {{ shift.timing_math.start_label }}-{{ shift.timing_math.end_label }}
-                = {{ shift.timing_math.raw_label }}.
-              </p>
+              {% if not shift.timing_math.race_day.complete %}<p class="calculation-warning">{{ shift.timing_math.race_day.warning }}. Finish and total remain incomplete.</p>{% endif %}
             {% endif %}
           </div>
         </details>
