@@ -253,12 +253,12 @@
               <p class="muted">{{ shift.race_day_summary.source_note }}</p>
             {% endif %}
           </section>
-        {% elif shift.description_lines %}
+        {% elif shift.current_note_display_lines %}
           <section class="description-block roster-note-section">
             <h3>Current roster note</h3>
             <div class="roster-note-panel">
               <div class="roster-note-lines">
-              {% for line in shift.description_lines %}
+              {% for line in shift.current_note_display_lines %}
                 <p>{{ line }}</p>
               {% endfor %}
               </div>

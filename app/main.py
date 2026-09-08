@@ -2585,6 +2585,11 @@ def decorate_shift(row: object) -> dict[str, object]:
     shift["race_day_prose_lines"] = (
         list(shift["description_lines"]) if current_note_is_production else []
     )
+    shift["current_note_display_lines"] = (
+        list(shift["description_lines"])
+        if current_note_is_production or is_travel_participant_cohort(role_short)
+        else []
+    )
     shift["current_source_notes"] = [{
         "shift_id": int(shift.get("id") or 0),
         "source_uid": str(shift.get("source_uid") or ""),
@@ -2804,17 +2809,31 @@ def merge_shift_pair(left: dict[str, object], right: dict[str, object]) -> dict[
     merged["current_source_notes"] = (
         list(left.get("current_source_notes") or []) + list(right.get("current_source_notes") or [])
     )
-    seen_note_text: set[str] = set()
+    seen_note_sources: set[tuple[object, ...]] = set()
     merged["display_current_source_notes"] = []
     for note in merged["current_source_notes"]:
-        note_text = re.sub(r"\s+", " ", str(note.get("description") or "").strip()).casefold()
-        if not note_text or note_text in seen_note_text:
+        note_text = str(note.get("description") or "").strip()
+        shift_id = safe_int(note.get("shift_id"))
+        source_uid = str(note.get("source_uid") or "").strip()
+        source_key: tuple[object, ...] = (
+            ("shift_id", shift_id) if shift_id is not None
+            else ("source_uid", source_uid) if source_uid
+            else (
+                "source_fallback", str(note.get("role") or ""),
+                str(note.get("start_at") or ""), str(note.get("end_at") or ""), note_text,
+            )
+        )
+        if not note_text or source_key in seen_note_sources:
             continue
-        seen_note_text.add(note_text)
+        seen_note_sources.add(source_key)
         merged["display_current_source_notes"].append(note)
     merged["description_lines"] = unique_description_lines(
         list(left.get("description_lines") or []),
         list(right.get("description_lines") or []),
+    )
+    merged["current_note_display_lines"] = unique_description_lines(
+        list(left.get("current_note_display_lines") or []),
+        list(right.get("current_note_display_lines") or []),
     )
     merged["race_day_prose_lines"] = unique_description_lines(
         list(left.get("race_day_prose_lines") or []),
@@ -3631,7 +3650,7 @@ def schedule_items_overlap(left: dict[str, object], right: dict[str, object]) ->
 
 
 def native_current_observation_contexts(item: dict[str, object]) -> set[str]:
-    """Native observations that positively saw this exact persisted row capture."""
+    """Observer-and-capture identities that positively saw this exact row."""
     captured_at = str(item.get("captured_at") or "")
     if not captured_at:
         return set()
@@ -3639,7 +3658,7 @@ def native_current_observation_contexts(item: dict[str, object]) -> set[str]:
     for value in str(item.get("native_observation_contexts") or "").split("\x1e"):
         observer_key, separator, observed_at = value.partition("\x1f")
         if separator and observer_key and observed_at == captured_at:
-            contexts.add(observer_key)
+            contexts.add(f"{observer_key}\x1f{observed_at}")
     return contexts
 
 
@@ -4091,6 +4110,7 @@ def schedule_people(
                 "sort_order": sort_order,
                 "changed": bool(person.get("changed")),
                 "change_summary": "; ".join(list(person.get("change_parts") or [])),
+                "last_changed_at": latest_iso_datetime(*list(person.get("change_times") or [])),
                 "change_time_label": format_datetime(latest_iso_datetime(*list(person.get("change_times") or [])), "%d %b %H:%M"),
                 "placeholder": False,
                 "concurrent_assignment_warning": "; ".join(list(person.get("concurrent_assignment_warnings") or [])),
@@ -4378,54 +4398,106 @@ def decorate_event_changes(rows: list[object]) -> list[dict[str, object]]:
 
 
 def compact_event_changes_for_current_state(
-    changes: list[dict[str, object]], people: list[dict[str, object]],
+    changes: list[dict[str, object]], _people: list[dict[str, object]],
 ) -> list[dict[str, object]]:
-    """Hide same-sync intermediate stories when one final group matches current crew."""
-    current: dict[str, set[str]] = {}
-    for person in people:
-        name_key = placeholder_assignment_key(person.get("employee_name"))
-        for position in str(person.get("position_label") or "").split(","):
-            position_key = schedule_label_key(position)
-            if position_key:
-                current.setdefault(position_key, set()).add(name_key)
+    """Hide only demonstrably superseded intermediate stories within one capture."""
 
-    def matches(change: dict[str, object]) -> bool:
-        change_type = str(change.get("change_type") or "")
-        positions = [
+    def positions(change: dict[str, object]) -> set[str]:
+        return {
             schedule_label_key(str(position))
-            for position in list(change.get("new_positions") or change.get("old_positions") or [])
+            for position in list(change.get("old_positions") or []) + list(change.get("new_positions") or [])
             if schedule_label_key(str(position))
-        ]
-        if not positions:
-            return False
-        if change_type == "opened":
-            return all("tbc" in current.get(position, set()) for position in positions)
-        if change_type == "roles_split":
-            return all(position in current for position in positions)
-        target = placeholder_assignment_key(change.get("new_employee_name"))
-        return any(target in current.get(position, set()) for position in positions)
+        }
 
     by_capture: dict[str, list[dict[str, object]]] = {}
     for change in changes:
         by_capture.setdefault(str(change.get("changed_at") or ""), []).append(change)
     compacted: list[dict[str, object]] = []
     for batch in by_capture.values():
-        group_ids = {str(change.get("group_id") or "") for change in batch}
-        if len(group_ids) <= 1:
-            compacted.extend(batch)
-            continue
-        groups: dict[str, list[dict[str, object]]] = {}
-        for change in batch:
-            groups.setdefault(str(change.get("group_id") or ""), []).append(change)
-        matching_groups = {
-            group_id for group_id, rows in groups.items()
-            if rows and all(matches(change) for change in rows)
-        }
-        compacted.extend(
-            change for change in batch
-            if not matching_groups or str(change.get("group_id") or "") in matching_groups
-        )
+        suppressed: set[int] = set()
+        for index, change in enumerate(batch):
+            old_name = placeholder_assignment_key(change.get("old_employee_name"))
+            new_name = placeholder_assignment_key(change.get("new_employee_name"))
+            if new_name == "tbc" and any(
+                other_index != index
+                and positions(other) == positions(change)
+                and placeholder_assignment_key(other.get("old_employee_name")) == old_name
+                and placeholder_assignment_key(other.get("new_employee_name")) != "tbc"
+                for other_index, other in enumerate(batch)
+            ):
+                suppressed.add(index)
+                continue
+            change_type = str(change.get("change_type") or "")
+            if change_type not in {"roles_split", "roles_merged"}:
+                continue
+            after_hash = str(change.get("after_hash") or "")
+            if after_hash and any(
+                other_index != index
+                and str(other.get("change_type") or "") in {"roles_split", "roles_merged"}
+                and str(other.get("change_type") or "") != change_type
+                and str(other.get("before_hash") or "") == after_hash
+                for other_index, other in enumerate(batch)
+            ):
+                suppressed.add(index)
+        compacted.extend(change for index, change in enumerate(batch) if index not in suppressed)
     return compacted
+
+
+def event_assignment_change_signatures(
+    changes: list[dict[str, object]],
+) -> set[tuple[str, str, str, str]]:
+    signatures: set[tuple[str, str, str, str]] = set()
+    for change in changes:
+        old_positions = {schedule_label_key(str(value)) for value in change.get("old_positions") or []}
+        new_positions = {schedule_label_key(str(value)) for value in change.get("new_positions") or []}
+        for position in old_positions & new_positions:
+            if position:
+                signatures.add((
+                    position,
+                    placeholder_assignment_key(change.get("old_employee_name")),
+                    placeholder_assignment_key(change.get("new_employee_name")),
+                    str(change.get("changed_at") or ""),
+                ))
+    return signatures
+
+
+def assignment_history_signature(item: dict[str, object]) -> tuple[str, str, str, str]:
+    return (
+        schedule_label_key(str(item.get("position_label") or "")),
+        placeholder_assignment_key(item.get("old_employee_name")),
+        placeholder_assignment_key(item.get("new_employee_name")),
+        str(item.get("changed_at") or ""),
+    )
+
+
+def filter_duplicate_assignment_history(
+    event_changes: list[dict[str, object]], history: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    event_signatures = event_assignment_change_signatures(event_changes)
+    return [item for item in history if assignment_history_signature(item) not in event_signatures]
+
+
+def schedule_change_signatures(person: dict[str, object]) -> set[tuple[str, str, str, str]]:
+    positions = [
+        schedule_label_key(value)
+        for value in str(person.get("position_label") or "").split(",")
+        if schedule_label_key(value)
+    ]
+    if len(positions) != 1:
+        return set()
+    signatures = set()
+    for part in str(person.get("change_summary") or "").split(";"):
+        body = part.strip()
+        if ":" in body:
+            body = body.split(":", 1)[1].strip()
+        match = re.match(r"^(.*?)\s*(?:→|->)\s*(.*?)$", body)
+        if match:
+            signatures.add((
+                positions[0], placeholder_assignment_key(match.group(1)),
+                placeholder_assignment_key(match.group(2)),
+                str(person.get("last_changed_at") or ""),
+            ))
+    return signatures
 
 
 def group_event_changes(changes: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -8157,43 +8229,16 @@ def day_view(
             item["old_employee_name"], item["new_employee_name"]
         )
     ]
-    event_position_keys = {
-        schedule_label_key(position)
-        for item in deputy_event_changes
-        for position in list(item.get("old_positions") or []) + list(item.get("new_positions") or [])
-        if schedule_label_key(position)
+    deputy_assignment_history = filter_duplicate_assignment_history(
+        deputy_event_changes, deputy_assignment_history
+    )
+    represented_change_signatures = event_assignment_change_signatures(deputy_event_changes) | {
+        assignment_history_signature(item) for item in deputy_assignment_history
     }
-    event_assignments = {
-        (schedule_label_key(position), schedule_label_key(str(item.get("new_employee_name") or "TBC")))
-        for item in deputy_event_changes
-        for position in list(item.get("new_positions") or [])
-    }
-    deputy_assignment_history = [
-        item
-        for item in deputy_assignment_history
-        if schedule_label_key(item["position_label"]) not in event_position_keys
-        and (
-            schedule_label_key(item["position_label"]),
-            schedule_label_key(item["new_employee_name"]),
-        ) not in event_assignments
-    ]
-    historical_assignments = {
-        (schedule_label_key(item["position_label"]), schedule_label_key(item["new_employee_name"]))
-        for item in deputy_assignment_history
-    } | event_assignments
     deputy_schedule_changes = [
         person
         for person in deputy_schedule_changes
-        if not {
-            schedule_label_key(position)
-            for position in str(person.get("position_label") or "").split(",")
-            if schedule_label_key(position)
-        } & event_position_keys
-        and (
-            schedule_label_key(str(person.get("position_label") or "")),
-            schedule_label_key(str(person.get("employee_name") or "")),
-        )
-        not in historical_assignments
+        if not schedule_change_signatures(person) & represented_change_signatures
     ]
     day_total = sum(
         shift_hours_value(shift)

@@ -623,6 +623,61 @@ def main() -> None:
     ) != "VT: Darryl Cribb → James Topping":
         raise AssertionError("Concurrent display suffix contaminated semantic change-history labels.")
 
+    def save_native_vt_capture(date_text: str, capture_at: str, rows: list[dict[str, object]], owner_id: int = 1) -> list[dict[str, object]]:
+        capture_rows = [
+            {
+                "id": row["id"], "area": 776, "areaName": "VT", "areaLocationId": 64,
+                "employee": row["employee"], "employeeName": row["employeeName"],
+                "start": f"{date_text}T09:00:00+12:00", "end": f"{date_text}T19:30:00+12:00",
+                "duration": 37800, "isOpen": False, "isPublished": True,
+            }
+            for row in rows
+        ]
+        save_deputy_web_schedule({
+            "captured_at": capture_at, "areas": [vt_area],
+            "locations": [{"id": 64, "name": "T-Cambridge"}], "extracted_shifts": [],
+            "extracted_schedule_shifts": capture_rows,
+            "native_schedule_shift_ids": [int(row["id"]) for row in rows],
+            "direct_schedule_shift_ids": [], "schedule_coverage": [], "own_roster_coverage": [],
+        }, owner_user_id=owner_id)
+        return schedule_people(fetch_deputy_schedule_for_date(date_text, [64]), include_placeholders=False)
+
+    vt_a = {"id": 51001, "employee": 59, "employeeName": "Darryl Cribb"}
+    vt_b = {"id": 51002, "employee": 77, "employeeName": "James Topping"}
+    replacement_vt_date = (now + timedelta(days=36)).date().isoformat()
+    save_native_vt_capture(replacement_vt_date, (now + timedelta(minutes=21)).isoformat(), [vt_a])
+    replacement_vt_people = save_native_vt_capture(
+        replacement_vt_date, (now + timedelta(minutes=22)).isoformat(), [vt_b]
+    )
+    if [(row["position_label"], row["employee_name"]) for row in replacement_vt_people] != [("VT", "James Topping")]:
+        raise AssertionError(f"Sequential same-observer VT rows fabricated concurrency: {replacement_vt_people!r}")
+
+    growing_vt_date = (now + timedelta(days=37)).date().isoformat()
+    save_native_vt_capture(growing_vt_date, (now + timedelta(minutes=23)).isoformat(), [vt_a])
+    growing_vt_people = save_native_vt_capture(
+        growing_vt_date, (now + timedelta(minutes=24)).isoformat(), [vt_a, vt_b]
+    )
+    if [(row["position_label"], row["employee_name"]) for row in growing_vt_people] != [
+        ("VT 1", "Darryl Cribb"), ("VT 2", "James Topping"),
+    ]:
+        raise AssertionError(f"Same-capture A+B VT evidence was not retained: {growing_vt_people!r}")
+
+    shrinking_vt_date = (now + timedelta(days=38)).date().isoformat()
+    save_native_vt_capture(shrinking_vt_date, (now + timedelta(minutes=25)).isoformat(), [vt_a, vt_b])
+    shrinking_vt_people = save_native_vt_capture(
+        shrinking_vt_date, (now + timedelta(minutes=26)).isoformat(), [vt_b]
+    )
+    if [(row["position_label"], row["employee_name"]) for row in shrinking_vt_people] != [("VT", "James Topping")]:
+        raise AssertionError(f"A+B followed by B-only retained stale VT A: {shrinking_vt_people!r}")
+
+    conflicting_vt_date = (now + timedelta(days=39)).date().isoformat()
+    save_native_vt_capture(conflicting_vt_date, (now + timedelta(minutes=27)).isoformat(), [vt_a], owner_id=1)
+    conflicting_vt_people = save_native_vt_capture(
+        conflicting_vt_date, (now + timedelta(minutes=28)).isoformat(), [vt_b], owner_id=2
+    )
+    if len(conflicting_vt_people) != 1 or conflicting_vt_people[0]["position_label"] != "VT" or not conflicting_vt_people[0].get("conflict_warning"):
+        raise AssertionError(f"Cross-observer VT disagreement fabricated concurrency or hid conflict: {conflicting_vt_people!r}")
+
     def concurrent_row(source_id: int, employee_id: int, *, context: str = "user:1:native_get_rosters", captured_at: str = "2026-09-01T10:00:00+12:00") -> dict[str, object]:
         return {
             "source_shift_id": source_id, "employee_id": employee_id, "employee_name": f"Crew {employee_id}",

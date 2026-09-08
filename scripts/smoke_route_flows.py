@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -766,6 +767,116 @@ def main() -> None:
         raise AssertionError(f"Vehicle/context prose was not retained in Raw Deputy notes: {paired!r}")
     if paired["description"] != production_source["description"]:
         raise AssertionError("Current-note bundling overwrote the primary raw description.")
+
+    second_production = decorate_shift({
+        **paired_base, "id": 70011, "source_uid": "web:70011", "title": "[T-Ruakaka] Director",
+        "description": "Second production instruction",
+        "start_at": "2026-09-02T12:00:00+12:00", "end_at": "2026-09-02T15:00:00+12:00",
+    })
+    production_pair = combine_adjacent_shifts([production_source, second_production])[0]
+    if production_pair.get("current_note_display_lines") != [
+        "On track 1000", "Current production instruction", "Second production instruction",
+    ]:
+        raise AssertionError(f"Combined source-appropriate current notes were not preserved: {production_pair!r}")
+
+    identical_note = "Same current note"
+    identical_context = decorate_shift({
+        **paired_base, "id": 70003, "source_uid": "web:70003", "title": "[T-Ruakaka] 684",
+        "description": identical_note,
+        "start_at": "2026-09-03T09:00:00+12:00", "end_at": "2026-09-03T09:30:00+12:00",
+    })
+    identical_production = decorate_shift({
+        **paired_base, "id": 70004, "source_uid": "web:70004", "title": "[T-Ruakaka] Director",
+        "description": identical_note,
+        "start_at": "2026-09-03T09:30:00+12:00", "end_at": "2026-09-03T18:00:00+12:00",
+    })
+    identical_pair = combine_adjacent_shifts([identical_context, identical_production])[0]
+    if len(identical_pair["display_current_source_notes"]) != 2:
+        raise AssertionError(f"Equal note text collapsed two distinct Deputy sources: {identical_pair!r}")
+
+    context_only = decorate_shift({
+        **paired_base, "id": 70005, "source_uid": "web:70005", "title": "[T-Ruakaka] 684",
+        "description": "Generated from custom service via Deputy API",
+        "start_at": "2026-09-04T09:00:00+12:00", "end_at": "2026-09-04T09:30:00+12:00",
+    })
+    blank_production = decorate_shift({
+        **paired_base, "id": 70006, "source_uid": "web:70006", "title": "[T-Ruakaka] Director",
+        "description": "",
+        "start_at": "2026-09-04T09:30:00+12:00", "end_at": "2026-09-04T18:00:00+12:00",
+    })
+    context_only_pair = combine_adjacent_shifts([context_only, blank_production])[0]
+    if context_only_pair.get("current_note_display_lines") != []:
+        raise AssertionError(f"Context prose remained eligible for the main note fallback: {context_only_pair!r}")
+
+    mixed_context = {**context_only, "id": 70007, "source_uid": "web:70007", "description": "Context instructions"}
+    mixed_production = {**blank_production, "id": 70008, "source_uid": "web:70008", "description": "Production instructions"}
+    mixed_pair = combine_adjacent_shifts([
+        decorate_shift(mixed_context), decorate_shift(mixed_production),
+    ])[0]
+    if mixed_pair.get("current_note_display_lines") != ["Production instructions"]:
+        raise AssertionError(f"Main-note prose did not stay production-source scoped: {mixed_pair!r}")
+
+    timing_context = decorate_shift({
+        **context_only, "id": 70009, "source_uid": "web:70009",
+        "description": "On track 0945\nContext chatter",
+    })
+    timing_pair = combine_adjacent_shifts([timing_context, blank_production])[0]
+    timing_summary = build_race_day_summary(timing_pair, {})
+    if ("On track", "09:45") not in {(row["label"], row["value"]) for row in timing_summary["rows"]}:
+        raise AssertionError(f"Paired context timing was not retained: {timing_summary!r}")
+    if timing_summary["note_lines"] or timing_pair.get("current_note_display_lines"):
+        raise AssertionError(f"Unstructured context prose escaped into the main Day note: {timing_pair!r}")
+
+    travel_note_shift = decorate_shift({
+        **paired_base, "id": 70010, "source_uid": "web:70010", "title": "[Travel] Travel then Overnighter",
+        "description": "Drive to Ruakaka and check in",
+        "start_at": "2026-09-05T13:00:00+12:00", "end_at": "2026-09-05T17:00:00+12:00",
+    })
+    if travel_note_shift.get("current_note_display_lines") != ["Drive to Ruakaka and check in"]:
+        raise AssertionError(f"Useful Travel-only note was hidden: {travel_note_shift!r}")
+
+    render_rows = [
+        ("render-context-only-684", "[T-Ruakaka] 684", "Generated from custom service via Deputy API", "2030-09-04T09:00:00+12:00", "2030-09-04T09:30:00+12:00", "2030-09-04"),
+        ("render-context-only-dir", "[T-Ruakaka] Director", "", "2030-09-04T09:30:00+12:00", "2030-09-04T18:00:00+12:00", "2030-09-04"),
+        ("render-identical-684", "[T-Ruakaka] 684", identical_note, "2030-09-05T09:00:00+12:00", "2030-09-05T09:30:00+12:00", "2030-09-05"),
+        ("render-identical-dir", "[T-Ruakaka] Director", identical_note, "2030-09-05T09:30:00+12:00", "2030-09-05T18:00:00+12:00", "2030-09-05"),
+        ("render-timing-684", "[T-Ruakaka] 684", "On track 0945\nContext chatter", "2030-09-06T09:00:00+12:00", "2030-09-06T09:30:00+12:00", "2030-09-06"),
+        ("render-timing-dir", "[T-Ruakaka] Director", "", "2030-09-06T09:30:00+12:00", "2030-09-06T18:00:00+12:00", "2030-09-06"),
+        ("render-travel-note", "[Travel] Travel then Overnighter", "Drive to Ruakaka and check in", "2030-09-07T13:00:00+12:00", "2030-09-07T17:00:00+12:00", "2030-09-07"),
+    ]
+    with get_connection() as conn:
+        conn.executemany(
+            """INSERT INTO shifts (
+                   source_uid,owner_user_id,title,description,start_at,end_at,date,
+                   raw_hours,paid_hours,deleted_from_source,source_payload
+               ) VALUES (?,?,?,?,?,?,?,?,?,0,?)""",
+            [
+                (row[0], int(admin_user["id"]), *row[1:],
+                 0.5 if "684" in row[1] else 4.0, 0.5 if "684" in row[1] else 4.0,
+                 '{"normalised":{"area_location_id":64}}')
+                for row in render_rows
+            ],
+        )
+
+    context_page = client.get("/day/2030-09-04").text
+    context_raw = re.search(r'<details class="raw-source raw-roster-note".*?</details>', context_page, re.S)
+    context_main = re.sub(r'<details class="raw-source raw-roster-note".*?</details>', "", context_page, flags=re.S)
+    if not context_raw or "Generated from custom service via Deputy API" not in context_raw.group(0) or "Generated from custom service via Deputy API" in context_main:
+        raise AssertionError("Context-only prose did not remain Raw-only through the real Day route.")
+
+    identical_page = client.get("/day/2030-09-05").text
+    identical_raw = re.search(r'<details class="raw-source raw-roster-note".*?</details>', identical_page, re.S)
+    if not identical_raw or identical_raw.group(0).count(identical_note) != 2 or "684" not in identical_raw.group(0) or "Director" not in identical_raw.group(0):
+        raise AssertionError(f"Raw Deputy notes did not render both equal-text source rows: {identical_raw.group(0) if identical_raw else ''}")
+
+    timing_page = client.get("/day/2030-09-06").text
+    timing_main = re.sub(r'<details class="raw-source raw-roster-note".*?</details>', "", timing_page, flags=re.S)
+    if "On track" not in timing_main or "09:45" not in timing_main or "Context chatter" in timing_main:
+        raise AssertionError("Context timing/prose separation failed through the real Day route.")
+
+    travel_page = client.get("/day/2030-09-07").text
+    if "Current roster note" not in travel_page or "Drive to Ruakaka and check in" not in travel_page:
+        raise AssertionError("Travel-only useful current note was hidden by source-aware fallback.")
 
     settings_page = client.get("/settings")
     if settings_page.status_code != 200 or "Your Roster" not in settings_page.text:

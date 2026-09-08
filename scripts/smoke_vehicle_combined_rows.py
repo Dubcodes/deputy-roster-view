@@ -190,4 +190,23 @@ assert (note_conflict_with_structured["vehicle"], note_conflict_with_structured[
 assert note_conflict_with_structured["vehicle_evidence"]["roster_note_conflict"] is True
 assert note_conflict_with_structured["vehicle_evidence"]["preceding_travel_value"] == "Rav91"
 
+# Investigation guard: a source-shaped blank employee=0 placeholder currently
+# adds an inert internal cohort entry, but must not steal a named allocation,
+# become the target person, or create a visible vehicle conflict.
+zero_placeholder = single(
+    [row("zero-placeholder-current", description="684 Jayden")],
+    structured_rows=[
+        row(
+            "zero-placeholder-structured", "CCU1", "", employee_id=0,
+            employee_name="",
+        ),
+    ],
+    person_identity=JAYDEN,
+    identity_records=IDENTITIES,
+)
+assert (zero_placeholder["vehicle"], zero_placeholder["vehicle_provenance"]) == (
+    "684", "current_roster_note",
+)
+assert zero_placeholder["vehicle_conflict"] is False
+
 print("combined Deputy vehicle interpretation smoke ok")

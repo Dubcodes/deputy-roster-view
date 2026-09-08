@@ -326,6 +326,7 @@ def render_roster_note_template() -> None:
             "timing_adjustment_labels": [],
             "description": description,
             "description_lines": lines,
+            "current_note_display_lines": lines,
             "display_current_source_notes": ([{
                 "role": "SVT", "start_at": "2026-08-30T09:00:00+12:00",
                 "end_at": "2026-08-30T18:00:00+12:00", "description": description,

@@ -8325,7 +8325,6 @@ def _retire_positive_schedule_replacements(
     position = _event_position(values.get("area_name"))
     if (
         position is None
-        or position[0] == "vt"
         or not _event_item_has_named_person(values)
         or _event_lock_row(
             conn,

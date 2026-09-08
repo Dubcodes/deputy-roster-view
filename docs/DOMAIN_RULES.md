@@ -6,7 +6,7 @@
 - VT is the only maximum-two exception: one assigned person displays `VT`; exactly two co-observed assigned people display `VT 1` and `VT 2`; an open row is not person two; excess rows are preserved diagnostically and never display `VT 3`.
 - Combined `Sound/VT` stays combined unless a different overlapping assigned VT employee proves a split. Personal Sound/SVT/VT evidence confirms a compatible shared row by employee identity instead of adding another person.
 - Vehicle/context Areas may enrich a person but are not crew vacancies and do not set global race-day start/finish. The earliest and latest genuine production assignments define that window; a real Travel cohort remains a legitimate Travel event.
-- Every paired current Deputy source row keeps its own current raw note in `current_source_notes`. Race Day timing and prose may use all notes in that bundle. Historical description changes remain history-only.
+- Every paired current Deputy source row keeps its own raw note and provenance in `current_source_notes`, even when two source rows contain identical text. Recognized timing may come from any correctly paired current note, and vehicle/context notes may feed vehicle or allocation interpretation. Ordinary free-text Race Day prose comes from the production/race-day source; vehicle/context free prose stays in Raw Deputy notes instead of being promoted. Historical description changes remain history-only.
 
 ## Racing Codes
 

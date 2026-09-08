@@ -70,6 +70,7 @@ def main() -> None:
             "track_label": "Te Aroha", "location": "Te Aroha", "race_type_label": "",
             "changed_since_viewed": 0, "source_status": "", "timing_adjustment_labels": [],
             "description": source_note, "description_lines": source_note.splitlines(),
+            "current_note_display_lines": source_note.splitlines(),
             "current_source_notes": [{
                 "shift_id": 124, "source_uid": "responsive:124", "role": "SVT",
                 "start_at": "2026-08-30T09:00:00+12:00", "end_at": "2026-08-30T18:00:00+12:00",

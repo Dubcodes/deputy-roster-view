@@ -35,6 +35,7 @@ def main() -> None:
         decorate_change,
         decorate_event_changes,
         extract_roster_time_token,
+        filter_duplicate_assignment_history,
         group_event_changes,
         parse_roster_summary,
         parse_roster_time_token,
@@ -384,10 +385,12 @@ def main() -> None:
          "old_employee_name": "Alf", "new_employee_name": "Ryan Beaven"},
         {**base_change, "group_id": "audio-intermediate", "changed_at": changed_at,
          "change_type": "roles_split", "old_positions": ["Sound/VT"], "new_positions": ["Sound", "VT"],
-         "old_employee_name": "Ryan Beaven", "new_employee_name": "Ryan Beaven"},
+         "old_employee_name": "Ryan Beaven", "new_employee_name": "Ryan Beaven",
+         "before_hash": "audio-before", "after_hash": "audio-intermediate"},
         {**base_change, "group_id": "audio-final", "changed_at": changed_at,
          "change_type": "roles_merged", "old_positions": ["Sound", "VT"], "new_positions": ["Sound/VT"],
-         "old_employee_name": "Jayden-lee", "new_employee_name": "Ryan Beaven"},
+         "old_employee_name": "Jayden-lee", "new_employee_name": "Ryan Beaven",
+         "before_hash": "audio-intermediate", "after_hash": "audio-final"},
         {**base_change, "group_id": "gimbal-intermediate", "changed_at": changed_at,
          "change_type": "opened", "old_positions": ["Gimbal"], "new_positions": ["Gimbal"],
          "old_employee_name": "Alf", "new_employee_name": "TBC"},
@@ -398,6 +401,40 @@ def main() -> None:
     ])
     if {row["group_id"] for row in compacted} != {"gimbal-final", "audio-final"}:
         raise AssertionError(f"Same-sync intermediate history was not compacted to final state: {compacted!r}")
+
+    # Historical groups are judged within their capture, never against crew
+    # who changed later. Both independent T1 fills and the later T2 replacement
+    # must remain visible.
+    historical_changes = [
+        {**base_change, "group_id": "t1-side", "changed_at": "2026-09-07T10:00:00+12:00",
+         "change_type": "filled", "old_positions": ["Side 1"], "new_positions": ["Side 1"],
+         "old_employee_name": "TBC", "new_employee_name": "Nate"},
+        {**base_change, "group_id": "t1-director", "changed_at": "2026-09-07T10:00:00+12:00",
+         "change_type": "filled", "old_positions": ["Director"], "new_positions": ["Director"],
+         "old_employee_name": "TBC", "new_employee_name": "Luke"},
+        {**base_change, "group_id": "t2-director", "changed_at": "2026-09-07T11:00:00+12:00",
+         "change_type": "replacement", "old_positions": ["Director"], "new_positions": ["Director"],
+         "old_employee_name": "Luke", "new_employee_name": "Grant"},
+    ]
+    retained_history = compact_event_changes_for_current_state(historical_changes, [
+        {"position_label": "Side 1", "employee_name": "Nate"},
+        {"position_label": "Director", "employee_name": "Grant"},
+    ])
+    if [row["group_id"] for row in retained_history] != ["t1-side", "t1-director", "t2-director"]:
+        raise AssertionError(f"Later current crew erased genuine earlier history: {retained_history!r}")
+
+    exact_event = [
+        {**historical_changes[0], "changed_at": "2026-09-07T10:00:00+12:00"},
+    ]
+    row_history = [
+        {"position_label": "Side 1", "old_employee_name": "TBC", "new_employee_name": "Nate",
+         "changed_at": "2026-09-07T10:00:00+12:00"},
+        {"position_label": "Side 1", "old_employee_name": "Alf", "new_employee_name": "Nate",
+         "changed_at": "2026-09-06T10:00:00+12:00"},
+    ]
+    deduped_row_history = filter_duplicate_assignment_history(exact_event, row_history)
+    if deduped_row_history != [row_history[1]]:
+        raise AssertionError(f"History dedupe was not exact by change and capture: {deduped_row_history!r}")
 
     event_base = {"position_key": "side2", "position_label": "Side 2", "start_at": "2026-09-01T09:00:00+12:00", "end_at": "2026-09-01T17:00:00+12:00"}
     initial = _compare_event_assignments(
