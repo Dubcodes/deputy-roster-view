@@ -18,7 +18,7 @@ from .database import (
     create_sync_generation,
     get_calendar_url,
     get_due_user_syncs,
-    get_latest_deputy_web_capture_for_user,
+    get_recent_deputy_web_captures_for_user,
     get_next_upcoming_shift,
     has_deputy_schedule_changes_for_date,
     list_syncable_app_users,
@@ -67,30 +67,46 @@ def _capture_payload(row: object) -> dict[str, object]:
 
 
 def _payload_has_successful_shared_capture(payload: dict[str, object]) -> bool:
-    if payload.get("shared_capture_success") is True:
-        return True
     native_ids = payload.get("native_schedule_shift_ids")
     coverage = payload.get("management_schedule_coverage")
-    return bool(isinstance(native_ids, list) and native_ids) and any(
-        isinstance(item, dict)
-        and str(item.get("status") or "") == "complete"
-        and int(item.get("row_count") or 0) > 0
-        for item in (coverage if isinstance(coverage, list) else [])
+    required_windows = coverage if isinstance(coverage, list) else []
+    return (
+        bool(isinstance(native_ids, list) and native_ids)
+        and bool(required_windows)
+        and all(
+            isinstance(item, dict) and str(item.get("status") or "") == "complete"
+            for item in required_windows
+        )
+        and any(
+            isinstance(item, dict) and int(item.get("row_count") or 0) > 0
+            for item in required_windows
+        )
     )
+
+
+def _latest_successful_shared_capture_for_user(user_id: int) -> object | None:
+    for row in get_recent_deputy_web_captures_for_user(user_id):
+        if str(row["status"] or "") != "ok":
+            continue
+        payload = _capture_payload(row)
+        if str(payload.get("capture_scope") or "") == "personal_only":
+            continue
+        if _payload_has_successful_shared_capture(payload):
+            return row
+    return None
 
 
 def _shared_capture_after(users: list[object], since: str) -> bool:
     for user in users:
-        row = get_latest_deputy_web_capture_for_user(int(user["id"]))  # type: ignore[index]
+        row = _latest_successful_shared_capture_for_user(int(user["id"]))  # type: ignore[index]
         if row is None or str(row["captured_at"] or "") < since:
             continue
-        if _payload_has_successful_shared_capture(_capture_payload(row)):
-            return True
+        return True
     return False
 
 
 def _shared_proof_score(user: object) -> int:
-    row = get_latest_deputy_web_capture_for_user(int(user["id"]))  # type: ignore[index]
+    row = _latest_successful_shared_capture_for_user(int(user["id"]))  # type: ignore[index]
     payload = _capture_payload(row)
     native_ids = payload.get("native_schedule_shift_ids")
     score = len(native_ids) if isinstance(native_ids, list) else 0

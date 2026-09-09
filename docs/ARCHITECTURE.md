@@ -2,7 +2,7 @@
 
 ## Roster evidence to presentation pipeline
 
-Authenticated own-roster capture persists owner-scoped `shifts` and `deputy_personal_assignment_evidence`. Shared native `getRosters` and direct searches persist stable `deputy_schedule_shifts` plus source-specific rows in `deputy_schedule_observations`. Direct negative evidence is destructive only inside the observer and proven coverage scope that produced it; native evidence is currently positive-only.
+Authenticated own-roster capture persists owner-scoped `shifts` and `deputy_personal_assignment_evidence`. Shared native `getRosters` and direct searches persist stable `deputy_schedule_shifts` plus source-specific rows in `deputy_schedule_observations`. Direct negative evidence is destructive only inside the observer and proven coverage scope that produced it. Native evidence is normally positive-only; retirement is allowed only for an explicitly complete, bounded native coverage window, never for partial or inferred coverage.
 
 `_effective_event_snapshots()` reads rows with active observation support and produces stable event state for Change History. Named assignments rank above vacancies, and source identity—not the last syncing account—breaks unresolved named conflicts until coverage retires one source row. Presentation then canonicalizes one ordinary assignment per role, applies the bounded VT exception, resolves Sound/SVT/VT, attaches vehicle context, and reconciles compatible personal evidence by employee identity.
 
@@ -44,7 +44,7 @@ Global Crew aggregation excludes vehicle and operational-context rows from event
 
 It should prefer an All Locations schedule capture. If that is not selectable, it falls back to upcoming known roster locations.
 
-After login, it also asks Deputy's own web endpoint for the user's personal published shifts over a rolling window. Defaults are 35 days back and 56 days forward, configurable with `OWN_ROSTER_LOOKBACK_DAYS` and `OWN_ROSTER_LOOKAHEAD_DAYS`. The capture is split into weekly requests because Deputy can return only the first page/chunk when asked for one large date range. Row-level Deputy `location` and `locationName` values from this endpoint are treated as authoritative for the user's own shifts.
+After login, it also captures the signed-in user's published shifts over a rolling window. Authenticated page responses are preferred when they provide useful coverage; management-list fallback requests fill only missing coverage and stop on authorization failure rather than claiming absence. Defaults are 35 days back and 56 days forward, configurable with `OWN_ROSTER_LOOKBACK_DAYS` and `OWN_ROSTER_LOOKAHEAD_DAYS`. Weekly coverage records remain explicit because failed, partial, and truncated responses cannot prove a missing assignment. Row-level Deputy `location` and `locationName` values from this endpoint are treated as authoritative for the user's own shifts.
 
 For crew coverage, the capture also learns Deputy's primary location list and then performs weekly all-location schedule-search requests. If that broad read fails, it falls back to batched selected-location searches for known racing locations. This avoids relying only on the visible roster page when All Locations cannot be selected and helps fill shared crew rows for other users. Direct shared schedule capture is capped at 42 days ahead by default to keep multi-user syncs polite.
 
@@ -105,6 +105,8 @@ Race-day calculation resolves start origin and finish destination separately usi
 `user_sync_state` stores the next planned sync time, last result, and running flag for each active user with saved Deputy credentials.
 
 `scheduler.py` does not launch every account at once. Daily and pre-shift triggers call `plan_staggered_user_syncs`, which spreads users by `USER_SYNC_STAGGER_MINUTES` plus small deterministic jitter. `run_due_user_syncs` wakes every five minutes and processes up to `USER_SYNC_BATCH_SIZE` due accounts, default one.
+
+Each scheduler generation seeks one qualifying shared capture, then lets remaining accounts perform personal-only work. A qualifying shared capture requires native shared rows and complete coverage for every required native management window; one successful window cannot mask another partial window, and direct-search completeness cannot substitute for native acquisition because direct coverage is authoritative only for its own source. Manual syncs may reuse the latest qualifying shared capture for 90 minutes. Newer personal-only or failed diagnostics do not hide that proof, and account ordering uses the same latest qualifying capture. If the selected shared account fails to establish proof, the next suitable account may attempt shared capture in the same generation.
 
 After a successful roster sync, upcoming Thoroughbred date/location pairs inside 72 hours can enqueue stale meeting details. A separate scheduler job services the global Love Racing detail queue, so the user-facing roster sync response does not wait for browser captures.
 

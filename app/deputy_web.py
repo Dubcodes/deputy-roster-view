@@ -1904,10 +1904,14 @@ async def run_deputy_web_capture(
         "shared_capture_success": bool(
             include_shared
             and extracted_schedule_shifts
-            and any(
-                str(item.get("status") or "") == "complete" and int(item.get("row_count") or 0) > 0
+            and management_schedule_coverage
+            and all(
+                isinstance(item, dict) and str(item.get("status") or "") == "complete"
                 for item in management_schedule_coverage
-                if isinstance(item, dict)
+            )
+            and any(
+                isinstance(item, dict) and int(item.get("row_count") or 0) > 0
+                for item in management_schedule_coverage
             )
         ),
     }

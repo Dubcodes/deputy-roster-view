@@ -140,6 +140,21 @@ def main() -> None:
         "payload": {"capture_scope": "personal_only", "own_roster_coverage": []},
     }) == "error"
 
+    partial_shared = {
+        "capture_scope": "shared_and_personal",
+        "shared_capture_success": True,
+        "native_schedule_shift_ids": [1, 2],
+        "management_schedule_coverage": [
+            {"status": "complete", "row_count": 100},
+            {"status": "partial", "row_count": 0},
+        ],
+        "direct_schedule_coverage": [{"status": "complete"}],
+    }
+    assert not scheduler._payload_has_successful_shared_capture(partial_shared), (
+        "One successful native week must not hide incomplete required shared coverage, "
+        "even when direct coverage is complete for its narrower authority."
+    )
+
     notice_user = {
         "has_deputy_credentials": True,
         "last_sync_status": "partial",
@@ -165,6 +180,22 @@ def main() -> None:
     users = [{"id": 1}, {"id": 2}]
     assert [int(user["id"]) for user in scheduler._ordered_syncable_users(users)] == [2, 1]
     assert scheduler._shared_capture_after(users, (now - timedelta(minutes=1)).isoformat())
+    for offset, status, payload in (
+        (10, "ok", {"capture_scope": "personal_only", "shared_capture_success": False}),
+        (20, "login_failed", {"capture_scope": "personal_only", "shared_capture_success": False}),
+    ):
+        save_deputy_web_capture_diagnostic(
+            owner_user_id=2,
+            captured_at=(now + timedelta(minutes=offset)).isoformat(),
+            status=status,
+            message="newer unrelated personal diagnostic",
+            payload=json.dumps(payload),
+        )
+        assert scheduler._shared_capture_after(users, (now - timedelta(minutes=1)).isoformat()), (
+            "A newer personal-only/error diagnostic hid the earlier valid shared proof."
+        )
+        assert [int(user["id"]) for user in scheduler._ordered_syncable_users(users)] == [2, 1]
+    assert not scheduler._shared_capture_after(users, (now + timedelta(minutes=1)).isoformat())
 
     # One generation performs one shared pass, but every member gets its own
     # authenticated personal refresh.
@@ -231,13 +262,13 @@ def main() -> None:
             setattr(scheduler, name, value)
 
     # A manual user refresh reuses fresh shared evidence and stays personal-only.
-    original_fresh = scheduler._shared_capture_is_fresh
     original_settings_for_user = scheduler.settings_for_user
     original_web = scheduler.sync_deputy_web_schedule
     original_log = scheduler.write_sync_log
+    original_users = scheduler.list_syncable_app_users
     manual_calls: list[tuple[int | None, bool, bool]] = []
     try:
-        scheduler._shared_capture_is_fresh = lambda _settings: True
+        scheduler.list_syncable_app_users = lambda: users
         scheduler.settings_for_user = lambda _user_id, base: base
         scheduler.write_sync_log = lambda _entry: None
 
@@ -263,7 +294,7 @@ def main() -> None:
         assert manual["status"] == "partial"
         assert manual_calls == [(1, False, True)]
     finally:
-        scheduler._shared_capture_is_fresh = original_fresh
+        scheduler.list_syncable_app_users = original_users
         scheduler.settings_for_user = original_settings_for_user
         scheduler.sync_deputy_web_schedule = original_web
         scheduler.write_sync_log = original_log
@@ -283,7 +314,7 @@ def main() -> None:
         generation = conn.execute("SELECT status FROM sync_generations WHERE id=?", (generation_id,)).fetchone()
     assert member["status"] == "partial" and generation["status"] == "complete"
 
-    print("0.5.21 sync coordination smoke passed")
+    print("0.5.22 shared sync coordination smoke passed")
 
 
 if __name__ == "__main__":

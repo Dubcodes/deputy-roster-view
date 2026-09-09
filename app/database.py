@@ -7198,6 +7198,24 @@ def get_latest_deputy_web_capture_for_user(owner_user_id: int) -> sqlite3.Row | 
         ).fetchone()
 
 
+def get_recent_deputy_web_captures_for_user(
+    owner_user_id: int,
+    limit: int = 12,
+) -> list[sqlite3.Row]:
+    """Return only the bounded diagnostic history already retained per user."""
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT *
+            FROM deputy_web_captures
+            WHERE owner_user_id = ?
+            ORDER BY captured_at DESC, id DESC
+            LIMIT ?
+            """,
+            (owner_user_id, max(1, min(int(limit or 12), 12))),
+        ).fetchall()
+
+
 def get_roster_integrity_diagnostics() -> dict[str, object]:
     today_text = datetime.now(get_settings().timezone).date().isoformat()
     with get_connection() as conn:
