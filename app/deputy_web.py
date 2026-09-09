@@ -642,7 +642,19 @@ async def _paginate_schedule_search(
     return {"pages": pages, "complete": False, "status": status, "error": error}
 
 
-async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
+def _personal_endpoint_forbidden(status: object) -> bool:
+    try:
+        return int(status or 0) in {401, 403}
+    except (TypeError, ValueError):
+        return False
+
+
+async def run_deputy_web_capture(
+    settings: Settings,
+    *,
+    include_shared: bool = True,
+    include_personal: bool = True,
+) -> DeputyWebCaptureResult:
     if not settings.deputy_login_configured:
         return DeputyWebCaptureResult(
             status="missing",
@@ -689,13 +701,16 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
     login_problem_message = ""
     login_response_events: list[str] = []
     target_track_groups = _target_schedule_track_groups(settings)
-    events.append("Target schedule view: All Locations.")
-    if target_track_groups:
+    if include_shared:
+        events.append("Target schedule view: All Locations.")
+    else:
+        events.append("Shared schedule capture reused; refreshing authenticated personal evidence only.")
+    if include_shared and target_track_groups:
         target_labels = ", ".join(group[0] for group in target_track_groups[:8])
         extra_count = max(0, len(target_track_groups) - 8)
         suffix = f", +{extra_count} more" if extra_count else ""
         events.append(f"Fallback schedule tracks: {target_labels}{suffix}.")
-    else:
+    elif include_shared:
         events.append("No upcoming shift track found for fallback schedule selection.")
 
     try:
@@ -992,6 +1007,30 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                         captured_employee_id = value_text
 
                 async def capture_extended_own_roster() -> None:
+                    now = datetime.now(settings.timezone)
+                    lookback_days = max(0, settings.own_roster_lookback_days)
+                    lookahead_days = max(1, settings.own_roster_lookahead_days)
+                    start_at = (now - timedelta(days=lookback_days)).replace(hour=0, minute=0, second=0, microsecond=0)
+                    end_at = (now + timedelta(days=lookahead_days)).replace(hour=23, minute=59, second=59, microsecond=0)
+                    if extracted_shifts_by_id:
+                        own_roster_coverage.append({
+                            "start_date": start_at.date().isoformat(),
+                            "end_date": end_at.date().isoformat(),
+                            "status": "partial",
+                            "records_returned": len(extracted_shifts_by_id),
+                            "pagination_complete": False,
+                            "known_shift_ids_checked": False,
+                            "note": (
+                                "Authenticated Deputy page responses supplied positive personal evidence; "
+                                "no exact absence coverage was claimed."
+                            ),
+                        })
+                        events.append(
+                            "Used authenticated Deputy page responses for personal evidence; "
+                            "the forbidden extended management query was not replayed."
+                        )
+                        return
+
                     employee_id = captured_employee_id
                     if not employee_id:
                         for shift in extracted_shifts_by_id.values():
@@ -1001,6 +1040,15 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 break
                     if not employee_id:
                         events.append("Could not identify the Deputy employee id for extended own-roster capture.")
+                        own_roster_coverage.append({
+                            "start_date": start_at.date().isoformat(),
+                            "end_date": end_at.date().isoformat(),
+                            "status": "failed",
+                            "records_returned": 0,
+                            "pagination_complete": False,
+                            "known_shift_ids_checked": False,
+                            "note": "Authenticated personal employee identity was unavailable.",
+                        })
                         return
 
                     async def fetch_shift_window(
@@ -1033,11 +1081,6 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                             path,
                         )
 
-                    now = datetime.now(settings.timezone)
-                    lookback_days = max(0, settings.own_roster_lookback_days)
-                    lookahead_days = max(1, settings.own_roster_lookahead_days)
-                    start_at = (now - timedelta(days=lookback_days)).replace(hour=0, minute=0, second=0, microsecond=0)
-                    end_at = (now + timedelta(days=lookahead_days)).replace(hour=23, minute=59, second=59, microsecond=0)
                     initial_shift_ids = set(extracted_shifts_by_id)
                     request_count = 0
                     failed_requests = 0
@@ -1099,6 +1142,12 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 f"HTTP {status or 'unknown'} for "
                                 f"{window_start.date().isoformat()} to {window_end.date().isoformat()}."
                             )
+                            if _personal_endpoint_forbidden(status):
+                                events.append(
+                                    "Extended personal endpoint is unavailable for this authenticated session; "
+                                    "remaining equivalent weekly requests were skipped."
+                                )
+                                break
                             window_start = (window_end + timedelta(seconds=1)).replace(
                                 hour=0,
                                 minute=0,
@@ -1673,7 +1722,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 captured_item["request_sample"] = redacted_text(post_data[:SCHEDULE_SAMPLE_TEXT])
                         if len(captured) < MAX_CAPTURED_RESPONSES:
                             captured.append(captured_item)
-                        if is_native_schedule_response:
+                        if is_native_schedule_response and include_shared:
                             # getRosters is positive-only evidence until its request scope is verified.
                             native_schedule_response_count += 1
                             native_shifts = _extract_schedule_shifts(data)
@@ -1684,7 +1733,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                     remember_employee_id(shift.get("employee"))
                                     extracted_schedule_shifts_by_id[shift_id] = shift
                                     native_schedule_ids.add(shift_id)
-                        elif "/api/management/v2/shifts" in response_url:
+                        elif include_personal and "/api/management/v2/shifts" in response_url:
                             query_params = dict(parse_qsl(urlsplit(response_url).query))
                             remember_employee_id(query_params.get("employee"))
                             for shift in _extract_management_shifts(data):
@@ -1709,7 +1758,7 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                                 location_id = str(location.get("id") or "")
                                 if location_id:
                                     location_refs_by_id[location_id] = location
-                        if is_schedule_response and not is_native_schedule_response:
+                        if include_shared and is_schedule_response and not is_native_schedule_response:
                             for area in _extract_area_refs(data):
                                 area_id = str(area.get("id") or "")
                                 if area_id:
@@ -1747,26 +1796,30 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
                     await log_page_context("Deputy web app")
                     await capture_page_text("Deputy web app")
 
-                    await open_schedule_page()
-                    await capture_page_text("Deputy selected schedule page")
-                    selected_all_locations = await select_target_track(list(ALL_LOCATIONS_SCHEDULE_TARGETS))
-                    if selected_all_locations:
-                        await capture_page_text("Deputy all locations schedule page")
-                    elif target_track_groups:
-                        events.append("All Locations was not selectable; falling back to upcoming roster locations.")
-                        for target_tracks in target_track_groups:
-                            selected = await select_target_track(target_tracks)
-                            if selected:
-                                await capture_page_text(f"Deputy selected schedule page - {target_tracks[0]}")
-                    else:
+                    if include_shared:
+                        await open_schedule_page()
                         await capture_page_text("Deputy selected schedule page")
+                        selected_all_locations = await select_target_track(list(ALL_LOCATIONS_SCHEDULE_TARGETS))
+                        if selected_all_locations:
+                            await capture_page_text("Deputy all locations schedule page")
+                        elif target_track_groups:
+                            events.append("All Locations was not selectable; falling back to upcoming roster locations.")
+                            for target_tracks in target_track_groups:
+                                selected = await select_target_track(target_tracks)
+                                if selected:
+                                    await capture_page_text(f"Deputy selected schedule page - {target_tracks[0]}")
+                        else:
+                            await capture_page_text("Deputy selected schedule page")
 
-                    await page.wait_for_timeout(4_000)
-                    await capture_extended_own_roster()
-                    await capture_expanded_area_refs()
-                    await capture_management_schedule_rosters()
-                    await capture_direct_schedule_searches()
-                    await retry_personal_events_missing_from_schedule()
+                        await page.wait_for_timeout(4_000)
+                    if include_personal:
+                        await capture_extended_own_roster()
+                    if include_shared:
+                        await capture_expanded_area_refs()
+                        await capture_management_schedule_rosters()
+                        await capture_direct_schedule_searches()
+                        if include_personal:
+                            await retry_personal_events_missing_from_schedule()
             finally:
                 if context is not None:
                     await context.close()
@@ -1843,6 +1896,20 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
         "travel_schedule_coverage": travel_schedule_coverage,
         "own_roster_coverage": own_roster_coverage,
         "event_retry_coverage": event_retry_coverage,
+        "capture_scope": (
+            "shared_and_personal" if include_shared and include_personal
+            else "shared_only" if include_shared
+            else "personal_only"
+        ),
+        "shared_capture_success": bool(
+            include_shared
+            and extracted_schedule_shifts
+            and any(
+                str(item.get("status") or "") == "complete" and int(item.get("row_count") or 0) > 0
+                for item in management_schedule_coverage
+                if isinstance(item, dict)
+            )
+        ),
     }
     if login_problem_message:
         payload["auth_status"] = "login_failed"
@@ -1867,6 +1934,9 @@ async def run_deputy_web_capture(settings: Settings) -> DeputyWebCaptureResult:
 async def capture_and_save_deputy_web(
     settings: Settings | None = None,
     owner_user_id: int | None = None,
+    *,
+    include_shared: bool = True,
+    include_personal: bool = True,
 ) -> dict[str, object]:
     settings = settings or get_settings()
     saved_own_shift_rows = 0
@@ -1875,7 +1945,11 @@ async def capture_and_save_deputy_web(
     saved_schedule_rows = 0
     removed_schedule_rows = 0
     try:
-        result = await run_deputy_web_capture(settings)
+        result = await run_deputy_web_capture(
+            settings,
+            include_shared=include_shared,
+            include_personal=include_personal,
+        )
     except Exception as exc:
         message = f"Deputy web capture failed: {redacted_text(str(exc))[:220]}"
         payload = {
@@ -1941,7 +2015,13 @@ async def capture_and_save_deputy_web(
     }
 
 
-def sync_deputy_web_schedule(settings: Settings | None = None, owner_user_id: int | None = None) -> dict[str, object]:
+def sync_deputy_web_schedule(
+    settings: Settings | None = None,
+    owner_user_id: int | None = None,
+    *,
+    include_shared: bool = True,
+    include_personal: bool = True,
+) -> dict[str, object]:
     settings = settings or get_settings()
     if not settings.deputy_login_configured:
         return {
@@ -1954,7 +2034,14 @@ def sync_deputy_web_schedule(settings: Settings | None = None, owner_user_id: in
             "removed_schedule_rows": 0,
             "payload": {},
         }
-    return asyncio.run(capture_and_save_deputy_web(settings, owner_user_id=owner_user_id))
+    return asyncio.run(
+        capture_and_save_deputy_web(
+            settings,
+            owner_user_id=owner_user_id,
+            include_shared=include_shared,
+            include_personal=include_personal,
+        )
+    )
 
 
 def format_capture_payload(value: str) -> dict[str, Any] | None:

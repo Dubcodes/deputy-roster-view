@@ -678,6 +678,7 @@ def init_db(settings: Settings | None = None) -> None:
                 last_seen_at TEXT NOT NULL,
                 active INTEGER NOT NULL DEFAULT 1,
                 last_absent_at TEXT,
+                assignment_fingerprint TEXT,
                 PRIMARY KEY (source_shift_id, observer_key),
                 FOREIGN KEY (source_shift_id) REFERENCES deputy_schedule_shifts(source_shift_id) ON DELETE CASCADE,
                 FOREIGN KEY (observer_user_id) REFERENCES app_users(id) ON DELETE CASCADE
@@ -1443,6 +1444,25 @@ def init_db(settings: Settings | None = None) -> None:
         _ensure_column(conn, "track_maps", "manual_updated_at", "TEXT")
         _ensure_column(conn, "deputy_schedule_event_changes", "changed_since_viewed", "INTEGER DEFAULT 1")
         _ensure_column(conn, "deputy_schedule_event_changes", "change_category", "TEXT DEFAULT 'assignment_change'")
+        _ensure_column(conn, "deputy_schedule_observations", "assignment_fingerprint", "TEXT")
+        # Pre-fingerprint observations can be bound to the current shared row
+        # only when their positive timestamp exactly matches that row version.
+        for observation in conn.execute(
+            """SELECT observation.source_shift_id,observation.observer_key,s.*
+               FROM deputy_schedule_observations observation
+               JOIN deputy_schedule_shifts s ON s.source_shift_id=observation.source_shift_id
+               WHERE COALESCE(observation.assignment_fingerprint,'')=''
+                 AND observation.last_seen_at=s.captured_at"""
+        ).fetchall():
+            conn.execute(
+                """UPDATE deputy_schedule_observations SET assignment_fingerprint=?
+                   WHERE source_shift_id=? AND observer_key=?""",
+                (
+                    schedule_assignment_fingerprint(dict(observation)),
+                    observation["source_shift_id"],
+                    observation["observer_key"],
+                ),
+            )
         _ensure_column(conn, "deputy_personal_assignment_evidence", "raw_role_label", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "deputy_personal_assignment_evidence", "evidence_type", "TEXT NOT NULL DEFAULT 'unknown'")
         _ensure_column(conn, "deputy_personal_assignment_evidence", "production_position", "INTEGER NOT NULL DEFAULT 0")
@@ -2842,7 +2862,7 @@ def claim_sync_generation_member(generation_id: int, user_id: int, started_at: s
 
 def mark_sync_generation_member(generation_id: int, user_id: int, status: str, at: str, message: str = "") -> bool:
     """Finish a claimed member without permitting terminal states to regress."""
-    if status not in {"success", "error", "skipped", "superseded"}:
+    if status not in {"success", "partial", "error", "skipped", "superseded"}:
         raise ValueError("Invalid sync generation member status")
     with get_connection() as conn:
         result = conn.execute(
@@ -2853,7 +2873,7 @@ def mark_sync_generation_member(generation_id: int, user_id: int, status: str, a
         if result.rowcount != 1:
             return False
         remaining = conn.execute(
-            "SELECT COUNT(*) FROM sync_generation_members WHERE generation_id=? AND status NOT IN ('success','error','skipped','superseded')",
+            "SELECT COUNT(*) FROM sync_generation_members WHERE generation_id=? AND status NOT IN ('success','partial','error','skipped','superseded')",
             (generation_id,),
         ).fetchone()[0]
         if not remaining:
@@ -2873,7 +2893,7 @@ def recover_incomplete_sync_generations(at: str, message: str = "Previous sync s
         generation_ids = [row[0] for row in conn.execute(
             """SELECT id FROM sync_generations WHERE status='pending'
                AND NOT EXISTS (SELECT 1 FROM sync_generation_members m WHERE m.generation_id=sync_generations.id
-                               AND m.status NOT IN ('success','error','skipped','superseded'))"""
+                                AND m.status NOT IN ('success','partial','error','skipped','superseded'))"""
         ).fetchall()]
         for generation_id in generation_ids:
             errors = conn.execute("SELECT COUNT(*) FROM sync_generation_members WHERE generation_id=? AND status='error'", (generation_id,)).fetchone()[0]
@@ -2912,8 +2932,8 @@ def integrity_generation_boundary() -> tuple[sqlite3.Row | None, bool]:
 def active_sync_generation_for_user(user_id: int) -> sqlite3.Row | None:
     with get_connection() as conn:
         return conn.execute(
-            """SELECT m.generation_id,m.status FROM sync_generation_members m JOIN sync_generations g ON g.id=m.generation_id
-               WHERE m.user_id=? AND g.status='pending' AND m.status IN ('pending','running') ORDER BY m.generation_id DESC LIMIT 1""",
+            """SELECT m.generation_id,m.status,g.created_at,g.reason FROM sync_generation_members m JOIN sync_generations g ON g.id=m.generation_id
+                WHERE m.user_id=? AND g.status='pending' AND m.status IN ('pending','running') ORDER BY m.generation_id DESC LIMIT 1""",
             (user_id,),
         ).fetchone()
 
@@ -6825,7 +6845,10 @@ def fetch_deputy_schedule_for_date(
                    COALESCE(s.area_location_id, a.location_id) AS schedule_location_id,
                    COALESCE(locations.name, '') AS location_name,
                    (
-                     SELECT GROUP_CONCAT(observer_key || char(31) || last_seen_at, char(30))
+                     SELECT GROUP_CONCAT(
+                       observer_key || char(31) || last_seen_at || char(31) || COALESCE(assignment_fingerprint,''),
+                       char(30)
+                     )
                      FROM deputy_schedule_observations observation
                      WHERE observation.source_shift_id = s.source_shift_id
                        AND observation.active = 1
@@ -7043,7 +7066,10 @@ def fetch_deputy_schedule_between(start_date: str, end_date: str) -> list[sqlite
                    COALESCE(s.area_location_id, a.location_id) AS schedule_location_id,
                    l.name AS location_name,
                    (
-                     SELECT GROUP_CONCAT(observer_key || char(31) || last_seen_at, char(30))
+                     SELECT GROUP_CONCAT(
+                       observer_key || char(31) || last_seen_at || char(31) || COALESCE(assignment_fingerprint,''),
+                       char(30)
+                     )
                      FROM deputy_schedule_observations observation
                      WHERE observation.source_shift_id = s.source_shift_id
                        AND observation.active = 1
@@ -7504,6 +7530,30 @@ def _event_position(value: object) -> tuple[str, str] | None:
     if key in EVENT_POSITION_ALIASES:
         return EVENT_POSITION_ALIASES[key]
     return key, raw or "Position"
+
+
+def schedule_assignment_fingerprint(item: dict[str, object]) -> str:
+    """Stable identity for the assignment-relevant content of a shared source row."""
+    position = _event_position(item.get("area_name") or item.get("areaName"))
+    employee_id = _optional_int(item.get("employee_id") if "employee_id" in item else item.get("employee"))
+    employee_name = item.get("employee_name") if "employee_name" in item else item.get("employeeName")
+    location_id = _optional_int(
+        item.get("area_location_id")
+        if "area_location_id" in item
+        else item.get("areaLocationId") or item.get("location")
+    )
+    content = {
+        "position": position[0] if position else _clean_role_name(item.get("area_name") or item.get("areaName")),
+        "area_id": _optional_int(item.get("area_id") if "area_id" in item else item.get("area")),
+        "location_id": location_id,
+        "employee_id": employee_id,
+        "employee_name": normalise_person_identity(employee_name),
+        "start_at": str(item.get("start_at") if "start_at" in item else item.get("start") or ""),
+        "end_at": str(item.get("end_at") if "end_at" in item else item.get("end") or ""),
+        "is_open": int(bool(item.get("is_open") if "is_open" in item else item.get("isOpen"))),
+        "is_published": int(bool(item.get("is_published") if "is_published" in item else item.get("isPublished"))),
+    }
+    return hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def _event_rows_overlap(left: dict[str, object], right: dict[str, object]) -> bool:
@@ -7972,6 +8022,40 @@ def _coverage_contains_scope(coverage_rows: list[dict[str, object]], date_text: 
     return False
 
 
+def _coverage_contains_exact_selected_scope(
+    coverage_rows: list[dict[str, object]], date_text: str, location_id: int,
+) -> bool:
+    return any(
+        coverage["mode"] == "selected"
+        and str(coverage["start_date"]) == date_text
+        and str(coverage["end_date"]) == date_text
+        and location_id in coverage["location_ids"]
+        for coverage in coverage_rows
+    )
+
+
+def _complete_native_schedule_coverage(payload: dict[str, object]) -> list[dict[str, object]]:
+    """Return only successful native date ranges; native requests are not location-scoped."""
+    coverage_rows = []
+    for coverage in payload.get("management_schedule_coverage") or []:
+        if not isinstance(coverage, dict) or str(coverage.get("status") or "").lower() != "complete":
+            continue
+        start_date = str(coverage.get("start_date") or "")[:10]
+        end_date = str(coverage.get("end_date") or "")[:10]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", start_date) or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}", end_date
+        ):
+            continue
+        coverage_rows.append({
+            "start_date": start_date,
+            "end_date": end_date,
+            "mode": "all",
+            "location_ids": set(),
+            "excluded_location_ids": set(),
+        })
+    return coverage_rows
+
+
 def _event_item_has_named_person(item: dict[str, object]) -> bool:
     employee_id = _optional_int(item.get("employee_id"))
     name_key = normalise_person_identity(item.get("employee_name"))
@@ -8320,6 +8404,8 @@ def _retire_positive_schedule_replacements(
     observer_key: str,
     current_source_shift_ids: set[int],
     captured_at: str,
+    *,
+    vt_absence_is_authoritative: bool,
 ) -> None:
     """Retire only older same-observer rows disproved by a positive replacement."""
     position = _event_position(values.get("area_name"))
@@ -8363,6 +8449,7 @@ def _retire_positive_schedule_replacements(
             old_id in current_source_shift_ids
             or old_position is None
             or old_position[0] != position[0]
+            or (position[0] == "vt" and not vt_absence_is_authoritative)
             or not _event_item_has_named_person(dict(row))
             or not _event_rows_overlap(dict(row), incoming_window)
         ):
@@ -8381,6 +8468,156 @@ def _retire_positive_schedule_replacements(
             (old_id,),
         ).fetchone() is None:
             conn.execute("DELETE FROM deputy_schedule_shifts WHERE source_shift_id=?", (old_id,))
+
+
+def _retire_positive_ordinary_vacancy_replacements(
+    conn: sqlite3.Connection,
+    values: dict[str, object],
+    source_shift_id: int,
+    observer_key: str,
+    current_source_shift_ids: set[int],
+    captured_at: str,
+) -> None:
+    """A named ordinary assignment disproves an older vacancy in that exact slot."""
+    position = _event_position(values.get("area_name"))
+    if (
+        position is None
+        or position[0] in {"sound", "vt", "soundvt"}
+        or not _event_item_has_named_person(values)
+        or _event_lock_row(
+            conn,
+            str(values.get("date") or ""),
+            _optional_int(values.get("area_location_id")),
+            str(values.get("start_at") or ""),
+            str(values.get("end_at") or ""),
+        ) is not None
+    ):
+        return
+    incoming_window = {"start_at": values.get("start_at"), "end_at": values.get("end_at")}
+    retired_ids = []
+    for row in conn.execute(
+        """SELECT s.* FROM deputy_schedule_observations observation
+           JOIN deputy_schedule_shifts s ON s.source_shift_id=observation.source_shift_id
+           WHERE observation.observer_key=? AND observation.active=1
+             AND observation.source_shift_id!=? AND observation.last_seen_at < ?
+             AND s.date=? AND s.area_location_id=?""",
+        (
+            observer_key, source_shift_id, captured_at,
+            values.get("date"), values.get("area_location_id"),
+        ),
+    ).fetchall():
+        old_id = int(row["source_shift_id"])
+        old_position = _event_position(row["area_name"])
+        if (
+            old_id in current_source_shift_ids
+            or old_position is None
+            or old_position[0] != position[0]
+            or _event_item_has_named_person(dict(row))
+            or not _event_rows_overlap(dict(row), incoming_window)
+        ):
+            continue
+        conn.execute(
+            """UPDATE deputy_schedule_observations SET active=0,last_absent_at=?
+               WHERE source_shift_id=? AND observer_key=?""",
+            (captured_at, old_id, observer_key),
+        )
+        retired_ids.append(old_id)
+    for old_id in retired_ids:
+        if conn.execute(
+            "SELECT 1 FROM deputy_schedule_observations WHERE source_shift_id=? AND active=1 LIMIT 1",
+            (old_id,),
+        ).fetchone() is None:
+            conn.execute("DELETE FROM deputy_schedule_shifts WHERE source_shift_id=?", (old_id,))
+
+
+def _retire_complete_native_audio_absences(
+    conn: sqlite3.Connection,
+    native_schedule_shift_ids: set[int],
+    observer_key: str,
+    captured_at: str,
+    complete_coverage: list[dict[str, object]],
+) -> None:
+    """Converge Sound/VT family rows only inside a proven complete native event state."""
+    if not native_schedule_shift_ids or not complete_coverage:
+        return
+    placeholders = ",".join("?" for _ in native_schedule_shift_ids)
+    current_rows = []
+    for row in conn.execute(
+            f"SELECT * FROM deputy_schedule_shifts WHERE source_shift_id IN ({placeholders})",
+            tuple(sorted(native_schedule_shift_ids)),
+        ).fetchall():
+        item = dict(row)
+        position = _event_position(item.get("area_name"))
+        if position is None:
+            continue
+        item["position_key"] = position[0]
+        item["current_open_slot"] = bool(int(item.get("is_open") or 0)) and not _event_item_has_named_person(item)
+        if position[0] in {"sound", "vt", "soundvt"} or item["current_open_slot"]:
+            current_rows.append(item)
+    current_scopes = {
+        (str(row.get("date") or ""), _optional_int(row.get("area_location_id")))
+        for row in current_rows
+        if _optional_int(row.get("area_location_id")) is not None
+        and _coverage_contains_scope(
+            complete_coverage,
+            str(row.get("date") or ""),
+            int(row.get("area_location_id") or 0),
+        )
+    }
+    if not current_scopes:
+        return
+
+    retired_ids: set[int] = set()
+    for date_text, location_id in current_scopes:
+        if _event_lock_row(conn, date_text, location_id) is not None:
+            continue
+        current_scope_rows = [
+            row for row in current_rows
+            if str(row.get("date") or "") == date_text
+            and _optional_int(row.get("area_location_id")) == location_id
+        ]
+        for row in conn.execute(
+            """SELECT s.* FROM deputy_schedule_observations observation
+               JOIN deputy_schedule_shifts s ON s.source_shift_id=observation.source_shift_id
+               WHERE observation.observer_key=? AND observation.active=1
+                 AND s.date=? AND s.area_location_id=?""",
+            (observer_key, date_text, location_id),
+        ).fetchall():
+            source_shift_id = int(row["source_shift_id"])
+            position = _event_position(row["area_name"])
+            compatible_current = [
+                current for current in current_scope_rows
+                if (
+                    position is not None
+                    and (
+                        position[0] in {"sound", "vt", "soundvt"}
+                        and str(current.get("position_key") or "") in {"sound", "vt", "soundvt"}
+                        or bool(current.get("current_open_slot"))
+                        and str(current.get("position_key") or "") == position[0]
+                    )
+                    and _event_rows_overlap(dict(row), current)
+                )
+            ]
+            if (
+                source_shift_id in native_schedule_shift_ids
+                or position is None
+                or not compatible_current
+            ):
+                continue
+            conn.execute(
+                """UPDATE deputy_schedule_observations
+                   SET active=0,last_absent_at=?
+                   WHERE source_shift_id=? AND observer_key=?""",
+                (captured_at, source_shift_id, observer_key),
+            )
+            retired_ids.add(source_shift_id)
+
+    for source_shift_id in retired_ids:
+        if conn.execute(
+            "SELECT 1 FROM deputy_schedule_observations WHERE source_shift_id=? AND active=1 LIMIT 1",
+            (source_shift_id,),
+        ).fetchone() is None:
+            conn.execute("DELETE FROM deputy_schedule_shifts WHERE source_shift_id=?", (source_shift_id,))
 
 
 def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | None = None) -> dict[str, int]:
@@ -8405,13 +8642,15 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
         _migrate_legacy_schedule_observations(conn)
         lock_completed_events(conn)
         authoritative_coverage = _authoritative_schedule_coverage(payload)
+        complete_native_coverage = _complete_native_schedule_coverage(payload)
         known_travel_location_ids = _known_travel_family_location_ids(conn)
-        for coverage in authoritative_coverage:
+        history_coverage = authoritative_coverage + complete_native_coverage
+        for coverage in history_coverage:
             if coverage["mode"] == "all":
                 coverage["excluded_location_ids"].update(known_travel_location_ids)
         before_event_snapshots = _effective_event_snapshots(
             conn,
-            _authoritative_schedule_rows(conn, authoritative_coverage),
+            _authoritative_schedule_rows(conn, history_coverage),
         )
         for row in conn.execute("SELECT * FROM deputy_schedule_locations").fetchall():
             location_id = _optional_int(row["location_id"])
@@ -8707,17 +8946,43 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                 conn.execute(
                     """
                     INSERT INTO deputy_schedule_observations (
-                        source_shift_id,observer_key,observer_user_id,first_seen_at,last_seen_at,active,last_absent_at
-                    ) VALUES (?,?,?,?,?,1,NULL)
+                        source_shift_id,observer_key,observer_user_id,first_seen_at,last_seen_at,
+                        active,last_absent_at,assignment_fingerprint
+                    ) VALUES (?,?,?,?,?,1,NULL,?)
                     ON CONFLICT(source_shift_id,observer_key) DO UPDATE SET
                         observer_user_id=excluded.observer_user_id,
                         last_seen_at=excluded.last_seen_at,
                         active=1,
-                        last_absent_at=NULL
+                        last_absent_at=NULL,
+                        assignment_fingerprint=excluded.assignment_fingerprint
                     """,
-                    (source_shift_id, observer_key, owner_user_id, captured_at, captured_at),
+                    (
+                        source_shift_id, observer_key, owner_user_id, captured_at, captured_at,
+                        schedule_assignment_fingerprint(values),
+                    ),
                 )
                 _retire_positive_schedule_replacements(
+                    conn,
+                    values,
+                    source_shift_id,
+                    observer_key,
+                    native_schedule_shift_ids if source == "native_get_rosters" else direct_schedule_shift_ids,
+                    captured_at,
+                    vt_absence_is_authoritative=(
+                        _coverage_contains_scope(
+                            complete_native_coverage,
+                            str(values.get("date") or ""),
+                            int(values.get("area_location_id") or 0),
+                        )
+                        if source == "native_get_rosters"
+                        else _coverage_contains_exact_selected_scope(
+                            authoritative_coverage,
+                            str(values.get("date") or ""),
+                            int(values.get("area_location_id") or 0),
+                        )
+                    ),
+                )
+                _retire_positive_ordinary_vacancy_replacements(
                     conn,
                     values,
                     source_shift_id,
@@ -8748,6 +9013,13 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                     (employee_id, employee_name, normalized_name, captured_at, captured_at),
                 )
             saved += 1
+        _retire_complete_native_audio_absences(
+            conn,
+            native_schedule_shift_ids,
+            f"user:{owner_user_id}:native_get_rosters" if owner_user_id is not None else "system:native_get_rosters",
+            captured_at,
+            complete_native_coverage,
+        )
         partial_scopes = _evaluate_event_coverage(
             conn, payload, authoritative_coverage, before_event_snapshots,
             captured_at, owner_user_id,
@@ -8767,7 +9039,7 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
             before_event_snapshots,
             _effective_event_snapshots(
                 conn,
-                _authoritative_schedule_rows(conn, authoritative_coverage),
+                _authoritative_schedule_rows(conn, history_coverage),
             ),
             captured_at,
         )

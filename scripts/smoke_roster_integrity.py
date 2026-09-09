@@ -406,8 +406,8 @@ def main() -> None:
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT active FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1:native_get_rosters'").fetchone() == (1,)
         assert conn.execute("SELECT 1 FROM deputy_schedule_shifts WHERE source_shift_id=9001").fetchone() is not None
-        conn.execute("INSERT INTO deputy_schedule_observations VALUES (9001,'user:1',1,'2026-01-01T00:00:00+12:00','2026-01-02T00:00:00+12:00',0,'2026-01-02T00:00:00+12:00')")
-        conn.execute("INSERT INTO deputy_schedule_observations VALUES (9001,'user:1:direct_schedule',1,'2026-01-03T00:00:00+12:00','2026-01-04T00:00:00+12:00',1,NULL)")
+        conn.execute("INSERT INTO deputy_schedule_observations(source_shift_id,observer_key,observer_user_id,first_seen_at,last_seen_at,active,last_absent_at) VALUES (9001,'user:1',1,'2026-01-01T00:00:00+12:00','2026-01-02T00:00:00+12:00',0,'2026-01-02T00:00:00+12:00')")
+        conn.execute("INSERT INTO deputy_schedule_observations(source_shift_id,observer_key,observer_user_id,first_seen_at,last_seen_at,active,last_absent_at) VALUES (9001,'user:1:direct_schedule',1,'2026-01-03T00:00:00+12:00','2026-01-04T00:00:00+12:00',1,NULL)")
         conn.commit()
     save_deputy_web_schedule({"captured_at": "2026-01-05T00:00:00+12:00"}, owner_user_id=1)
     with sqlite3.connect(db_path) as conn:
@@ -419,7 +419,7 @@ def main() -> None:
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT observer_key,first_seen_at,last_seen_at,active,last_absent_at FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'").fetchone() == before_repeat
         # Newer inactive legacy evidence wins over an older active direct row.
-        conn.execute("INSERT INTO deputy_schedule_observations VALUES (9001,'user:1',1,'2026-02-01T00:00:00+12:00','2026-02-02T00:00:00+12:00',0,'2026-02-05T00:00:00+12:00')")
+        conn.execute("INSERT INTO deputy_schedule_observations(source_shift_id,observer_key,observer_user_id,first_seen_at,last_seen_at,active,last_absent_at) VALUES (9001,'user:1',1,'2026-02-01T00:00:00+12:00','2026-02-02T00:00:00+12:00',0,'2026-02-05T00:00:00+12:00')")
         conn.execute("UPDATE deputy_schedule_observations SET first_seen_at='2026-02-03T00:00:00+12:00',last_seen_at='2026-02-04T00:00:00+12:00',active=1,last_absent_at=NULL WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'")
         conn.commit()
     save_deputy_web_schedule({"captured_at": "2026-02-05T00:00:00+12:00"}, owner_user_id=1)
@@ -427,7 +427,7 @@ def main() -> None:
         inactive_collision = conn.execute("SELECT first_seen_at,last_seen_at,active,last_absent_at FROM deputy_schedule_observations WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'").fetchone()
         assert inactive_collision == ('2026-02-01T00:00:00+12:00','2026-02-04T00:00:00+12:00',0,'2026-02-05T00:00:00+12:00'), inactive_collision
         # A same-time positive sighting wins an absence tie.
-        conn.execute("INSERT INTO deputy_schedule_observations VALUES (9001,'user:1',1,'2026-03-01T00:00:00+12:00','2026-03-04T00:00:00+12:00',0,'2026-03-04T00:00:00+12:00')")
+        conn.execute("INSERT INTO deputy_schedule_observations(source_shift_id,observer_key,observer_user_id,first_seen_at,last_seen_at,active,last_absent_at) VALUES (9001,'user:1',1,'2026-03-01T00:00:00+12:00','2026-03-04T00:00:00+12:00',0,'2026-03-04T00:00:00+12:00')")
         conn.execute("UPDATE deputy_schedule_observations SET first_seen_at='2026-03-02T00:00:00+12:00',last_seen_at='2026-03-04T00:00:00+12:00',active=1,last_absent_at=NULL WHERE source_shift_id=9001 AND observer_key='user:1:direct_schedule'")
         conn.commit()
     save_deputy_web_schedule({"captured_at": "2026-03-05T00:00:00+12:00"}, owner_user_id=1)
@@ -639,6 +639,10 @@ def main() -> None:
             "extracted_schedule_shifts": capture_rows,
             "native_schedule_shift_ids": [int(row["id"]) for row in rows],
             "direct_schedule_shift_ids": [], "schedule_coverage": [], "own_roster_coverage": [],
+            "management_schedule_coverage": [{
+                "start_date": date_text, "end_date": date_text,
+                "status": "complete", "row_count": len(rows),
+            }],
         }, owner_user_id=owner_id)
         return schedule_people(fetch_deputy_schedule_for_date(date_text, [64]), include_placeholders=False)
 

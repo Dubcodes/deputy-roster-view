@@ -18,6 +18,7 @@ from .database import (
     create_sync_generation,
     get_calendar_url,
     get_due_user_syncs,
+    get_latest_deputy_web_capture_for_user,
     get_next_upcoming_shift,
     has_deputy_schedule_changes_for_date,
     list_syncable_app_users,
@@ -44,10 +45,73 @@ from .version import APP_BUILD, APP_VERSION
 _scheduler: BackgroundScheduler | None = None
 _last_pre_shift_keys: set[str] = set()
 _user_sync_runner_lock = threading.Lock()
+SHARED_CAPTURE_FRESH_MINUTES = 90
 
 
 def _now(settings: Settings) -> datetime:
     return datetime.now(settings.timezone).replace(microsecond=0)
+
+
+def _capture_payload(row: object) -> dict[str, object]:
+    if row is None:
+        return {}
+    try:
+        value = row["payload"]  # type: ignore[index]
+    except (KeyError, TypeError):
+        return {}
+    try:
+        payload = json.loads(str(value or ""))
+    except (TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _payload_has_successful_shared_capture(payload: dict[str, object]) -> bool:
+    if payload.get("shared_capture_success") is True:
+        return True
+    native_ids = payload.get("native_schedule_shift_ids")
+    coverage = payload.get("management_schedule_coverage")
+    return bool(isinstance(native_ids, list) and native_ids) and any(
+        isinstance(item, dict)
+        and str(item.get("status") or "") == "complete"
+        and int(item.get("row_count") or 0) > 0
+        for item in (coverage if isinstance(coverage, list) else [])
+    )
+
+
+def _shared_capture_after(users: list[object], since: str) -> bool:
+    for user in users:
+        row = get_latest_deputy_web_capture_for_user(int(user["id"]))  # type: ignore[index]
+        if row is None or str(row["captured_at"] or "") < since:
+            continue
+        if _payload_has_successful_shared_capture(_capture_payload(row)):
+            return True
+    return False
+
+
+def _shared_proof_score(user: object) -> int:
+    row = get_latest_deputy_web_capture_for_user(int(user["id"]))  # type: ignore[index]
+    payload = _capture_payload(row)
+    native_ids = payload.get("native_schedule_shift_ids")
+    score = len(native_ids) if isinstance(native_ids, list) else 0
+    if not _payload_has_successful_shared_capture(payload):
+        score = 0
+    return score
+
+
+def _ordered_syncable_users(users: list[object]) -> list[object]:
+    return sorted(
+        users,
+        key=lambda user: (
+            -_shared_proof_score(user),
+            int(user["id"]),  # type: ignore[index]
+        ),
+    )
+
+
+def _shared_capture_is_fresh(settings: Settings, users: list[object] | None = None) -> bool:
+    cutoff = (_now(settings) - timedelta(minutes=SHARED_CAPTURE_FRESH_MINUTES)).isoformat()
+    return _shared_capture_after(list(users or list_syncable_app_users()), cutoff)
 
 
 def start_scheduler(settings: Settings | None = None) -> BackgroundScheduler:
@@ -192,7 +256,7 @@ def plan_staggered_user_syncs(
     start_at: datetime | None = None,
 ) -> dict[str, object]:
     settings = settings or get_settings()
-    users = list_syncable_app_users()
+    users = _ordered_syncable_users(list(list_syncable_app_users()))
     if not users:
         return {"planned": 0, "reason": "no users with saved Deputy credentials"}
 
@@ -245,8 +309,19 @@ def run_due_user_syncs(settings: Settings | None = None) -> dict[str, object]:
                 mark_sync_generation_member(int(generation["generation_id"]), user_id, "error", started_at, "Sync claim lost to an existing user sync.")
                 continue
             try:
-                summary = sync_roster_sources(settings, user_id=user_id)
-                status = "ok" if summary.get("status") == "ok" else "error"
+                generation_users = list(list_syncable_app_users())
+                include_shared = not _shared_capture_after(
+                    generation_users,
+                    str(generation["created_at"] or started_at),
+                )
+                summary = sync_roster_sources(
+                    settings,
+                    user_id=user_id,
+                    include_shared=include_shared,
+                    shared_reused=not include_shared,
+                )
+                summary_status = str(summary.get("status") or "error")
+                status = summary_status if summary_status in {"ok", "partial"} else "error"
                 message = sync_summary_message(summary)
             except Exception as exc:
                 status = "error"
@@ -259,14 +334,21 @@ def run_due_user_syncs(settings: Settings | None = None) -> dict[str, object]:
                 message=message,
             )
             if generation:
-                mark_sync_generation_member(int(generation["generation_id"]), user_id, "success" if status == "ok" else "error", finished_at, message)
+                member_status = "success" if status == "ok" else status
+                mark_sync_generation_member(int(generation["generation_id"]), user_id, member_status, finished_at, message)
             results.append({"user_id": user_id, "status": status, "message": message})
         return {"ran": bool(results), "count": len(results), "results": results}
     finally:
         _user_sync_runner_lock.release()
 
 
-def sync_roster_sources(settings: Settings | None = None, user_id: int | None = None) -> dict[str, object]:
+def sync_roster_sources(
+    settings: Settings | None = None,
+    user_id: int | None = None,
+    *,
+    include_shared: bool | None = None,
+    shared_reused: bool = False,
+) -> dict[str, object]:
     settings = settings or get_settings()
     runtime_settings = settings
     credential_error = ""
@@ -280,6 +362,10 @@ def sync_roster_sources(settings: Settings | None = None, user_id: int | None = 
         except Exception as exc:
             credential_error = f"Saved Deputy login could not be decrypted: {exc.__class__.__name__}."
 
+    if include_shared is None:
+        include_shared = not (user_id is not None and _shared_capture_is_fresh(settings))
+        shared_reused = not include_shared
+
     started_at = _now(settings).isoformat()
     if credential_error:
         web_result = {
@@ -290,7 +376,13 @@ def sync_roster_sources(settings: Settings | None = None, user_id: int | None = 
             "payload": {},
         }
     else:
-        web_result = sync_deputy_web_schedule(runtime_settings, owner_user_id=user_id)
+        web_result = sync_deputy_web_schedule(
+            runtime_settings,
+            owner_user_id=user_id,
+            include_shared=bool(include_shared),
+            include_personal=True,
+        )
+        web_result["shared_capture_reused"] = bool(shared_reused)
 
     calendar_result = _skipped_calendar_result("iCal backup feed is not configured.")
     calendar_settings = runtime_settings if user_id is not None else settings
@@ -359,11 +451,15 @@ def sync_summary_message(summary: dict[str, object]) -> str:
             f"{web_result.get('saved_own_shift_rows', 0)} roster rows and "
             f"{web_result.get('saved_schedule_rows', 0)} schedule rows."
         )
+        if web_result.get("shared_capture_reused"):
+            parts.append("Fresh shared schedule evidence was reused.")
     elif web_result.get("status") == "skipped":
         parts.append(str(web_result.get("message") or "Deputy web capture skipped."))
     elif web_result:
         parts.append(str(web_result.get("message") or "Deputy web capture failed."))
 
+    if str(summary.get("status") or "") == "partial":
+        parts.append("Roster updated; some personal Deputy checks could not be fully refreshed.")
     message = " ".join(part for part in parts if part).strip()
     if message:
         return message
@@ -381,15 +477,22 @@ def _combined_sync_status(calendar_result: dict[str, object], web_result: dict[s
                     for item in items
                 )
 
-            direct_coverage = payload.get("direct_schedule_coverage")
-            if direct_coverage is not None:
-                if not coverage_complete(direct_coverage):
+            personal_only = str(payload.get("capture_scope") or "") == "personal_only"
+            if personal_only:
+                if not web_result.get("shared_capture_reused"):
+                    return "error"
+            else:
+                direct_coverage = payload.get("direct_schedule_coverage")
+                if direct_coverage is not None:
+                    if not coverage_complete(direct_coverage):
+                        return "partial"
+                elif not payload.get("schedule_coverage"):
                     return "partial"
-            elif not payload.get("schedule_coverage"):
-                return "partial"
-            management_coverage = payload.get("management_schedule_coverage")
-            if management_coverage is not None and not coverage_complete(management_coverage):
-                return "partial"
+                management_coverage = payload.get("management_schedule_coverage")
+                if management_coverage is not None and not coverage_complete(management_coverage):
+                    return "partial"
+                if payload.get("shared_capture_success") is False:
+                    return "partial"
             own_coverage = payload.get("own_roster_coverage")
             if own_coverage and not coverage_complete(own_coverage):
                 return "partial"

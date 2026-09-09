@@ -140,6 +140,9 @@ if create_representative_fixture:
         )
     connection.execute("DELETE FROM app_settings WHERE key='personal_evidence_classification_v1'")
     connection.execute("DROP TABLE account_invitations")
+    # Recreate the pre-0.5.21 observation shape so the release rehearsal proves
+    # the additive assignment-fingerprint migration, not merely a fresh schema.
+    connection.execute("ALTER TABLE deputy_schedule_observations DROP COLUMN assignment_fingerprint")
     connection.commit()
     connection.close()
 
@@ -161,6 +164,12 @@ classifications = connection.execute(
     """SELECT raw_role_label,evidence_type,production_position,participant_evidence,cohort_type
        FROM deputy_personal_assignment_evidence ORDER BY id"""
 ).fetchall()
+observation_columns = {
+    row[1] for row in connection.execute("PRAGMA table_info(deputy_schedule_observations)").fetchall()
+}
+observation_fingerprints = connection.execute(
+    "SELECT assignment_fingerprint FROM deputy_schedule_observations ORDER BY source_shift_id,observer_key"
+).fetchall()
 connection.close()
 init_db()
 after_twice = counts()
@@ -181,6 +190,8 @@ if create_representative_fixture:
         ("Overnighter", "participant_cohort", 0, 1, "travel"),
         ("Special Ops Thing", "unknown", 0, 0, ""),
     ]
+    assert "assignment_fingerprint" in observation_columns
+    assert observation_fingerprints and all(row[0] for row in observation_fingerprints)
 assert after_once == after_twice
 assert mode == "off"
 assert assignment_duplicates == 0 and link_collisions == 0

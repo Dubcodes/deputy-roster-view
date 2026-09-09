@@ -158,6 +158,7 @@ from .database import (
     set_crew_person_team,
     set_location_primary_team,
     save_crew_vehicle,
+    schedule_assignment_fingerprint,
     get_default_team_id,
     upsert_travel_time_default,
     delete_travel_time_default,
@@ -3656,8 +3657,13 @@ def native_current_observation_contexts(item: dict[str, object]) -> set[str]:
         return set()
     contexts = set()
     for value in str(item.get("native_observation_contexts") or "").split("\x1e"):
-        observer_key, separator, observed_at = value.partition("\x1f")
-        if separator and observer_key and observed_at == captured_at:
+        parts = value.split("\x1f", 2)
+        if len(parts) < 2:
+            continue
+        observer_key, observed_at = parts[:2]
+        observed_fingerprint = parts[2] if len(parts) == 3 else ""
+        fingerprint_matches = bool(observed_fingerprint) and observed_fingerprint == schedule_assignment_fingerprint(item)
+        if observer_key and (fingerprint_matches or not observed_fingerprint and observed_at == captured_at):
             contexts.add(f"{observer_key}\x1f{observed_at}")
     return contexts
 
@@ -4249,6 +4255,32 @@ def reconcile_personal_assignment_evidence(
                 and safe_int(person.get("canonical_person_id")) == evidence_person_id
             )
         ), None)
+        exact_vt_rows = [
+            person for person in matching_rows
+            if {
+                "vt" if schedule_label_key(part) in {"vt1", "vt2"} else schedule_label_key(part)
+                for part in str(person.get("position_label") or "").split(",")
+                if part.strip()
+            } == {"vt"}
+            and not person.get("placeholder")
+            and schedule_label_key(str(person.get("employee_name") or "")) not in {"tbc", "openshift"}
+        ]
+        if position_key == "vt" and identity_match is None and matching_rows == exact_vt_rows and len(exact_vt_rows) < 2:
+            people.append({
+                "employee_name": employee_name,
+                "employee_id": evidence_employee_id,
+                "position_label": "VT",
+                "vehicle_label": "",
+                "sort_order": schedule_display_sort("VT"),
+                "changed": False,
+                "change_summary": "",
+                "change_time_label": "",
+                "placeholder": False,
+                "personal_evidence": True,
+                "provenance_label": "Confirmed from personal roster",
+                "possibly_missing": str(evidence.get("status") or "") == "possibly_missing",
+            })
+            continue
         shared = identity_match or matching_rows[0]
         if shared.get("placeholder") or schedule_label_key(str(shared.get("employee_name") or "")) in {"tbc", "openshift"}:
             shared.update({
@@ -5360,11 +5392,15 @@ def sync_summary_message(summary: dict[str, object]) -> str:
             f"{web_result.get('saved_own_shift_rows', 0)} roster rows and "
             f"{web_result.get('saved_schedule_rows', 0)} schedule rows."
         )
+        if web_result.get("shared_capture_reused"):
+            parts.append("Fresh shared schedule evidence was reused.")
     elif web_result.get("status") == "skipped":
         parts.append(str(web_result.get("message") or "Deputy web capture skipped."))
     elif web_result:
         parts.append(str(web_result.get("message") or "Deputy web capture failed."))
 
+    if str(summary.get("status") or "") == "partial":
+        parts.append("Roster updated; some personal Deputy checks could not be fully refreshed.")
     message = " ".join(part for part in parts if part).strip()
     return message or "No sync source ran. Add a Deputy login or backup iCal URL."
 
@@ -5414,11 +5450,12 @@ def run_manual_sync_job(user_id: int | None = None, generation_id: int | None = 
         summary = sync_roster_sources(settings, user_id=user_id)
         finished_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
         message = sync_summary_message(summary)
-        status = "ready" if summary.get("status") == "ok" else "error"
+        summary_status = str(summary.get("status") or "error")
+        status = "ready" if summary_status == "ok" else "partial" if summary_status == "partial" else "error"
         set_manual_sync_status(
             user_id,
             running=False,
-            label="Ready" if status == "ready" else "Error",
+            label="Ready" if status == "ready" else "Partially complete" if status == "partial" else "Error",
             message=message,
             finished_at=finished_at,
             status=status,
@@ -5431,7 +5468,8 @@ def run_manual_sync_job(user_id: int | None = None, generation_id: int | None = 
                 message=message,
             )
             if generation_id is not None:
-                mark_sync_generation_member(generation_id, user_id, "success" if status == "ready" else "error", finished_at, message)
+                member_status = "success" if status == "ready" else status
+                mark_sync_generation_member(generation_id, user_id, member_status, finished_at, message)
     except Exception as exc:
         finished_at = datetime.now(settings.timezone).isoformat(timespec="seconds")
         set_manual_sync_status(

@@ -283,7 +283,11 @@ def _add_sync_notice(user: dict[str, object]) -> None:
         return
     if status_text in {"error", "failed"}:
         user["sync_notice_kind"] = "failed"
-        user["sync_notice_text"] = "Deputy sync failed · check Deputy before relying on this roster"
+        user["sync_notice_text"] = "Deputy sync failed · roster may be out of date"
+        return
+    if status_text == "partial":
+        user["sync_notice_kind"] = "stale"
+        user["sync_notice_text"] = "Roster updated · some personal Deputy checks could not be refreshed"
         return
     try:
         last_sync = datetime.fromisoformat(last_sync_text)

@@ -33,6 +33,8 @@ OFFLINE_SMOKES = (
     "smoke_diagnostic_privacy.py",
     "smoke_notifications.py",
     "smoke_travel_cohort_059.py",
+    "smoke_sync_coordination_0521.py",
+    "smoke_evidence_authority_0521.py",
     "smoke_roster_integrity.py",
     "smoke_route_flows.py",
     "smoke_account_onboarding.py",
