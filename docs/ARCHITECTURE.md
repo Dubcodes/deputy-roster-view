@@ -108,6 +108,8 @@ Race-day calculation resolves start origin and finish destination separately usi
 
 Each scheduler generation seeks one qualifying shared capture, then lets remaining accounts perform personal-only work. A qualifying shared capture requires native shared rows and complete coverage for every required native management window; one successful window cannot mask another partial window, and direct-search completeness cannot substitute for native acquisition because direct coverage is authoritative only for its own source. Manual syncs may reuse the latest qualifying shared capture for 90 minutes. Newer personal-only or failed diagnostics do not hide that proof, and account ordering uses the same latest qualifying capture. If the selected shared account fails to establish proof, the next suitable account may attempt shared capture in the same generation.
 
+The five-minute sync runner also enforces the configured daily target as a persisted-evidence invariant. After that local target time, it waits for any active scheduled generation, then plans one idempotent catch-up if no qualifying shared capture has occurred since the target. This recovers both an overlapped daily trigger and an application restart without scheduling a full shared capture for every account.
+
 After a successful roster sync, upcoming Thoroughbred date/location pairs inside 72 hours can enqueue stale meeting details. A separate scheduler job services the global Love Racing detail queue, so the user-facing roster sync response does not wait for browser captures.
 
 ## Main Views
@@ -193,7 +195,7 @@ Timing-only crew schedule changes should not badge every crew row.
 
 Personal roster rows are also stored as durable `deputy_personal_assignment_evidence`. Effective crew display uses named shared-schedule rows first, matching confirmed personal evidence second, and TBC placeholders last. Matching uses Deputy employee identity where available and the canonical crew directory only as a safe fallback. A disagreement is retained as two-source evidence and shown as a conflict; neither source silently replaces the other.
 
-`deputy_personal_capture_coverage` records each weekly own-roster request. One absence from a complete request marks a future shift possibly missing; two independent complete absences may retire it. Failed, partial, and truncated requests do not advance that count. Explicit Deputy cancellation is immediate.
+`deputy_personal_capture_coverage` records each weekly own-roster request. One absence from a complete request marks a future shift possibly missing; two independent complete absences may retire it. Failed, partial, and truncated requests do not advance that count. Explicit Deputy cancellation is immediate. Capture payloads separately record whether an authenticated personal source responded successfully; this health signal can make a positive-only refresh operationally healthy without granting it negative/absence authority.
 
 `deputy_event_coverage` records event-level completeness. Upcoming events are checked against known production areas, the prior effective snapshot, and registered users' personal evidence. Missing evidence triggers an exact-date selected-location retry. Partial event captures never prune prior valid shared rows.
 

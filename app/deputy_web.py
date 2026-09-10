@@ -156,6 +156,19 @@ def _is_schedule_api_url(value: str) -> bool:
     return "/api/schedule/" in urlsplit(value).path
 
 
+def _is_successful_personal_shift_response(status: object, data: Any) -> bool:
+    try:
+        status_code = int(status)
+    except (TypeError, ValueError):
+        return False
+    return (
+        200 <= status_code < 300
+        and isinstance(data, dict)
+        and data.get("success") is True
+        and isinstance(data.get("data"), list)
+    )
+
+
 def _include_full_response_in_copy(response: dict[str, Any]) -> bool:
     url = str(response.get("url") or "")
     try:
@@ -698,6 +711,7 @@ async def run_deputy_web_capture(
     native_schedule_rows_seen = 0
     native_schedule_ids: set[str] = set()
     direct_schedule_ids: set[str] = set()
+    personal_capture_success = False
     login_problem_message = ""
     login_response_events: list[str] = []
     target_track_groups = _target_schedule_track_groups(settings)
@@ -1678,7 +1692,7 @@ async def run_deputy_web_capture(
                         )
 
                 async def capture_response(response: Any) -> None:
-                    nonlocal native_schedule_response_count, native_schedule_rows_seen
+                    nonlocal native_schedule_response_count, native_schedule_rows_seen, personal_capture_success
                     try:
                         response_url = response.url
                         if _is_login_diagnostic_url(response_url, settings) and len(login_response_events) < 16:
@@ -1698,6 +1712,14 @@ async def run_deputy_web_capture(
                             return
                         is_native_schedule_response = "/api/management/v2/shifts:getRosters" in response_url
                         is_schedule_response = _is_schedule_api_url(response_url) or is_native_schedule_response
+                        is_personal_shift_response = (
+                            include_personal
+                            and urlsplit(response_url).path.rstrip("/") == "/api/management/v2/shifts"
+                        )
+                        if is_personal_shift_response and _is_successful_personal_shift_response(
+                            response.status, data
+                        ):
+                            personal_capture_success = True
                         sample_kwargs = (
                             {
                                 "max_depth": SCHEDULE_SAMPLE_DEPTH,
@@ -1895,6 +1917,20 @@ async def run_deputy_web_capture(
         "management_schedule_coverage": management_schedule_coverage,
         "travel_schedule_coverage": travel_schedule_coverage,
         "own_roster_coverage": own_roster_coverage,
+        "personal_capture_success": bool(
+            include_personal
+            and (
+                personal_capture_success
+                or any(
+                    isinstance(item, dict)
+                    and (
+                        str(item.get("status") or "") == "complete"
+                        or int(item.get("records_returned") or 0) > 0
+                    )
+                    for item in own_roster_coverage
+                )
+            )
+        ),
         "event_retry_coverage": event_retry_coverage,
         "capture_scope": (
             "shared_and_personal" if include_shared and include_personal

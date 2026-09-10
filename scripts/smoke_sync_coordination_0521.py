@@ -38,7 +38,7 @@ def main() -> None:
         save_deputy_web_capture_diagnostic,
         save_deputy_web_schedule,
     )
-    from app.deputy_web import _personal_endpoint_forbidden
+    from app.deputy_web import _is_successful_personal_shift_response, _personal_endpoint_forbidden
     import app.scheduler as scheduler
 
     init_db()
@@ -72,6 +72,9 @@ def main() -> None:
     assert attempts == 1
     assert _personal_endpoint_forbidden(401)
     assert not _personal_endpoint_forbidden(500)
+    assert _is_successful_personal_shift_response(200, {"success": True, "data": []})
+    assert _is_successful_personal_shift_response(200, {"success": True, "data": [{"id": 1}]})
+    assert not _is_successful_personal_shift_response(403, {"success": False, "data": []})
 
     personal_row = {
         "id": 91001,
@@ -124,15 +127,59 @@ def main() -> None:
     assert len(user_one) == 1 and user_one[0]["status"] == "confirmed"
     assert user_two == []
 
+    healthy_shared_payload = {
+        "capture_scope": "shared_and_personal",
+        "shared_capture_success": True,
+        "native_schedule_shift_ids": [1],
+        "management_schedule_coverage": [{"status": "complete", "row_count": 1}],
+        "direct_schedule_coverage": [{"status": "complete"}],
+        "own_roster_coverage": [{"status": "partial", "records_returned": 1}],
+        "personal_capture_success": True,
+    }
+    assert scheduler._combined_sync_status({}, {
+        "status": "ok", "payload": healthy_shared_payload,
+    }) == "ok"
+    assert scheduler._combined_sync_status({}, {
+        "status": "ok",
+        "shared_capture_reused": True,
+        "payload": {
+            "capture_scope": "personal_only",
+            "own_roster_coverage": [{"status": "partial", "records_returned": 2}],
+            "personal_capture_success": True,
+        },
+    }) == "ok"
+    assert scheduler._combined_sync_status({}, {
+        "status": "ok",
+        "shared_capture_reused": True,
+        "payload": {
+            "capture_scope": "personal_only",
+            "own_roster_coverage": [{"status": "complete", "records_returned": 0}],
+            "personal_capture_success": True,
+        },
+    }) == "ok"
     useful_partial = {
         "status": "ok",
         "shared_capture_reused": True,
         "payload": {
             "capture_scope": "personal_only",
             "own_roster_coverage": [{"status": "failed", "note": "HTTP 403"}],
+            "personal_capture_success": False,
         },
     }
     assert scheduler._combined_sync_status({}, useful_partial) == "partial"
+    partial_message = scheduler.sync_summary_message({
+        "status": "partial", "calendar": {}, "web": useful_partial,
+    })
+    assert "Roster sync incomplete; some Deputy data could not be refreshed." in partial_message
+    assert "personal Deputy checks" not in partial_message
+    assert scheduler._combined_sync_status({}, {
+        "status": "ok",
+        "payload": {
+            **healthy_shared_payload,
+            "shared_capture_success": False,
+            "management_schedule_coverage": [{"status": "partial", "row_count": 1}],
+        },
+    }) == "partial"
     assert scheduler._combined_sync_status({}, {"status": "login_failed", "payload": {}}) == "error"
     assert scheduler._combined_sync_status({}, {
         "status": "ok",
@@ -162,7 +209,7 @@ def main() -> None:
         "sync_in_progress": 0,
     }
     _add_sync_notice(notice_user)
-    assert notice_user["sync_notice_text"] == "Roster updated · some personal Deputy checks could not be refreshed"
+    assert notice_user["sync_notice_text"] == "Roster sync incomplete · some Deputy data could not be refreshed"
 
     proof_payload = {
         "capture_scope": "shared_and_personal",
@@ -196,6 +243,88 @@ def main() -> None:
         )
         assert [int(user["id"]) for user in scheduler._ordered_syncable_users(users)] == [2, 1]
     assert not scheduler._shared_capture_after(users, (now + timedelta(minutes=1)).isoformat())
+
+    # A qualifying capture before the configured daily target does not satisfy
+    # that day. Partial shared and personal-only captures after it do not either.
+    target_settings = SimpleNamespace(
+        timezone=ZoneInfo("Pacific/Auckland"), sync_at_hour=5,
+        user_sync_stagger_minutes=5, user_sync_jitter_minutes=0,
+    )
+    target_day = now.date() + timedelta(days=1)
+    target_at = datetime.combine(target_day, datetime.min.time(), tzinfo=target_settings.timezone).replace(hour=5)
+    for captured_at, status, payload in (
+        (target_at - timedelta(minutes=10), "ok", proof_payload),
+        (target_at + timedelta(minutes=2), "ok", partial_shared),
+        (target_at + timedelta(minutes=3), "ok", {
+            "capture_scope": "personal_only", "personal_capture_success": True,
+        }),
+    ):
+        save_deputy_web_capture_diagnostic(
+            owner_user_id=1, captured_at=captured_at.isoformat(), status=status,
+            message="daily target fixture", payload=json.dumps(payload),
+        )
+    assert not scheduler._daily_shared_target_satisfied(
+        target_settings, users, target_at + timedelta(hours=1)
+    )
+    save_deputy_web_capture_diagnostic(
+        owner_user_id=1, captured_at=(target_at + timedelta(minutes=5)).isoformat(),
+        status="ok", message="post-target shared fixture", payload=json.dumps(proof_payload),
+    )
+    assert scheduler._daily_shared_target_satisfied(
+        target_settings, users, target_at + timedelta(hours=1)
+    )
+
+    # The watchdog waits for an overlapping generation, plans one idempotent
+    # catch-up after it finishes without post-target proof, and does nothing
+    # after either the overlap or a restart-time pass finds qualifying proof.
+    original_daily = {
+        name: getattr(scheduler, name)
+        for name in (
+            "_daily_shared_target_satisfied",
+            "active_scheduled_sync_generation",
+            "plan_staggered_user_syncs",
+            "list_syncable_app_users",
+        )
+    }
+    daily_plans: list[tuple[str, datetime]] = []
+    try:
+        scheduler.list_syncable_app_users = lambda: users
+        scheduler._daily_shared_target_satisfied = lambda *_args, **_kwargs: False
+        scheduler.active_scheduled_sync_generation = lambda: {"id": 77}
+        scheduler.plan_staggered_user_syncs = lambda _settings, *, reason, start_at=None: (
+            daily_plans.append((reason, start_at)) or {"planned": 2, "reason": reason}
+        )
+        overlap = scheduler.ensure_daily_sync(target_settings, target_at)
+        assert overlap["coalesced"] is True and daily_plans == []
+
+        scheduler._daily_shared_target_satisfied = lambda *_args, **_kwargs: True
+        satisfied = scheduler.ensure_daily_sync(target_settings, target_at + timedelta(minutes=5))
+        assert satisfied["satisfied"] is True and daily_plans == []
+
+        scheduler._daily_shared_target_satisfied = lambda *_args, **_kwargs: False
+        scheduler.active_scheduled_sync_generation = lambda: None
+        normal_daily = scheduler.ensure_daily_sync(target_settings, target_at)
+        assert normal_daily["planned"] == 2
+        assert daily_plans == [("daily-catchup", target_at)]
+
+        daily_plans.clear()
+        catchup = scheduler.ensure_daily_sync(target_settings, target_at + timedelta(minutes=10))
+        assert catchup["planned"] == 2
+        assert daily_plans == [("daily-catchup", target_at + timedelta(minutes=10))]
+
+        daily_plans.clear()
+        restart = scheduler.ensure_daily_sync(target_settings, target_at + timedelta(hours=1))
+        assert restart["planned"] == 2
+        assert daily_plans == [("daily-catchup", target_at + timedelta(hours=1))]
+
+        daily_plans.clear()
+        scheduler._daily_shared_target_satisfied = lambda *_args, **_kwargs: True
+        scheduler.ensure_daily_sync(target_settings, target_at + timedelta(hours=2))
+        scheduler.ensure_daily_sync(target_settings, target_at + timedelta(hours=3))
+        assert daily_plans == []
+    finally:
+        for name, value in original_daily.items():
+            setattr(scheduler, name, value)
 
     # One generation performs one shared pass, but every member gets its own
     # authenticated personal refresh.
@@ -244,6 +373,7 @@ def main() -> None:
         fake_settings = SimpleNamespace(
             timezone=ZoneInfo("Pacific/Auckland"),
             user_sync_batch_size=2,
+            sync_at_hour=23,
         )
         result = scheduler.run_due_user_syncs(fake_settings)
         assert result["count"] == 2
@@ -282,6 +412,7 @@ def main() -> None:
                 "payload": {
                     "capture_scope": "personal_only",
                     "own_roster_coverage": [{"status": "partial"}],
+                    "personal_capture_success": True,
                 },
             }
 
@@ -291,7 +422,7 @@ def main() -> None:
             deputy_ical_url="",
         )
         manual = scheduler.sync_roster_sources(fake_settings, user_id=1)
-        assert manual["status"] == "partial"
+        assert manual["status"] == "ok"
         assert manual_calls == [(1, False, True)]
     finally:
         scheduler.list_syncable_app_users = original_users
@@ -314,7 +445,23 @@ def main() -> None:
         generation = conn.execute("SELECT status FROM sync_generations WHERE id=?", (generation_id,)).fetchone()
     assert member["status"] == "partial" and generation["status"] == "complete"
 
-    print("0.5.22 shared sync coordination smoke passed")
+    # The five-minute runner is also the daily-target watchdog.
+    original_ensure = scheduler.ensure_daily_sync
+    original_due = scheduler.get_due_user_syncs
+    watchdog_calls: list[object] = []
+    try:
+        scheduler.ensure_daily_sync = lambda current: watchdog_calls.append(current) or {"satisfied": True}
+        scheduler.get_due_user_syncs = lambda *_args, **_kwargs: []
+        runner_settings = SimpleNamespace(
+            timezone=ZoneInfo("Pacific/Auckland"), user_sync_batch_size=1,
+        )
+        assert scheduler.run_due_user_syncs(runner_settings)["ran"] is False
+        assert watchdog_calls == [runner_settings]
+    finally:
+        scheduler.ensure_daily_sync = original_ensure
+        scheduler.get_due_user_syncs = original_due
+
+    print("0.5.23 daily sync and personal health smoke passed")
 
 
 if __name__ == "__main__":

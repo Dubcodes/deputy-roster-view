@@ -45,6 +45,7 @@ from .version import APP_BUILD, APP_VERSION
 _scheduler: BackgroundScheduler | None = None
 _last_pre_shift_keys: set[str] = set()
 _user_sync_runner_lock = threading.Lock()
+_sync_generation_plan_lock = threading.Lock()
 SHARED_CAPTURE_FRESH_MINUTES = 90
 
 
@@ -128,6 +129,46 @@ def _ordered_syncable_users(users: list[object]) -> list[object]:
 def _shared_capture_is_fresh(settings: Settings, users: list[object] | None = None) -> bool:
     cutoff = (_now(settings) - timedelta(minutes=SHARED_CAPTURE_FRESH_MINUTES)).isoformat()
     return _shared_capture_after(list(users or list_syncable_app_users()), cutoff)
+
+
+def _daily_sync_target(settings: Settings, now: datetime | None = None) -> datetime:
+    current = (now or _now(settings)).astimezone(settings.timezone)
+    return current.replace(hour=settings.sync_at_hour, minute=0, second=0, microsecond=0)
+
+
+def _daily_shared_target_satisfied(
+    settings: Settings,
+    users: list[object] | None = None,
+    now: datetime | None = None,
+) -> bool:
+    target = _daily_sync_target(settings, now)
+    return _shared_capture_after(list(users or list_syncable_app_users()), target.isoformat())
+
+
+def ensure_daily_sync(settings: Settings | None = None, now: datetime | None = None) -> dict[str, object]:
+    settings = settings or get_settings()
+    current = (now or _now(settings)).astimezone(settings.timezone).replace(microsecond=0)
+    target = _daily_sync_target(settings, current)
+    if current < target:
+        return {"planned": 0, "reason": "daily target not due", "target": target.isoformat()}
+    users = list(list_syncable_app_users())
+    if not users:
+        return {"planned": 0, "reason": "no users with saved Deputy credentials", "target": target.isoformat()}
+    if _daily_shared_target_satisfied(settings, users, current):
+        return {"planned": 0, "reason": "daily target satisfied", "target": target.isoformat(), "satisfied": True}
+    existing = active_scheduled_sync_generation()
+    if existing:
+        return {
+            "planned": 0,
+            "reason": "daily target awaiting active generation",
+            "target": target.isoformat(),
+            "generation_id": int(existing["id"]),
+            "coalesced": True,
+        }
+    result = plan_staggered_user_syncs(
+        settings, reason="daily-catchup", start_at=current
+    )
+    return {**result, "target": target.isoformat(), "satisfied": False}
 
 
 def start_scheduler(settings: Settings | None = None) -> BackgroundScheduler:
@@ -261,7 +302,7 @@ def check_pre_shift_sync(settings: Settings | None = None) -> dict[str, object]:
 def daily_sync_dispatch(settings: Settings | None = None) -> dict[str, object]:
     settings = settings or get_settings()
     if list_syncable_app_users():
-        return plan_staggered_user_syncs(settings, reason="daily")
+        return ensure_daily_sync(settings)
     return sync_roster_sources(settings)
 
 
@@ -277,23 +318,24 @@ def plan_staggered_user_syncs(
         return {"planned": 0, "reason": "no users with saved Deputy credentials"}
 
     start_at = (start_at or _now(settings)).replace(microsecond=0)
-    existing = active_scheduled_sync_generation()
-    if existing:
-        return {"planned": 0, "reason": reason, "generation_id": int(existing["id"]), "coalesced": True}
-    stagger_minutes = max(1, settings.user_sync_stagger_minutes)
-    jitter_minutes = max(0, settings.user_sync_jitter_minutes)
-    planned_times: list[str] = []
-    members: list[tuple[int, str]] = []
+    with _sync_generation_plan_lock:
+        existing = active_scheduled_sync_generation()
+        if existing:
+            return {"planned": 0, "reason": reason, "generation_id": int(existing["id"]), "coalesced": True}
+        stagger_minutes = max(1, settings.user_sync_stagger_minutes)
+        jitter_minutes = max(0, settings.user_sync_jitter_minutes)
+        planned_times: list[str] = []
+        members: list[tuple[int, str]] = []
 
-    for index, user in enumerate(users):
-        jitter = _stable_jitter_minutes(int(user["id"]), start_at.date().isoformat(), reason, jitter_minutes)
-        next_sync = start_at + timedelta(minutes=(index * stagger_minutes) + jitter)
-        next_sync_text = next_sync.isoformat()
-        set_user_next_sync(int(user["id"]), next_sync_text, reason)
-        planned_times.append(next_sync_text)
-        members.append((int(user["id"]), next_sync_text))
+        for index, user in enumerate(users):
+            jitter = _stable_jitter_minutes(int(user["id"]), start_at.date().isoformat(), reason, jitter_minutes)
+            next_sync = start_at + timedelta(minutes=(index * stagger_minutes) + jitter)
+            next_sync_text = next_sync.isoformat()
+            set_user_next_sync(int(user["id"]), next_sync_text, reason)
+            planned_times.append(next_sync_text)
+            members.append((int(user["id"]), next_sync_text))
 
-    generation_id = create_sync_generation(reason, members, start_at.isoformat())
+        generation_id = create_sync_generation(reason, members, start_at.isoformat())
 
     return {
         "planned": len(users),
@@ -312,6 +354,7 @@ def run_due_user_syncs(settings: Settings | None = None) -> dict[str, object]:
         return {"ran": False, "reason": "user sync runner already active"}
 
     try:
+        daily_target = ensure_daily_sync(settings)
         now = _now(settings).isoformat()
         due_users = get_due_user_syncs(now, limit=max(1, settings.user_sync_batch_size))
         results = []
@@ -353,7 +396,10 @@ def run_due_user_syncs(settings: Settings | None = None) -> dict[str, object]:
                 member_status = "success" if status == "ok" else status
                 mark_sync_generation_member(int(generation["generation_id"]), user_id, member_status, finished_at, message)
             results.append({"user_id": user_id, "status": status, "message": message})
-        return {"ran": bool(results), "count": len(results), "results": results}
+        return {
+            "ran": bool(results), "count": len(results), "results": results,
+            "daily_target": daily_target,
+        }
     finally:
         _user_sync_runner_lock.release()
 
@@ -475,7 +521,7 @@ def sync_summary_message(summary: dict[str, object]) -> str:
         parts.append(str(web_result.get("message") or "Deputy web capture failed."))
 
     if str(summary.get("status") or "") == "partial":
-        parts.append("Roster updated; some personal Deputy checks could not be fully refreshed.")
+        parts.append("Roster sync incomplete; some Deputy data could not be refreshed.")
     message = " ".join(part for part in parts if part).strip()
     if message:
         return message
@@ -509,8 +555,12 @@ def _combined_sync_status(calendar_result: dict[str, object], web_result: dict[s
                     return "partial"
                 if payload.get("shared_capture_success") is False:
                     return "partial"
+            personal_health = payload.get("personal_capture_success")
+            if str(payload.get("capture_scope") or "") != "shared_only":
+                if personal_health is False:
+                    return "partial"
             own_coverage = payload.get("own_roster_coverage")
-            if own_coverage and not coverage_complete(own_coverage):
+            if personal_health is not True and own_coverage and not coverage_complete(own_coverage):
                 return "partial"
             if any(
                 str(item.get("status") or "") != "complete"
