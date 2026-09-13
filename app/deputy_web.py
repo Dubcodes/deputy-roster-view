@@ -662,6 +662,19 @@ def _personal_endpoint_forbidden(status: object) -> bool:
         return False
 
 
+def _personal_expansion_start(
+    requested_start: datetime,
+    observed_windows: list[tuple[datetime, datetime]],
+) -> datetime:
+    """Start after authenticated page coverage so only future weekly windows are added."""
+    if not observed_windows:
+        return requested_start
+    observed_end = max(item[1] for item in observed_windows)
+    return (observed_end + timedelta(seconds=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+
 async def run_deputy_web_capture(
     settings: Settings,
     *,
@@ -701,6 +714,12 @@ async def run_deputy_web_capture(
     management_schedule_coverage: list[dict[str, Any]] = []
     travel_schedule_coverage: list[dict[str, Any]] = []
     own_roster_coverage: list[dict[str, Any]] = []
+    observed_personal_windows: list[tuple[datetime, datetime]] = []
+    personal_expansion = {
+        "attempted_windows": 0,
+        "successful_windows": 0,
+        "stopped_after_permission_failure": False,
+    }
     event_retry_coverage: list[dict[str, Any]] = []
     area_refs_by_id: dict[str, dict[str, Any]] = {}
     location_refs_by_id: dict[str, dict[str, Any]] = {}
@@ -1026,10 +1045,12 @@ async def run_deputy_web_capture(
                     lookahead_days = max(1, settings.own_roster_lookahead_days)
                     start_at = (now - timedelta(days=lookback_days)).replace(hour=0, minute=0, second=0, microsecond=0)
                     end_at = (now + timedelta(days=lookahead_days)).replace(hour=23, minute=59, second=59, microsecond=0)
-                    if extracted_shifts_by_id:
+                    if observed_personal_windows:
+                        observed_start = min(item[0] for item in observed_personal_windows)
+                        observed_end = max(item[1] for item in observed_personal_windows)
                         own_roster_coverage.append({
-                            "start_date": start_at.date().isoformat(),
-                            "end_date": end_at.date().isoformat(),
+                            "start_date": observed_start.date().isoformat(),
+                            "end_date": observed_end.date().isoformat(),
                             "status": "partial",
                             "records_returned": len(extracted_shifts_by_id),
                             "pagination_complete": False,
@@ -1039,11 +1060,9 @@ async def run_deputy_web_capture(
                                 "no exact absence coverage was claimed."
                             ),
                         })
-                        events.append(
-                            "Used authenticated Deputy page responses for personal evidence; "
-                            "the forbidden extended management query was not replayed."
-                        )
-                        return
+                        window_start = _personal_expansion_start(start_at, observed_personal_windows)
+                    else:
+                        window_start = start_at
 
                     employee_id = captured_employee_id
                     if not employee_id:
@@ -1100,9 +1119,8 @@ async def run_deputy_web_capture(
                     failed_requests = 0
                     rows_seen = 0
                     paged_windows = 0
-                    window_start = start_at
-
                     while window_start <= end_at:
+                        personal_expansion["attempted_windows"] += 1
                         window_end = min(
                             window_start + timedelta(days=6, hours=23, minutes=59, seconds=59),
                             end_at,
@@ -1157,6 +1175,7 @@ async def run_deputy_web_capture(
                                 f"{window_start.date().isoformat()} to {window_end.date().isoformat()}."
                             )
                             if _personal_endpoint_forbidden(status):
+                                personal_expansion["stopped_after_permission_failure"] = True
                                 events.append(
                                     "Extended personal endpoint is unavailable for this authenticated session; "
                                     "remaining equivalent weekly requests were skipped."
@@ -1189,6 +1208,8 @@ async def run_deputy_web_capture(
                                 else f"Retained {len(pages)} page(s); {pagination.get('error') or 'pagination incomplete'}."
                             ),
                         })
+                        if complete:
+                            personal_expansion["successful_windows"] += 1
                         for shift in shifts:
                             shift_id = str(shift.get("id") or "")
                             if not shift_id:
@@ -1205,7 +1226,7 @@ async def run_deputy_web_capture(
                     added = len(set(extracted_shifts_by_id) - initial_shift_ids)
                     events.append(
                         "Extended own-roster capture covered "
-                        f"{start_at.date().isoformat()} to {end_at.date().isoformat()} "
+                        f"future windows through {end_at.date().isoformat()} "
                         f"in {request_count} weekly requests, saw {rows_seen} shift rows, "
                         f"and added {added} shift rows."
                     )
@@ -1720,6 +1741,18 @@ async def run_deputy_web_capture(
                             response.status, data
                         ):
                             personal_capture_success = True
+                            query_params = dict(parse_qsl(urlsplit(response_url).query))
+                            try:
+                                observed_start = datetime.fromisoformat(str(query_params.get("start") or ""))
+                                observed_end = datetime.fromisoformat(str(query_params.get("end") or ""))
+                            except ValueError:
+                                pass
+                            else:
+                                if observed_start.tzinfo is None:
+                                    observed_start = observed_start.replace(tzinfo=settings.timezone)
+                                if observed_end.tzinfo is None:
+                                    observed_end = observed_end.replace(tzinfo=settings.timezone)
+                                observed_personal_windows.append((observed_start, observed_end))
                         sample_kwargs = (
                             {
                                 "max_depth": SCHEDULE_SAMPLE_DEPTH,
@@ -1917,6 +1950,7 @@ async def run_deputy_web_capture(
         "management_schedule_coverage": management_schedule_coverage,
         "travel_schedule_coverage": travel_schedule_coverage,
         "own_roster_coverage": own_roster_coverage,
+        "personal_expansion": personal_expansion,
         "personal_capture_success": bool(
             include_personal
             and (

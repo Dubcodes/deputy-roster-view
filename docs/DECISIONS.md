@@ -291,3 +291,11 @@ This remains the governing boundary. Build 2026.08.13.1 implements only the cont
 
 - When open self-signup is next developed, verify that the supplied Deputy account is a genuine usable Deputy account before granting a normal Re-Deputy account. Current open signup behavior is accepted for this release.
 - Future migration tooling should support exporting/importing important configuration independently of the full historical database. At minimum consider app settings/preferences, user/account configuration as appropriate, crew/region membership, region/location assignments, vehicle aliases, and other durable configuration required to recreate the installation without carrying all historical roster/capture data.
+
+# 0.5.24 personal roster integrity decisions
+
+- A successful authenticated personal refresh does not imply complete personal absence coverage. Bounded employee-specific future windows may supplement the observed page window, and the first 401/403 stops the remaining equivalent requests for that capture.
+- Current positive shared schedule evidence may fill a confirmed linked user's owner-scoped roster. Employee ID is required; names are not guessed. The shared-derived row keeps explicit provenance and the stable Deputy shift identity so authenticated personal evidence deduplicates in place.
+- Missing data is not negative evidence. A shared-derived personal row is retired only after existing qualifying shared authority retires the underlying schedule row; partial capture remains non-destructive.
+- Initial reconciliation is not a roster-change notification, but reconciled future work remains eligible for ordinary reminders.
+- A venue Area catalogue defines possible roles only. Day views show actual current assignments and genuine Deputy open rows, not synthetic catalogue TBC placeholders.

@@ -7265,6 +7265,25 @@ def get_roster_integrity_diagnostics() -> dict[str, object]:
             """,
             (today_text,),
         ).fetchall()
+        shared_personal_fills = conn.execute(
+            """
+            SELECT s.date, s.title, s.owner_user_id, u.display_name,
+                   s.source_uid AS source_shift_id
+            FROM shifts s
+            JOIN app_users u ON u.id=s.owner_user_id
+            WHERE s.date>=? AND s.deleted_from_source=0
+              AND s.source_url_hash='deputy-shared-effective:' || s.owner_user_id
+            ORDER BY s.date, u.display_name, s.start_at
+            LIMIT 24
+            """,
+            (today_text,),
+        ).fetchall()
+        shared_personal_fill_count = int(conn.execute(
+            """SELECT COUNT(*) FROM shifts
+               WHERE date>=? AND deleted_from_source=0
+                 AND source_url_hash='deputy-shared-effective:' || owner_user_id""",
+            (today_text,),
+        ).fetchone()[0])
     return {
         "partial_upcoming": int((totals["partial_upcoming"] if totals else 0) or 0),
         "evidence_fills": int((totals["evidence_fills"] if totals else 0) or 0),
@@ -7280,6 +7299,8 @@ def get_roster_integrity_diagnostics() -> dict[str, object]:
         "latest_discrepancy_at": str((discrepancies["latest_at"] if discrepancies else "") or ""),
         "recovery": dict(recovery) if recovery is not None else None,
         "partial_rows": [dict(row) for row in partial_rows],
+        "shared_personal_fill_count": shared_personal_fill_count,
+        "shared_personal_fills": [dict(row) for row in shared_personal_fills],
     }
 
 
@@ -9066,6 +9087,7 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
             apply=True,
             trigger_source="successful_personal_capture",
         ) if owner_user_id is not None and own_counts["seen"] else {}
+        effective_roster = _reconcile_effective_personal_rosters_conn(conn, captured_at)
     return {
         "own_seen": own_counts["seen"],
         "own_created": own_counts["created"],
@@ -9079,6 +9101,9 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
         "partial_events": len(partial_scopes),
         "identity_links_repaired": int(identity_report.get("links_repaired", 0))
         + int(identity_report.get("duplicate_identities_merged", 0)),
+        "effective_roster_filled": effective_roster["filled"],
+        "effective_roster_updated": effective_roster["updated"],
+        "effective_roster_retired": effective_roster["retired"],
     }
 
 
@@ -9982,6 +10007,15 @@ def _save_deputy_web_own_shifts(
 
         changes, classifications = _deputy_web_shift_changes(existing, values)
         changed = any(visible for _category, visible in classifications.values())
+        existing_payload = _json_loads_dict(str(existing["source_payload"] or ""))
+        existing_effective = existing_payload.get("effective_roster")
+        if not changed and isinstance(existing_effective, dict) and existing_effective.get("notification_baseline"):
+            personal_payload = _json_loads_dict(str(values["source_payload"] or ""))
+            personal_payload["effective_roster"] = {
+                "source": "authenticated_personal_catch_up",
+                "notification_baseline": True,
+            }
+            values["source_payload"] = json_dumps(personal_payload)
         conn.execute(
             """
             UPDATE shifts
@@ -10325,6 +10359,236 @@ def _deputy_web_shift_values(
         "source_status": source_status,
         "source_payload": json_dumps(payload),
     }
+
+
+def _shift_payload_source(row: sqlite3.Row | dict[str, object]) -> str:
+    payload = _json_loads_dict(str(row["source_payload"] or ""))
+    normalised = payload.get("normalised") if isinstance(payload.get("normalised"), dict) else {}
+    return str(normalised.get("source") or "")
+
+
+def _reconcile_effective_personal_rosters_conn(
+    conn: sqlite3.Connection,
+    reconciled_at: str,
+) -> dict[str, int]:
+    """Materialise current shared-positive assignments for confirmed app identities.
+
+    This is a positive-only bridge into the existing owner-scoped roster model.
+    Shared absence is never inferred here: source rows disappear only after the
+    existing observation/coverage authority has already retired them.
+    """
+    today_text = datetime.now(get_settings().timezone).date().isoformat()
+    counts = {"filled": 0, "updated": 0, "retired": 0}
+    location_lookup = _static_location_lookup()
+    for row in conn.execute("SELECT * FROM deputy_schedule_locations").fetchall():
+        location_id = _optional_int(row["location_id"])
+        if location_id is not None:
+            location_lookup[location_id] = {
+                "id": location_id,
+                "name": str(row["name"] or ""),
+                "address": str(row["address"] or ""),
+            }
+    area_lookup = {
+        str(row["area_id"]): {
+            "id": row["area_id"],
+            "name": row["name"],
+            "locationId": row["location_id"],
+            "rosterSortOrder": row["roster_sort_order"],
+        }
+        for row in conn.execute("SELECT * FROM deputy_schedule_areas").fetchall()
+    }
+    identities = conn.execute(
+        """
+        SELECT identity.app_user_id, identity.deputy_employee_id
+        FROM app_user_deputy_identity identity
+        JOIN app_users user ON user.id = identity.app_user_id AND user.is_active = 1
+        WHERE identity.status = 'confirmed' AND identity.deputy_employee_id IS NOT NULL
+        ORDER BY identity.app_user_id
+        """
+    ).fetchall()
+    for identity in identities:
+        owner_user_id = int(identity["app_user_id"])
+        employee_id = int(identity["deputy_employee_id"])
+        matching_ids: set[str] = set()
+        shared_rows = conn.execute(
+            """
+            SELECT schedule.*,
+                   COALESCE(schedule.area_location_id, area.location_id) AS effective_location_id,
+                   COALESCE(location.name, '') AS location_name,
+                   COALESCE((
+                     SELECT MIN(observation.first_seen_at)
+                     FROM deputy_schedule_observations observation
+                     WHERE observation.source_shift_id = schedule.source_shift_id
+                       AND observation.active = 1
+                   ), schedule.captured_at) AS shared_first_seen_at
+            FROM deputy_schedule_shifts schedule
+            LEFT JOIN deputy_schedule_areas area ON area.area_id = schedule.area_id
+            LEFT JOIN deputy_schedule_locations location
+              ON location.location_id = COALESCE(schedule.area_location_id, area.location_id)
+            WHERE schedule.date >= ?
+              AND schedule.employee_id = ?
+              AND schedule.is_published = 1
+              AND COALESCE(schedule.is_open, 0) = 0
+              AND TRIM(COALESCE(schedule.employee_name, '')) != ''
+              AND EXISTS (
+                SELECT 1 FROM deputy_schedule_observations observation
+                WHERE observation.source_shift_id = schedule.source_shift_id
+                  AND observation.active = 1
+              )
+            ORDER BY schedule.start_at, schedule.source_shift_id
+            """,
+            (today_text, employee_id),
+        ).fetchall()
+        for shared in shared_rows:
+            shift_id = str(shared["source_shift_id"])
+            source_uid = f"deputy-web:{owner_user_id}:{shift_id}"
+            matching_ids.add(shift_id)
+            raw_shift = {
+                "id": int(shift_id),
+                "area": shared["area_id"],
+                "areaName": shared["area_name"],
+                "areaLocationId": shared["effective_location_id"],
+                "location": shared["effective_location_id"],
+                "locationName": shared["location_name"],
+                "employee": shared["employee_id"],
+                "employeeName": shared["employee_name"],
+                "start": shared["start_at"],
+                "end": shared["end_at"],
+                "duration": shared["duration"],
+                "isOpen": bool(shared["is_open"]),
+                "isPublished": bool(shared["is_published"]),
+                "note": shared["note"],
+            }
+            values = _deputy_web_shift_values(
+                raw_shift,
+                area_lookup,
+                location_lookup,
+                reconciled_at,
+                f"deputy-shared-effective:{owner_user_id}",
+                owner_user_id,
+            )
+            if values is None:
+                continue
+            payload = _json_loads_dict(str(values["source_payload"] or ""))
+            normalised = payload.get("normalised") if isinstance(payload.get("normalised"), dict) else {}
+            normalised.update({
+                "source": "deputy_shared_effective_roster",
+                "authenticated_personal": False,
+                "shared_positive": True,
+                "shared_source_shift_id": int(shift_id),
+            })
+            payload["normalised"] = normalised
+            payload["effective_roster"] = {
+                "source": "current_positive_shared_schedule",
+                "reconciled_at": reconciled_at,
+                "notification_baseline": True,
+            }
+            values["source_payload"] = json_dumps(payload)
+            existing = conn.execute("SELECT * FROM shifts WHERE source_uid = ?", (source_uid,)).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO shifts (
+                        source_uid, source_url_hash, title, description, location,
+                        start_at, end_at, date, raw_hours, break_minutes, paid_hours,
+                        last_synced_at, first_seen_at, last_changed_at,
+                        changed_since_viewed, deleted_from_source, owner_user_id,
+                        source_link, source_status, source_payload, missing_capture_count,
+                        capture_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0, ?, ?, ?, ?, 0, 'shared_positive')
+                    """,
+                    (
+                        values["source_uid"], values["source_url_hash"], values["title"],
+                        values["description"], values["location"], values["start_at"],
+                        values["end_at"], values["date"], values["raw_hours"],
+                        values["break_minutes"], values["paid_hours"], reconciled_at,
+                        str(shared["shared_first_seen_at"] or reconciled_at), owner_user_id,
+                        values["source_link"], values["source_status"], values["source_payload"],
+                    ),
+                )
+                counts["filled"] += 1
+                continue
+            if _shift_payload_source(existing) != "deputy_shared_effective_roster":
+                continue
+            existing_payload = _json_loads_dict(str(existing["source_payload"] or ""))
+            existing_effective = (
+                existing_payload.get("effective_roster")
+                if isinstance(existing_payload.get("effective_roster"), dict)
+                else {}
+            )
+            if not bool(existing_effective.get("notification_baseline")):
+                payload["effective_roster"].pop("notification_baseline", None)
+                values["source_payload"] = json_dumps(payload)
+            changes, classifications = _deputy_web_shift_changes(existing, values)
+            visible_change = any(visible for _category, visible in classifications.values())
+            if visible_change:
+                payload["effective_roster"].pop("notification_baseline", None)
+                values["source_payload"] = json_dumps(payload)
+            conn.execute(
+                """
+                UPDATE shifts SET source_url_hash=?, title=?, description=?, location=?,
+                    start_at=?, end_at=?, date=?, raw_hours=?, break_minutes=?, paid_hours=?,
+                    last_synced_at=?, source_link=?, source_status=?, source_payload=?,
+                    deleted_from_source=0, missing_capture_count=0, capture_status='shared_positive',
+                    last_changed_at=CASE WHEN ? THEN ? ELSE last_changed_at END,
+                    changed_since_viewed=CASE WHEN ? THEN 1 ELSE changed_since_viewed END
+                WHERE id=?
+                """,
+                (
+                    values["source_url_hash"], values["title"], values["description"],
+                    values["location"], values["start_at"], values["end_at"], values["date"],
+                    values["raw_hours"], values["break_minutes"], values["paid_hours"],
+                    reconciled_at, values["source_link"], values["source_status"],
+                    values["source_payload"], 1 if visible_change else 0, reconciled_at,
+                    1 if visible_change else 0, int(existing["id"]),
+                ),
+            )
+            if changes:
+                write_shift_changes(
+                    conn, int(existing["id"]), reconciled_at, changes,
+                    classifications=classifications,
+                )
+            if changes or int(existing["deleted_from_source"] or 0):
+                counts["updated"] += 1
+
+        for existing in conn.execute(
+            """
+            SELECT * FROM shifts
+            WHERE owner_user_id=? AND date>=?
+              AND source_url_hash=? AND source_uid LIKE ?
+              AND deleted_from_source=0
+            """,
+            (
+                owner_user_id, today_text, f"deputy-shared-effective:{owner_user_id}",
+                f"deputy-web:{owner_user_id}:%",
+            ),
+        ).fetchall():
+            source_shift_id = str(existing["source_uid"] or "").rsplit(":", 1)[-1]
+            if source_shift_id in matching_ids:
+                continue
+            conn.execute(
+                """
+                UPDATE shifts SET deleted_from_source=1, capture_status='cancelled',
+                    changed_since_viewed=1, last_changed_at=?, last_synced_at=?
+                WHERE id=?
+                """,
+                (reconciled_at, reconciled_at, int(existing["id"])),
+            )
+            write_shift_changes(
+                conn, int(existing["id"]), reconciled_at,
+                {"deleted_from_source": (0, 1)},
+                classifications={"deleted_from_source": ("source_change", True)},
+            )
+            counts["retired"] += 1
+    return counts
+
+
+def reconcile_effective_personal_rosters(reconciled_at: str | None = None) -> dict[str, int]:
+    with get_connection() as conn:
+        return _reconcile_effective_personal_rosters_conn(
+            conn,
+            reconciled_at or datetime.now(get_settings().timezone).isoformat(timespec="seconds"),
+        )
 
 
 def _optional_int(value: object) -> int | None:

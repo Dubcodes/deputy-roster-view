@@ -205,7 +205,16 @@
         <div class="stat-card"><span>Locked completed events</span><strong>{{ integrity.locked_events }}</strong><small>{{ integrity.recovered_locks }} recovered from retained captures</small></div>
         <div class="stat-card"><span>Current conflicts</span><strong>{{ integrity.coverage_conflicts }}</strong><small>personal and shared evidence disagree</small></div>
         <div class="stat-card"><span>Late historical discrepancies</span><strong>{{ integrity.historical_discrepancies }}</strong><small>recorded without rewriting history</small></div>
+        <div class="stat-card"><span>Shared personal fills</span><strong>{{ integrity.shared_personal_fill_count }}</strong><small>linked users protected from narrow personal coverage</small></div>
       </div>
+      {% if integrity.shared_personal_fills %}
+        <h3>Personal roster supplemented from shared evidence</h3>
+        <div class="track-map-diagnostics">
+          {% for row in integrity.shared_personal_fills %}
+            <div><strong>{{ row.date }} · {{ row.display_name }}</strong><span>{{ row.title }}</span></div>
+          {% endfor %}
+        </div>
+      {% endif %}
       {% if integrity.partial_rows %}
         <h3>Upcoming captures to check</h3>
         <div class="track-map-diagnostics">

@@ -38,7 +38,11 @@ def main() -> None:
         save_deputy_web_capture_diagnostic,
         save_deputy_web_schedule,
     )
-    from app.deputy_web import _is_successful_personal_shift_response, _personal_endpoint_forbidden
+    from app.deputy_web import (
+        _is_successful_personal_shift_response,
+        _personal_endpoint_forbidden,
+        _personal_expansion_start,
+    )
     import app.scheduler as scheduler
 
     init_db()
@@ -75,6 +79,15 @@ def main() -> None:
     assert _is_successful_personal_shift_response(200, {"success": True, "data": []})
     assert _is_successful_personal_shift_response(200, {"success": True, "data": [{"id": 1}]})
     assert not _is_successful_personal_shift_response(403, {"success": False, "data": []})
+    page_start = now.replace(hour=0, minute=0, second=0)
+    page_end = page_start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+    expansion_start = _personal_expansion_start(
+        now - timedelta(days=7), [(page_start, page_end)]
+    )
+    assert expansion_start == (page_end + timedelta(seconds=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    assert expansion_start > page_end
 
     personal_row = {
         "id": 91001,
@@ -373,6 +386,8 @@ def main() -> None:
         fake_settings = SimpleNamespace(
             timezone=ZoneInfo("Pacific/Auckland"),
             user_sync_batch_size=2,
+            user_sync_stagger_minutes=7,
+            user_sync_jitter_minutes=0,
             sync_at_hour=23,
         )
         result = scheduler.run_due_user_syncs(fake_settings)

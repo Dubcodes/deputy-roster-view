@@ -305,5 +305,23 @@ def _add_sync_notice(user: dict[str, object]) -> None:
         user["sync_notice_kind"] = "stale"
         user["sync_notice_text"] = f"Deputy roster may be out of date · last synced {age_label}"
         return
+    with get_connection() as conn:
+        identity = conn.execute(
+            """SELECT deputy_employee_id FROM app_user_deputy_identity
+               WHERE app_user_id=? AND status='confirmed' AND deputy_employee_id IS NOT NULL""",
+            (int(user["id"]),),
+        ).fetchone()
+        supplemented = int(conn.execute(
+            """SELECT COUNT(*) FROM shifts
+               WHERE owner_user_id=? AND deleted_from_source=0
+                 AND source_url_hash=?""",
+            (int(user["id"]), f"deputy-shared-effective:{int(user['id'])}"),
+        ).fetchone()[0])
+    if identity is None:
+        user["sync_notice_kind"] = "stale"
+        user["sync_notice_text"] = "Roster coverage incomplete · Some workdays may be missing."
+        return
     user["sync_notice_kind"] = "healthy"
     user["sync_notice_text"] = f"Deputy roster synced {last_sync.astimezone(settings.timezone).strftime('%d %b %H:%M')}"
+    if supplemented:
+        user["sync_notice_text"] += " · Personal coverage was limited; shared roster evidence was used."

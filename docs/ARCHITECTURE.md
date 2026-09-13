@@ -220,6 +220,27 @@ An unambiguous employee-ID match may link the account directly or merge an accou
 
 `workday_user_visibility` materializes personal access for published manual workdays from canonical assignment people and their linked active app users. It is rebuilt after publication, identity repair, and later account linking. This lets existing workdays become visible without republishing or creating a content change.
 
+## Effective Personal Deputy Roster
+
+The owner-scoped `shifts` table remains the common input for Month, Day, Next Up,
+timesheets, insights, availability and notifications. A confirmed
+`app_user_deputy_identity` permits current positive shared schedule assignments for
+that exact Deputy employee ID to be materialized into this roster with explicit
+`deputy_shared_effective_roster` provenance. The materialized row uses the same
+Deputy source-shift identity as authenticated personal capture, so later personal
+evidence upgrades it in place and preserves marks and personal time overrides.
+
+Personal capture success is transport/authentication evidence, not complete future
+absence authority. Shared positive assignment can supplement a linked user's
+roster; partial personal or shared absence cannot delete known work. Reconciliation
+retires a shared-derived row only after the existing source-aware schedule evidence
+model has already retired its underlying current row. Initial reconciliation is a
+notification baseline, while normal future reminders remain eligible.
+
+The venue Area catalogue describes possible positions, not an event roster. Day
+views render current schedule rows, including genuine Deputy open shifts, without
+manufacturing catalogue-only TBC positions.
+
 ## Local Transport Preferences
 
 `user_event_transport_preferences` stores a signed-in user's reversible "Making my own way" choice against a stable Deputy shift or manual-workday ID and canonical crew identity. `user_event_transport_preference_audit` records each actual toggle. The read layer overlays that choice on the latest roster transport; it never edits Deputy shifts, manual roster snapshots, vehicle evidence, or Changed state. Turning it off therefore reveals the newest underlying transport assignment.

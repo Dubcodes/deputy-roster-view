@@ -143,6 +143,7 @@ from .database import (
     workday_vehicle_conflicts,
     merge_crew_people,
     reconcile_authenticated_identities,
+    reconcile_effective_personal_rosters,
     resolve_workday_snapshot_assignments,
     update_deputy_user_ical_url,
     update_deputy_user_credentials,
@@ -4666,14 +4667,17 @@ def apply_event_changes_to_schedule_people(
                 }
                 if position_key not in person_positions:
                     continue
+                candidate_at = parse_iso_datetime(str(change_group.get("changed_at") or ""))
+                current_at = parse_iso_datetime(str(person.get("last_changed_at") or ""))
+                # Groups arrive newest-first (and id-desc for equal timestamps).
+                # Never let an older, or a later-iterated equal-time, group
+                # overwrite the visible badge chosen for this current row.
+                if current_at is not None and (candidate_at is None or candidate_at <= current_at):
+                    continue
                 person["changed"] = True
                 person["change_summary"] = str(inline_change.get("summary") or "Changed")
-                person["change_time_label"] = format_datetime(
-                    latest_iso_datetime(
-                        person.get("last_changed_at"), change_group.get("changed_at")
-                    ),
-                    "%d %b %H:%M",
-                )
+                person["last_changed_at"] = str(change_group.get("changed_at") or "")
+                person["change_time_label"] = format_datetime(person["last_changed_at"], "%d %b %H:%M")
                 break
 
 def shifts_are_vehicle_travel_context(shifts: list[dict[str, object]]) -> bool:
@@ -5182,7 +5186,11 @@ def inferred_tbc_schedule(start_day: date, end_day: date) -> list[dict[str, obje
     tbc_rows = []
     seen = set()
     for (date_text, location_id), rows in grouped_rows.items():
-        for person in schedule_people(rows, expected_areas=areas_by_location.get(location_id, [])):
+        for person in schedule_people(
+            rows,
+            expected_areas=areas_by_location.get(location_id, []),
+            include_placeholders=False,
+        ):
             employee_name = str(person.get("employee_name") or "").strip().lower()
             if not person.get("placeholder") and employee_name != "tbc":
                 continue
@@ -6183,6 +6191,7 @@ def credential_save_failed_response(path: str, user_id: int | None, exc: Excepti
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    reconcile_effective_personal_rosters()
     ensure_push_identity()
     migrate_existing_track_map_aliases()
     # Startup recovery must never make an irreversible retention decision.
@@ -7962,11 +7971,8 @@ def day_view(
         global_schedule_rows = global_crew_schedule_rows(unfiltered_global_schedule_rows)
         global_schedule_people = schedule_people(
             global_schedule_rows,
-            expected_areas=(
-                fetch_deputy_schedule_areas_for_locations({selected_location_id})
-                if selected_location_id
-                else []
-            ),
+            expected_areas=[],
+            include_placeholders=False,
         )
         global_travel_context = bool(
             selected_event
@@ -8077,7 +8083,7 @@ def day_view(
         shift["change_summary_text"] = build_shift_change_summary(list(shift.get("changes") or []))
     schedule_location_ids = shift_schedule_location_ids(shifts)
     travel_schedule_context = shifts_are_vehicle_travel_context(shifts)
-    schedule_expected_areas = [] if travel_schedule_context else fetch_deputy_schedule_areas_for_locations(schedule_location_ids)
+    schedule_expected_areas = []
     deputy_schedule_label = deputy_schedule_label_for_shifts(
         "Travel / Vehicles" if travel_schedule_context else "Deputy Schedule",
         shifts,
@@ -8112,7 +8118,7 @@ def day_view(
         deputy_schedule_rows,
         expected_areas=schedule_expected_areas,
         include_vehicle_only=travel_schedule_context,
-        include_placeholders=not travel_schedule_context,
+        include_placeholders=False,
     )
     personal_schedule_evidence = (
         travel_personal_assignment_evidence(date_text, shifts, deputy_schedule_rows)

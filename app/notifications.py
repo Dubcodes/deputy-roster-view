@@ -145,6 +145,17 @@ def _group_deputy_notification_workdays(
     shifts: list[dict[str, object]], user_id: int | None = None,
 ) -> list[dict[str, object]]:
     """Consume the same structured/note-aware final interpretation as the day page."""
+    notification_baseline_ids: set[str] = set()
+    for shift in shifts:
+        try:
+            payload = json.loads(str(shift.get("source_payload") or "{}"))
+        except (TypeError, ValueError):
+            payload = {}
+        effective = payload.get("effective_roster") if isinstance(payload, dict) else None
+        if isinstance(effective, dict) and effective.get("notification_baseline"):
+            source_shift_id = str(shift.get("source_uid") or "").rsplit(":", 1)[-1]
+            if source_shift_id:
+                notification_baseline_ids.add(source_shift_id)
     structured_rows: list[dict[str, object]] = []
     preceding_rows: list[dict[str, object]] = []
     identity: dict[str, object] = {}
@@ -192,6 +203,16 @@ def _group_deputy_notification_workdays(
         })
         for field in ("first_seen_at", "last_changed_at", "last_synced_at"):
             item[field] = max((str(row.get(field) or "") for row in evidence), default="")
+        evidence_ids = {
+            str(row.get("source_shift_id") or "") for row in evidence
+            if str(row.get("source_shift_id") or "")
+        }
+        if evidence_ids and evidence_ids.issubset(notification_baseline_ids):
+            # Initial 0.5.24 reconciliation exposes already-known shared work for
+            # reminders without manufacturing a historical "new assignment" alert.
+            item["changed_since_viewed"] = 0
+            item["first_seen_at"] = ""
+            item["last_changed_at"] = ""
         result.append(item)
     return result
 

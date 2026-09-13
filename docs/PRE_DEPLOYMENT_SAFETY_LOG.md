@@ -615,3 +615,18 @@ Starting baseline: `bfe9103aa17f76229924a872f7a479d0ba2be3fd` (`Re-Deputy 0.5.13
 Authenticated personal Deputy rows are now retained before semantic classification. Production positions, Travel participants, vehicle/operational context, and unknown labels remain distinct; the upgrade backfill classifies retained labels without promoting unknown evidence. Production coverage consumes production-position evidence only. Event-scoped Travel membership is the union of shared structured participants and strongly identified authenticated personal participants for the same narrow Travel/T-Travel family and overlapping event window. Roster notes enrich established members but cannot create crew membership. Generic truck evidence renders as `Truck` while retaining generic metadata, and note-versus-structured vehicle disagreement is reported without changing note authority.
 
 The dedicated Travel collector, broad-ALL absence exclusions, per-observer evidence, partial-capture protection, historical event locks, capture recovery, structured vehicle collector, raw-owner isolation, short-lead handoff duration guard, and Deputy roster timing authority remain intact. The complete deterministic 0.5.13 release gate and its 320px/375px responsive variant passed, including fresh initialization, representative in-place 0.5.13 migration twice, SQLite integrity/FK checks, assignment/link collision audit, and `git diff --check`. No live Deputy access, write enablement, deployment, merge, or push occurred.
+
+---
+
+## 0.5.24 personal roster integrity candidate
+
+Starting baseline: `dbff4d94d80db55b1d560d00ebf90e029af1e8f5` (`Re-Deputy 0.5.23`).
+
+Confirmed employee identity now permits current positive shared assignments to fill
+otherwise missing owner-scoped workdays using the stable Deputy shift identity and
+explicit shared provenance. Existing shared evidence authority remains the only
+retirement boundary; partial absence is non-destructive. The same rows feed Month,
+Day, Next Up, timesheets, reminders, availability and insights without duplicates.
+Day pages no longer turn venue Area catalogues into synthetic TBC assignments, and
+the visible Changed badge retains the newest applicable timestamp. Deputy remains
+read-only and no schema, Compose or deployment change is included.
