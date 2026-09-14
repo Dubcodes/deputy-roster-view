@@ -622,10 +622,14 @@ The dedicated Travel collector, broad-ALL absence exclusions, per-observer evide
 
 Starting baseline: `dbff4d94d80db55b1d560d00ebf90e029af1e8f5` (`Re-Deputy 0.5.23`).
 
-Confirmed employee identity now permits current positive shared assignments to fill
-otherwise missing owner-scoped workdays using the stable Deputy shift identity and
-explicit shared provenance. Existing shared evidence authority remains the only
-retirement boundary; partial absence is non-destructive. The same rows feed Month,
+Confirmed authenticated personal identity is preferred for current positive shared
+assignment fills. When it is absent, an active canonical app-user-to-crew link with
+a known Deputy employee ID is a deterministic fallback; names are never guessed,
+unresolved users remain unresolved, and fallback does not fabricate authenticated
+personal evidence. Identity authority and any authenticated/canonical disagreement
+remain inspectable in shared-derived provenance. Fills use the stable Deputy shift
+identity. Existing shared evidence authority remains the only retirement boundary;
+partial absence is non-destructive. The same rows feed Month,
 Day, Next Up, timesheets, reminders, availability and insights without duplicates.
 Day pages no longer turn venue Area catalogues into synthetic TBC assignments, and
 the visible Changed badge retains the newest applicable timestamp. Deputy remains

@@ -10367,6 +10367,73 @@ def _shift_payload_source(row: sqlite3.Row | dict[str, object]) -> str:
     return str(normalised.get("source") or "")
 
 
+def _effective_personal_roster_identities_conn(
+    conn: sqlite3.Connection,
+    app_user_id: int | None = None,
+) -> list[dict[str, object]]:
+    """Resolve only deterministic app-user to Deputy employee identities."""
+    params: list[object] = []
+    user_filter = ""
+    if app_user_id is not None:
+        user_filter = "AND user.id = ?"
+        params.append(app_user_id)
+    rows = conn.execute(
+        f"""
+        SELECT user.id AS app_user_id,
+               authenticated.deputy_employee_id AS authenticated_employee_id,
+               canonical.deputy_employee_id AS canonical_employee_id
+        FROM app_users user
+        LEFT JOIN app_user_deputy_identity authenticated
+          ON authenticated.app_user_id = user.id
+         AND authenticated.status = 'confirmed'
+         AND authenticated.deputy_employee_id IS NOT NULL
+        LEFT JOIN crew_people canonical
+          ON canonical.app_user_id = user.id
+         AND canonical.is_active = 1
+         AND canonical.merged_into_person_id IS NULL
+         AND canonical.deputy_employee_id IS NOT NULL
+        WHERE user.is_active = 1
+          {user_filter}
+          AND (
+            authenticated.deputy_employee_id IS NOT NULL
+            OR canonical.deputy_employee_id IS NOT NULL
+          )
+        ORDER BY user.id
+        """,
+        params,
+    ).fetchall()
+    resolved: list[dict[str, object]] = []
+    for row in rows:
+        authenticated_id = _optional_int(row["authenticated_employee_id"])
+        canonical_id = _optional_int(row["canonical_employee_id"])
+        employee_id = authenticated_id if authenticated_id is not None else canonical_id
+        if employee_id is None:
+            continue
+        resolved.append({
+            "app_user_id": int(row["app_user_id"]),
+            "deputy_employee_id": employee_id,
+            "identity_authority": (
+                "authenticated_personal_capture"
+                if authenticated_id is not None
+                else "canonical_app_link"
+            ),
+            "authenticated_employee_id": authenticated_id,
+            "canonical_employee_id": canonical_id,
+            "identity_conflict": bool(
+                authenticated_id is not None
+                and canonical_id is not None
+                and authenticated_id != canonical_id
+            ),
+        })
+    return resolved
+
+
+def effective_personal_roster_identity(app_user_id: int) -> dict[str, object] | None:
+    with get_connection() as conn:
+        rows = _effective_personal_roster_identities_conn(conn, app_user_id)
+    return rows[0] if rows else None
+
+
 def _reconcile_effective_personal_rosters_conn(
     conn: sqlite3.Connection,
     reconciled_at: str,
@@ -10397,15 +10464,7 @@ def _reconcile_effective_personal_rosters_conn(
         }
         for row in conn.execute("SELECT * FROM deputy_schedule_areas").fetchall()
     }
-    identities = conn.execute(
-        """
-        SELECT identity.app_user_id, identity.deputy_employee_id
-        FROM app_user_deputy_identity identity
-        JOIN app_users user ON user.id = identity.app_user_id AND user.is_active = 1
-        WHERE identity.status = 'confirmed' AND identity.deputy_employee_id IS NOT NULL
-        ORDER BY identity.app_user_id
-        """
-    ).fetchall()
+    identities = _effective_personal_roster_identities_conn(conn)
     for identity in identities:
         owner_user_id = int(identity["app_user_id"])
         employee_id = int(identity["deputy_employee_id"])
@@ -10476,12 +10535,17 @@ def _reconcile_effective_personal_rosters_conn(
                 "authenticated_personal": False,
                 "shared_positive": True,
                 "shared_source_shift_id": int(shift_id),
+                "identity_authority": identity["identity_authority"],
             })
             payload["normalised"] = normalised
             payload["effective_roster"] = {
                 "source": "current_positive_shared_schedule",
                 "reconciled_at": reconciled_at,
                 "notification_baseline": True,
+                "identity_authority": identity["identity_authority"],
+                "identity_conflict": identity["identity_conflict"],
+                "authenticated_employee_id": identity["authenticated_employee_id"],
+                "canonical_employee_id": identity["canonical_employee_id"],
             }
             values["source_payload"] = json_dumps(payload)
             existing = conn.execute("SELECT * FROM shifts WHERE source_uid = ?", (source_uid,)).fetchone()

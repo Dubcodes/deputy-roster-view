@@ -27,6 +27,7 @@ def main() -> None:
     from app.database import (
         fetch_deputy_schedule_for_date,
         fetch_shifts_between,
+        effective_personal_roster_identity,
         get_roster_integrity_diagnostics,
         get_upcoming_shifts,
         init_db,
@@ -65,6 +66,17 @@ def main() -> None:
                VALUES (2,'unresolved@example.test','Unresolved Crew','x','https://example.test',0,1,?,?)""",
             (captured_at, captured_at),
         )
+        for user_id, email, name in (
+            (3, "canonical@example.test", "Canonical Link"),
+            (4, "no-id@example.test", "Name Collision"),
+            (5, "conflict@example.test", "Authenticated Preferred"),
+        ):
+            conn.execute(
+                """INSERT INTO app_users
+                   (id,deputy_email,display_name,pin_hash,deputy_web_url,is_admin,is_active,created_at,updated_at)
+                   VALUES (?,?,?,'x','',0,1,?,?)""",
+                (user_id, email, name, captured_at, captured_at),
+            )
         person_id = conn.execute(
             """INSERT INTO crew_people
                (deputy_employee_id,canonical_display_name,current_deputy_name,app_user_id,is_active,created_at,updated_at)
@@ -77,6 +89,37 @@ def main() -> None:
                 confidence_source,status,updated_at)
                VALUES (1,19,?,?,?,'authenticated_personal_capture','confirmed',?)""",
             (person_id, captured_at, captured_at, captured_at),
+        )
+        conn.execute(
+            """INSERT INTO crew_people
+               (deputy_employee_id,canonical_display_name,current_deputy_name,app_user_id,is_active,created_at,updated_at)
+               VALUES (27,'Canonical Link','Canonical Link',3,1,?,?)""",
+            (captured_at, captured_at),
+        )
+        conn.execute(
+            """INSERT INTO crew_people
+               (deputy_employee_id,canonical_display_name,current_deputy_name,app_user_id,is_active,created_at,updated_at)
+               VALUES (NULL,'Name Collision','Name Collision',4,1,?,?)""",
+            (captured_at, captured_at),
+        )
+        conn.execute(
+            """INSERT INTO crew_people
+               (deputy_employee_id,canonical_display_name,current_deputy_name,app_user_id,is_active,created_at,updated_at)
+               VALUES (31,'Canonical Conflict','Canonical Conflict',5,1,?,?)""",
+            (captured_at, captured_at),
+        )
+        authenticated_person_id = conn.execute(
+            """INSERT INTO crew_people
+               (deputy_employee_id,canonical_display_name,current_deputy_name,app_user_id,is_active,created_at,updated_at)
+               VALUES (30,'Authenticated Identity','Authenticated Identity',NULL,1,?,?)""",
+            (captured_at, captured_at),
+        ).lastrowid
+        conn.execute(
+            """INSERT INTO app_user_deputy_identity
+               (app_user_id,deputy_employee_id,canonical_person_id,first_confirmed_at,last_confirmed_at,
+                confidence_source,status,updated_at)
+               VALUES (5,30,?,?,?,'authenticated_personal_capture','confirmed',?)""",
+            (authenticated_person_id, captured_at, captured_at, captured_at),
         )
 
     areas = [
@@ -140,6 +183,86 @@ def main() -> None:
     }
     if dates[0] not in timesheet_dates:
         raise AssertionError("Timesheet summary omitted an effective shared-positive workday.")
+
+    fallback_row = row(9300, dates[0], 27, "Canonical Link", area=102)
+    no_id_row = row(9301, dates[1], 28, "Name Collision", area=103)
+    authenticated_row = row(9302, dates[2], 30, "Authenticated Identity", area=105)
+    conflicting_canonical_row = row(9303, dates[3], 31, "Canonical Conflict", area=106)
+    identity_rows = [fallback_row, no_id_row, authenticated_row, conflicting_canonical_row]
+    save_deputy_web_schedule({
+        "captured_at": captured_at, "areas": areas,
+        "locations": [{"id": 64, "name": "T-Test Track", "address": ""}],
+        "extracted_shifts": [], "extracted_schedule_shifts": identity_rows,
+        "native_schedule_shift_ids": [int(item["id"]) for item in identity_rows],
+        "direct_schedule_shift_ids": [], "schedule_coverage": [], "own_roster_coverage": [],
+    })
+
+    fallback_shifts = [dict(item) for item in fetch_shifts_between(dates[0], dates[0], 3)]
+    fallback_payload = json.loads(str(fallback_shifts[0]["source_payload"] or "{}")) if fallback_shifts else {}
+    fallback_provenance = fallback_payload.get("effective_roster") or {}
+    if len(fallback_shifts) != 1 or fallback_provenance.get("identity_authority") != "canonical_app_link":
+        raise AssertionError(f"Canonical app-linked identity did not materialize with explicit provenance: {fallback_shifts!r}")
+    if not any(str(item["source_uid"]).endswith(":9300") for item in get_upcoming_shifts(now.isoformat(), 20, 3)):
+        raise AssertionError("Canonical fallback workday was absent from the upcoming roster consumer.")
+    if effective_personal_roster_identity(3) != {
+        "app_user_id": 3, "deputy_employee_id": 27,
+        "identity_authority": "canonical_app_link",
+        "authenticated_employee_id": None, "canonical_employee_id": 27,
+        "identity_conflict": False,
+    }:
+        raise AssertionError("Canonical fallback identity resolution was not deterministic.")
+    with sqlite3.connect(db_path) as conn:
+        fabricated = conn.execute(
+            "SELECT 1 FROM app_user_deputy_identity WHERE app_user_id=3"
+        ).fetchone()
+    if fabricated is not None:
+        raise AssertionError("Canonical fallback fabricated authenticated personal identity evidence.")
+
+    if fetch_shifts_between(dates[1], dates[1], 4):
+        raise AssertionError("An app-linked person without a Deputy employee ID was matched by name.")
+    if effective_personal_roster_identity(4) is not None:
+        raise AssertionError("A canonical person without a Deputy employee ID did not remain unresolved.")
+
+    preferred = [dict(item) for item in fetch_shifts_between(dates[2], dates[3], 5)]
+    if len(preferred) != 1 or not str(preferred[0]["source_uid"]).endswith(":9302"):
+        raise AssertionError(f"Confirmed personal identity did not override conflicting canonical identity: {preferred!r}")
+    preferred_payload = json.loads(str(preferred[0]["source_payload"] or "{}"))
+    preferred_provenance = preferred_payload.get("effective_roster") or {}
+    if (
+        preferred_provenance.get("identity_authority") != "authenticated_personal_capture"
+        or not preferred_provenance.get("identity_conflict")
+        or preferred_provenance.get("authenticated_employee_id") != 30
+        or preferred_provenance.get("canonical_employee_id") != 31
+    ):
+        raise AssertionError(f"Identity disagreement was not inspectable in provenance: {preferred_provenance!r}")
+    with sqlite3.connect(db_path) as conn:
+        canonical_still_linked = conn.execute(
+            "SELECT deputy_employee_id FROM crew_people WHERE app_user_id=5"
+        ).fetchone()
+        authenticated_still_confirmed = conn.execute(
+            "SELECT deputy_employee_id FROM app_user_deputy_identity WHERE app_user_id=5 AND status='confirmed'"
+        ).fetchone()
+    if canonical_still_linked != (31,) or authenticated_still_confirmed != (30,):
+        raise AssertionError("Effective-roster conflict handling rewrote established identity evidence.")
+
+    canonical_notice = {"id": 3, "has_deputy_credentials": False}
+    _add_sync_notice(canonical_notice)
+    if canonical_notice.get("sync_notice_text") != "Personal Deputy login not connected · shared roster evidence is being used.":
+        raise AssertionError(f"No-login shared supplementation notice was misleading: {canonical_notice!r}")
+    save_notification_preferences(3, {
+        "enabled": True, "night_before": True, "changes_enabled": True,
+        "reminder_time": "19:00",
+    })
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE deputy_schedule_shifts SET changed_since_viewed=1,last_changed_at=? WHERE source_shift_id='9300'",
+            (now.isoformat(),),
+        )
+    fallback_notifications = generate_due_notifications(
+        datetime.combine(now.date(), time(19, 5), settings.timezone)
+    )
+    if fallback_notifications["reminders"] < 1 or fallback_notifications["changes"] != 0:
+        raise AssertionError(f"Canonical fallback created a fake initial change alert: {fallback_notifications!r}")
 
     linked_notice = {
         "id": 1, "has_deputy_credentials": True, "sync_in_progress": 0,

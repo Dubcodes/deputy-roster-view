@@ -295,7 +295,7 @@ This remains the governing boundary. Build 2026.08.13.1 implements only the cont
 # 0.5.24 personal roster integrity decisions
 
 - A successful authenticated personal refresh does not imply complete personal absence coverage. Bounded employee-specific future windows may supplement the observed page window, and the first 401/403 stops the remaining equivalent requests for that capture.
-- Current positive shared schedule evidence may fill a confirmed linked user's owner-scoped roster. Employee ID is required; names are not guessed. The shared-derived row keeps explicit provenance and the stable Deputy shift identity so authenticated personal evidence deduplicates in place.
+- Current positive shared schedule evidence may fill a deterministically linked user's owner-scoped roster. A confirmed authenticated personal identity is preferred; otherwise an active canonical app-linked crew identity with a known Deputy employee ID is allowed. Names are never guessed, unresolved users remain unresolved, and canonical fallback does not fabricate authenticated personal evidence. The shared-derived row records the identity authority and keeps the stable Deputy shift identity so later authenticated personal evidence deduplicates in place.
 - Missing data is not negative evidence. A shared-derived personal row is retired only after existing qualifying shared authority retires the underlying schedule row; partial capture remains non-destructive.
 - Initial reconciliation is not a roster-change notification, but reconciled future work remains eligible for ordinary reminders.
 - A venue Area catalogue defines possible roles only. Day views show actual current assignments and genuine Deputy open rows, not synthetic catalogue TBC placeholders.

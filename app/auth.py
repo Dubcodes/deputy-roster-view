@@ -19,6 +19,7 @@ from .database import (
     update_app_user_seen,
     update_trusted_device_seen,
     get_connection,
+    effective_personal_roster_identity,
 )
 from .security import SESSION_COOKIE_NAME, hash_session_token, session_expires_at
 
@@ -272,8 +273,19 @@ def _is_public_path(path: str) -> bool:
 def _add_sync_notice(user: dict[str, object]) -> None:
     settings = get_settings()
     if not bool(user.get("has_deputy_credentials")):
+        with get_connection() as conn:
+            supplemented = int(conn.execute(
+                """SELECT COUNT(*) FROM shifts
+                   WHERE owner_user_id=? AND deleted_from_source=0
+                     AND source_url_hash=?""",
+                (int(user["id"]), f"deputy-shared-effective:{int(user['id'])}"),
+            ).fetchone()[0])
         user["sync_notice_kind"] = "healthy"
-        user["sync_notice_text"] = "Deputy roster not connected"
+        user["sync_notice_text"] = (
+            "Personal Deputy login not connected · shared roster evidence is being used."
+            if supplemented
+            else "Deputy roster not connected"
+        )
         return
     last_sync_text = str(user.get("last_sync_at") or "").strip()
     status_text = str(user.get("last_sync_status") or "").strip().lower()
@@ -305,12 +317,8 @@ def _add_sync_notice(user: dict[str, object]) -> None:
         user["sync_notice_kind"] = "stale"
         user["sync_notice_text"] = f"Deputy roster may be out of date · last synced {age_label}"
         return
+    identity = effective_personal_roster_identity(int(user["id"]))
     with get_connection() as conn:
-        identity = conn.execute(
-            """SELECT deputy_employee_id FROM app_user_deputy_identity
-               WHERE app_user_id=? AND status='confirmed' AND deputy_employee_id IS NOT NULL""",
-            (int(user["id"]),),
-        ).fetchone()
         supplemented = int(conn.execute(
             """SELECT COUNT(*) FROM shifts
                WHERE owner_user_id=? AND deleted_from_source=0

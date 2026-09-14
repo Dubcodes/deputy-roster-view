@@ -223,16 +223,21 @@ An unambiguous employee-ID match may link the account directly or merge an accou
 ## Effective Personal Deputy Roster
 
 The owner-scoped `shifts` table remains the common input for Month, Day, Next Up,
-timesheets, insights, availability and notifications. A confirmed
-`app_user_deputy_identity` permits current positive shared schedule assignments for
-that exact Deputy employee ID to be materialized into this roster with explicit
-`deputy_shared_effective_roster` provenance. The materialized row uses the same
-Deputy source-shift identity as authenticated personal capture, so later personal
-evidence upgrades it in place and preserves marks and personal time overrides.
+timesheets, insights, availability and notifications. A confirmed authenticated
+`app_user_deputy_identity` is preferred; when it is absent, an active canonical
+`crew_people.app_user_id` link with a known Deputy employee ID is an allowed
+deterministic fallback. Names and other heuristic fields are never used to guess
+identity. Current positive shared assignments for the resolved employee ID are
+materialized with explicit `deputy_shared_effective_roster` provenance, including
+which identity authority was used. Canonical fallback does not create authenticated
+personal identity evidence. The materialized row uses the same Deputy source-shift
+identity as authenticated personal capture, so later personal evidence upgrades it
+in place and preserves marks and personal time overrides.
 
 Personal capture success is transport/authentication evidence, not complete future
-absence authority. Shared positive assignment can supplement a linked user's
-roster; partial personal or shared absence cannot delete known work. Reconciliation
+absence authority. Shared positive assignment can supplement a deterministically
+linked user's roster; unresolved users remain unresolved, and partial personal or
+shared absence cannot delete known work. Reconciliation
 retires a shared-derived row only after the existing source-aware schedule evidence
 model has already retired its underlying current row. Initial reconciliation is a
 notification baseline, while normal future reminders remain eligible.
