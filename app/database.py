@@ -1714,7 +1714,7 @@ def _looks_like_crew_vehicle(value: object) -> bool:
     return bool(
         re.fullmatch(r"\d{3}", label)
         or re.fullmatch(r"Rav[0-9A-Za-z]+", label, re.IGNORECASE)
-        or label.casefold() in {"ob", "tender", "transit"}
+        or label.casefold() in {"ob", "rental", "tender", "transit"}
     )
 
 
@@ -6826,6 +6826,73 @@ def _normalise_int_list(values: list[int] | tuple[int, ...] | set[int] | None) -
     return normalised
 
 
+def _native_observation_times(row: dict[str, object]) -> dict[str, set[str]]:
+    """Return valid native observer/capture times for one stored source row."""
+    captured_at = str(row.get("captured_at") or "")
+    fingerprint = schedule_assignment_fingerprint(row)
+    contexts: dict[str, set[str]] = {}
+    for value in str(row.get("native_observation_contexts") or "").split("\x1e"):
+        observer_key, separator, remainder = value.partition("\x1f")
+        observed_at, separator, observed_fingerprint = remainder.partition("\x1f")
+        if not observer_key or not observed_at:
+            continue
+        if observed_fingerprint:
+            if observed_fingerprint != fingerprint:
+                continue
+        elif observed_at != captured_at:
+            continue
+        contexts.setdefault(observer_key, set()).add(observed_at)
+    return contexts
+
+
+def _effective_vehicle_schedule_rows(rows: list[object]) -> list[dict[str, object]]:
+    """Hide only a vehicle source disproved by a later observation from its observer.
+
+    This is a read projection. It does not alter captured Deputy rows, their
+    observations, coverage, or completed-event locks. Missing native provenance,
+    different observers, equal capture times, and concurrent vehicle resources
+    remain visible conservatively.
+    """
+    values = [dict(row) for row in rows]
+    contexts = [_native_observation_times(row) for row in values]
+    effective: list[dict[str, object]] = []
+    for index, row in enumerate(values):
+        employee_id = _optional_int(row.get("employee_id"))
+        if employee_id in (None, 0) or not _looks_like_crew_vehicle(row.get("area_name")):
+            effective.append(row)
+            continue
+        stale = False
+        for other_index, other in enumerate(values):
+            if index == other_index:
+                continue
+            other_employee_id = _optional_int(other.get("employee_id"))
+            if (
+                other_employee_id != employee_id
+                or other_employee_id in (None, 0)
+                or not _looks_like_crew_vehicle(other.get("area_name"))
+                or str(other.get("area_name") or "").strip().casefold()
+                == str(row.get("area_name") or "").strip().casefold()
+                or str(other.get("date") or "") != str(row.get("date") or "")
+                or _optional_int(other.get("schedule_location_id") or other.get("area_location_id"))
+                != _optional_int(row.get("schedule_location_id") or row.get("area_location_id"))
+                or not _event_rows_overlap(row, other)
+            ):
+                continue
+            for observer_key in set(contexts[index]) & set(contexts[other_index]):
+                if any(
+                    replacement_time > old_time
+                    for old_time in contexts[index][observer_key]
+                    for replacement_time in contexts[other_index][observer_key]
+                ):
+                    stale = True
+                    break
+            if stale:
+                break
+        if not stale:
+            effective.append(row)
+    return effective
+
+
 def fetch_deputy_schedule_for_date(
     date_text: str,
     location_ids: list[int] | tuple[int, ...] | set[int] | None = None,
@@ -6868,7 +6935,7 @@ def fetch_deputy_schedule_for_date(
             """,
             params,
         ).fetchall()
-    return rows
+    return _effective_vehicle_schedule_rows(rows)
 
 
 def fetch_deputy_assignment_history_for_date(
@@ -7090,7 +7157,7 @@ def fetch_deputy_schedule_between(start_date: str, end_date: str) -> list[sqlite
             """,
             (start_date, end_date),
         ).fetchall()
-    return rows
+    return _effective_vehicle_schedule_rows(rows)
 
 
 def get_recent_source_payloads(limit: int = 6, *, owner_user_id: int | None = None) -> list[sqlite3.Row]:
@@ -7557,7 +7624,7 @@ EVENT_NON_POSITION_KEYS = {
     "vehicle", "vehicles", "travel", "overnighter", "travelthenovernighter", "outofregion",
     "manager", "northern", "northernopscontractors", "accommodation", "web",
     "shift", "maintenance", "training", "mewptraining", "office", "clowplace",
-    "rav91", "tender", "transit", "ob",
+    "rav91", "rental", "tender", "transit", "ob",
 }
 
 
@@ -10479,7 +10546,17 @@ def _reconcile_effective_personal_rosters_conn(
                      FROM deputy_schedule_observations observation
                      WHERE observation.source_shift_id = schedule.source_shift_id
                        AND observation.active = 1
-                   ), schedule.captured_at) AS shared_first_seen_at
+                   ), schedule.captured_at) AS shared_first_seen_at,
+                   (
+                     SELECT GROUP_CONCAT(
+                       observer_key || char(31) || last_seen_at || char(31) || COALESCE(assignment_fingerprint,''),
+                       char(30)
+                     )
+                     FROM deputy_schedule_observations observation
+                     WHERE observation.source_shift_id = schedule.source_shift_id
+                       AND observation.active = 1
+                       AND observation.observer_key LIKE '%:native_get_rosters'
+                   ) AS native_observation_contexts
             FROM deputy_schedule_shifts schedule
             LEFT JOIN deputy_schedule_areas area ON area.area_id = schedule.area_id
             LEFT JOIN deputy_schedule_locations location
@@ -10498,7 +10575,7 @@ def _reconcile_effective_personal_rosters_conn(
             """,
             (today_text, employee_id),
         ).fetchall()
-        for shared in shared_rows:
+        for shared in _effective_vehicle_schedule_rows(shared_rows):
             shift_id = str(shared["source_shift_id"])
             source_uid = f"deputy-web:{owner_user_id}:{shift_id}"
             matching_ids.add(shift_id)

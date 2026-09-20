@@ -303,3 +303,7 @@ This remains the governing boundary. Build 2026.08.13.1 implements only the cont
 # 0.5.25 Rental resource classification
 
 - Deputy's exact `Rental` Area is a vehicle/resource label, not a production position. It remains source evidence, can extend a compatible person's workday, and renders through existing vehicle fields; assigned and open Rental rows never create crew roles, vacancies, or application semantics.
+
+# 0.5.26 vehicle evidence projection
+
+- Vehicle-resource convergence is a read-only projection, not evidence retirement. An older resource is hidden only when a later native observation from the same observer proves a different overlapping resource for the same non-zero Deputy employee, date, and location. Equal capture state is genuine concurrency; different observers or missing provenance stay visible as conservative conflict evidence. Captured rows, observations, coverage, and completed-event locks are never changed by this projection.

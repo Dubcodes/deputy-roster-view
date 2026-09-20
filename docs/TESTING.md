@@ -150,6 +150,8 @@ The self-travel smoke confirms owner-only today/future authorization, stable ide
 
 `python scripts\smoke_vehicle_combined_rows.py` covers Re-Deputy's interpretation contract: the primary historic split Travel/684 + CCU1 representation; a synthetic normalized combined `CCU1` + `vehicle_label=684` compatibility input; duplicate and blank companions; current structured conflicts; roster-note precedence; owner-only personal enrichment; unrelated people; changed/removed assignments; and preceding-Travel fallback. It does not prove Deputy's live JSON property name. It is part of the canonical release gate.
 
+`python scripts\smoke_vehicle_evidence_projection_0526.py` covers the read-only native vehicle-resource projection: same-observer later `685 → Rental` convergence for the September 18 production shape, equal-capture concurrent resource preservation, employee/date/location/observer/missing-identity isolation, raw source/observation preservation, narrow Rental catalogue recognition, Vehicle Change History wording, and genuine open production shifts. It is part of the canonical release gate.
+
 ## 0.5.5 focused checks
 
 `python scripts\smoke_patch_055.py` creates disposable data only. It proves SQLite online-backup validation and SHA manifests, safe private persistent-file inventory, failed-attempt preservation, retention of only managed successful backups, historical-directory preservation, write-ahead central Admin-audit redaction, scheduler idempotency, required safety backups before purge and unpublished-draft deletion, audit-store fail-closed behavior, and restore dry-run/tamper rejection. The responsive gate opens the new Safety & recovery and Admin audit panels at 1280px, 375px, and 320px without horizontal overflow.

@@ -13,7 +13,7 @@ OPERATIONAL_CONTEXT_KEYS = frozenset({
     "shift", "training", "web",
 })
 GENERIC_VEHICLE_KEYS = frozenset({"vehicle", "vehicles"})
-NAMED_VEHICLE_KEYS = frozenset({"ob", "tender", "transit"})
+NAMED_VEHICLE_KEYS = frozenset({"ob", "rental", "tender", "transit"})
 
 
 def evidence_label_key(value: object) -> str:

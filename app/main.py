@@ -4366,6 +4366,14 @@ def event_change_display_line(change: dict[str, object]) -> str:
     new_position = event_change_position(change, "new_positions")
     old_name = str(change.get("old_employee_name") or "TBC")
     new_name = str(change.get("new_employee_name") or "TBC")
+    if (
+        old_position
+        and new_position
+        and old_position != new_position
+        and role_is_vehicleish(old_position)
+        and role_is_vehicleish(new_position)
+    ):
+        return f"Vehicle — {old_position} → {new_position}"
     if change_type == "move":
         return f"{new_name} moved {old_position} → {new_position}"
     if change_type in {"replacement", "opened", "filled"}:
