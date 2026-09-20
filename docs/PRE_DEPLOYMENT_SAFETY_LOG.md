@@ -634,3 +634,15 @@ Day, Next Up, timesheets, reminders, availability and insights without duplicate
 Day pages no longer turn venue Area catalogues into synthetic TBC assignments, and
 the visible Changed badge retains the newest applicable timestamp. Deputy remains
 read-only and no schema, Compose or deployment change is included.
+
+---
+
+## 0.5.25 Rental vehicle/resource candidate
+
+Starting baseline: `77ef2e838530ce3c72f77632b3a7c975ee9b63aa` (`Re-Deputy 0.5.24`).
+
+The exact Deputy Area label `Rental` is now classified with existing vehicle/resource
+evidence rather than as a production position. A Rental lead-in therefore preserves
+the combined Deputy workday boundary while the genuine production Area remains the
+person's role. Open Rental rows remain source context, never crew vacancies. No
+schema, capture, write, Compose, or deployment change is included.

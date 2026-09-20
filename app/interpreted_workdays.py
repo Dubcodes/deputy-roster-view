@@ -15,7 +15,7 @@ from .roster_note_interpretation import (
 from .travel_cohorts import is_travel_participant_cohort, travel_family_locations_match
 
 
-VEHICLE_RE = re.compile(r"^(?:\d{3,4}|rav\w*|rp\d+|ob|tender|transit)$", re.IGNORECASE)
+VEHICLE_RE = re.compile(r"^(?:\d{3,4}|rav\w*|rp\d+|ob|tender|transit|rental)$", re.IGNORECASE)
 
 
 def deputy_shift_is_available(row: dict[str, object]) -> bool:

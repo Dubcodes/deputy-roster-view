@@ -8,7 +8,7 @@ from typing import Iterable
 
 VEHICLE_ALLOCATION_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]*\d*|(?<!\d)\d{3}(?!\d)")
 VEHICLE_ALLOCATION_TOKEN_RE = re.compile(
-    r"^(?:\d{3}|rav(?:\d+)?|rp\d+|ob|tender|transit)$", re.IGNORECASE,
+    r"^(?:\d{3}|rav(?:\d+)?|rp\d+|ob|tender|transit|rental)$", re.IGNORECASE,
 )
 CONNECTORS = {"and", "plus", "with", "the"}
 TRUCK_LABEL = "Truck"
@@ -40,6 +40,8 @@ def vehicle_note_label(value: object) -> str:
         return "Tender"
     if upper == "TRANSIT":
         return "Transit"
+    if upper == "RENTAL":
+        return "Rental"
     return clean
 
 

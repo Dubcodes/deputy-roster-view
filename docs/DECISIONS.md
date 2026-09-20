@@ -299,3 +299,7 @@ This remains the governing boundary. Build 2026.08.13.1 implements only the cont
 - Missing data is not negative evidence. A shared-derived personal row is retired only after existing qualifying shared authority retires the underlying schedule row; partial capture remains non-destructive.
 - Initial reconciliation is not a roster-change notification, but reconciled future work remains eligible for ordinary reminders.
 - A venue Area catalogue defines possible roles only. Day views show actual current assignments and genuine Deputy open rows, not synthetic catalogue TBC placeholders.
+
+# 0.5.25 Rental resource classification
+
+- Deputy's exact `Rental` Area is a vehicle/resource label, not a production position. It remains source evidence, can extend a compatible person's workday, and renders through existing vehicle fields; assigned and open Rental rows never create crew roles, vacancies, or application semantics.

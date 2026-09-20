@@ -548,6 +548,7 @@ VEHICLE_ROLE_LABELS = {
     "TENDER",
     "TRANSIT",
     "RAV91",
+    "RENTAL",
 }
 SCHEDULE_POSITION_ALIASES = {
     "side1": ("side1", "Side 1"),
