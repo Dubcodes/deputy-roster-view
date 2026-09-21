@@ -3,6 +3,7 @@ from __future__ import annotations
 """Read-only regressions for native vehicle-resource evidence convergence."""
 
 import os
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -22,12 +23,15 @@ def main() -> None:
     )
     sys.path.insert(0, str(ROOT))
     from app.database import (
+        create_app_user,
         fetch_deputy_schedule_between,
         fetch_deputy_schedule_for_date,
         get_connection,
         init_db,
     )
     from app.main import event_change_display_line, schedule_people
+    from app.notifications import _group_deputy_notification_workdays
+    from app.security import hash_pin
 
     init_db()
 
@@ -95,6 +99,53 @@ def main() -> None:
     equal_state = fetch_deputy_schedule_for_date("2026-09-19", [69])
     if {row["area_name"] for row in equal_state} != {"685", "Rental"}:
         raise AssertionError("same-capture 685 + Rental was not retained as concurrent evidence")
+
+    # A replacement must supersede every current native observer, not just one.
+    seed(1961, "685", 19, date="2026-09-24")
+    seed(1962, "Rental", 19, date="2026-09-24", observed_at="2026-09-13T10:00:00+12:00")
+    with get_connection() as conn:
+        conn.execute("INSERT INTO deputy_schedule_observations(source_shift_id,observer_key,first_seen_at,last_seen_at,active) VALUES(1961,'user:2:native_get_rosters','2026-09-10T10:00:00+12:00','2026-09-10T10:00:00+12:00',1)")
+    if len(fetch_deputy_schedule_for_date("2026-09-24", [69])) != 2:
+        raise AssertionError("one observer incorrectly superseded another observer's current 685")
+    with get_connection() as conn:
+        conn.execute("INSERT INTO deputy_schedule_observations(source_shift_id,observer_key,first_seen_at,last_seen_at,active) VALUES(1962,'user:2:native_get_rosters','2026-09-13T10:00:00+12:00','2026-09-13T10:00:00+12:00',1)")
+    if {row["area_name"] for row in fetch_deputy_schedule_for_date("2026-09-24", [69])} != {"Rental"}:
+        raise AssertionError("all-observer later Rental evidence did not converge")
+
+    seed(1971, "685", 19, date="2026-09-25", location_id=None)
+    seed(1972, "Rental", 19, date="2026-09-25", location_id=None, observed_at="2026-09-13T10:00:00+12:00")
+    if len(fetch_deputy_schedule_for_date("2026-09-25")) != 2:
+        raise AssertionError("unknown location incorrectly proved vehicle supersession")
+    if not isinstance(fetch_deputy_schedule_for_date("2026-09-18", [69])[0], sqlite3.Row):
+        raise AssertionError("schedule reader no longer returned sqlite row objects")
+
+    # Notification interpretation must consume the same projected schedule as
+    # the Day view, rather than reintroducing raw stale vehicle evidence.
+    notification_user = create_app_user(
+        deputy_email="joshua@example.test",
+        display_name="Joshua Druett",
+        pin_hash=hash_pin("1234"),
+        deputy_web_url="https://example.test/",
+        encrypted_email="fixture",
+        encrypted_password="fixture",
+    )
+    notification_user_id = int(notification_user["id"])
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO crew_people(canonical_display_name,app_user_id,deputy_employee_id,is_active,created_at,updated_at)
+               VALUES('Joshua Druett',?,?,1,'2026-09-01T00:00:00+12:00','2026-09-01T00:00:00+12:00')""",
+            (notification_user_id, 19),
+        )
+    notification_workdays = _group_deputy_notification_workdays([{
+        "source_uid": "deputy-web:1901",
+        "title": "[T-Te Rapa] Director",
+        "date": "2026-09-18",
+        "start_at": "2026-09-18T08:00:00+12:00",
+        "end_at": "2026-09-18T18:00:00+12:00",
+        "source_payload": "{}",
+    }], notification_user_id)
+    if [item["notification_transport"] for item in notification_workdays] != ["Rental"]:
+        raise AssertionError("notifications did not use the projected Rental schedule evidence")
 
     # IDs, location, date, and observer are all hard isolation boundaries.
     seed(1921, "685", 19, date="2026-09-20")

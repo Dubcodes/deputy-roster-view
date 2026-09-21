@@ -6845,7 +6845,7 @@ def _native_observation_times(row: dict[str, object]) -> dict[str, set[str]]:
     return contexts
 
 
-def _effective_vehicle_schedule_rows(rows: list[object]) -> list[dict[str, object]]:
+def _effective_vehicle_schedule_rows(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
     """Hide only a vehicle source disproved by a later observation from its observer.
 
     This is a read projection. It does not alter captured Deputy rows, their
@@ -6855,17 +6855,19 @@ def _effective_vehicle_schedule_rows(rows: list[object]) -> list[dict[str, objec
     """
     values = [dict(row) for row in rows]
     contexts = [_native_observation_times(row) for row in values]
-    effective: list[dict[str, object]] = []
+    effective: list[sqlite3.Row] = []
     for index, row in enumerate(values):
         employee_id = _optional_int(row.get("employee_id"))
         if employee_id in (None, 0) or not _looks_like_crew_vehicle(row.get("area_name")):
-            effective.append(row)
+            effective.append(rows[index])
             continue
         stale = False
         for other_index, other in enumerate(values):
             if index == other_index:
                 continue
             other_employee_id = _optional_int(other.get("employee_id"))
+            row_location_id = _optional_int(row.get("schedule_location_id") or row.get("area_location_id"))
+            other_location_id = _optional_int(other.get("schedule_location_id") or other.get("area_location_id"))
             if (
                 other_employee_id != employee_id
                 or other_employee_id in (None, 0)
@@ -6873,23 +6875,23 @@ def _effective_vehicle_schedule_rows(rows: list[object]) -> list[dict[str, objec
                 or str(other.get("area_name") or "").strip().casefold()
                 == str(row.get("area_name") or "").strip().casefold()
                 or str(other.get("date") or "") != str(row.get("date") or "")
-                or _optional_int(other.get("schedule_location_id") or other.get("area_location_id"))
-                != _optional_int(row.get("schedule_location_id") or row.get("area_location_id"))
+                or row_location_id is None
+                or other_location_id is None
+                or other_location_id != row_location_id
                 or not _event_rows_overlap(row, other)
             ):
                 continue
-            for observer_key in set(contexts[index]) & set(contexts[other_index]):
-                if any(
-                    replacement_time > old_time
-                    for old_time in contexts[index][observer_key]
-                    for replacement_time in contexts[other_index][observer_key]
-                ):
-                    stale = True
-                    break
+            old_contexts = contexts[index]
+            if old_contexts and all(
+                observer_key in contexts[other_index]
+                and max(contexts[other_index][observer_key]) > max(old_times)
+                for observer_key, old_times in old_contexts.items()
+            ):
+                stale = True
             if stale:
                 break
         if not stale:
-            effective.append(row)
+            effective.append(rows[index])
     return effective
 
 

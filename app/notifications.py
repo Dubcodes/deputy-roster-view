@@ -8,7 +8,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Callable
 
 from .config import Settings, get_settings
-from .database import crew_identity_records, get_connection, get_settled_integrity_state, integrity_generation_boundary, list_open_workday_positions, resolve_workday_snapshot_assignments, save_settled_integrity_state
+from .database import crew_identity_records, fetch_deputy_schedule_between, get_connection, get_settled_integrity_state, integrity_generation_boundary, list_open_workday_positions, resolve_workday_snapshot_assignments, save_settled_integrity_state
 from .push_identity import ensure_push_identity
 from .interpreted_workdays import interpret_deputy_workdays
 from .workday_timing import effective_rostered_start
@@ -163,10 +163,7 @@ def _group_deputy_notification_workdays(
     if user_id is not None and dates:
         previous_date = (date.fromisoformat(dates[0]) - timedelta(days=1)).isoformat()
         with get_connection() as conn:
-            structured_rows = [dict(row) for row in conn.execute(
-                "SELECT * FROM deputy_schedule_shifts WHERE date BETWEEN ? AND ? ORDER BY start_at,source_shift_id",
-                (previous_date, dates[-1]),
-            ).fetchall()]
+            structured_rows = [dict(row) for row in fetch_deputy_schedule_between(previous_date, dates[-1])]
             preceding_rows = [dict(row) for row in conn.execute(
                 "SELECT * FROM shifts WHERE owner_user_id=? AND date=? AND deleted_from_source=0 ORDER BY start_at,id",
                 (user_id, previous_date),
