@@ -49,6 +49,19 @@ def main() -> None:
         saved_value = conn.execute("SELECT show_open_positions_on_day FROM app_users WHERE id=?", (user_id,)).fetchone()[0]
     visible = client.get(f"/day/{day}")
     assert "Available / Open Shifts" in visible.text and "Open shift" in visible.text, (saved.headers.get("location"), saved_value, visible.text[:500])
+    assert client.post("/settings/day-view", data={}, headers={"Origin": "http://testserver"}, follow_redirects=False).status_code == 303
+    empty_day = "2030-01-03"
+    save_deputy_web_schedule({
+        "captured_at": f"{empty_day}T00:00:00+12:00",
+        "areas": [{"id": 12, "name": "Side 2", "locationId": 69}],
+        "locations": [{"id": 69, "name": "T-Te Rapa"}],
+        "extracted_shifts": [],
+        "extracted_schedule_shifts": [{"id": 202, "area": 12, "areaName": "Side 2", "areaLocationId": 69, "location": 69, "employee": 0, "employeeName": "", "start": f"{empty_day}T09:00:00+12:00", "end": f"{empty_day}T17:00:00+12:00", "isPublished": True, "isOpen": True}],
+        "own_roster_coverage": [], "schedule_coverage": [],
+    }, owner_user_id=user_id)
+    hidden_only = client.get(f"/day/{empty_day}")
+    assert "Available / Open Shifts" not in hidden_only.text
+    assert "No shifts listed for this day." in hidden_only.text
     legacy_path = temporary / "legacy.sqlite3"
     with sqlite3.connect(legacy_path) as legacy:
         legacy.execute("CREATE TABLE app_users (id INTEGER PRIMARY KEY, deputy_email TEXT, display_name TEXT, display_theme TEXT, pin_hash TEXT, deputy_web_url TEXT, is_admin INTEGER, is_active INTEGER, created_at TEXT, updated_at TEXT)")

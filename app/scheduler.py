@@ -509,10 +509,10 @@ def sync_summary_message(summary: dict[str, object]) -> str:
 
     if web_result.get("status") == "ok":
         if web_result.get("shared_capture_reused"):
-            parts.append(
-                "Personal roster: refreshed. "
-                "Shared crew schedule: reused from a fresh shared capture."
-            )
+            payload = web_result.get("payload") if isinstance(web_result.get("payload"), dict) else {}
+            if payload.get("personal_capture_success") is not False:
+                parts.append("Personal roster: refreshed.")
+            parts.append("Shared crew schedule: reused from a fresh shared capture.")
         else:
             parts.append(
                 "Deputy web capture saved "

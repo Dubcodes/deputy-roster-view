@@ -198,6 +198,8 @@ def main() -> None:
     })
     assert "Roster sync incomplete; some Deputy data could not be refreshed." in partial_message
     assert "personal Deputy checks" not in partial_message
+    assert "Shared crew schedule: reused from a fresh shared capture." in partial_message
+    assert "Personal roster: refreshed." not in partial_message
     assert scheduler._combined_sync_status({}, {
         "status": "ok",
         "payload": {
