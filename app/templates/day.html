@@ -14,7 +14,7 @@
     </div>
   </section>
 
-  {% if not shifts and not open_shifts and not planning_meetings and not manual_rosters and not global_events %}
+  {% if not shifts and not has_visible_open_shifts and not planning_meetings and not manual_rosters and not global_events %}
     <div class="empty-state">No shifts listed for this day.</div>
   {% endif %}
 
@@ -149,7 +149,7 @@
     </section>
   {% endif %}
 
-  {% if open_shifts %}
+  {% if show_open_positions_on_day and open_shifts %}
     <section class="table-panel open-shifts-panel">
       <div class="section-heading">
         <h2>Available / Open Shifts</h2>

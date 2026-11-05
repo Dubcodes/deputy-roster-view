@@ -108,7 +108,11 @@ Race-day calculation resolves start origin and finish destination separately usi
 
 Each scheduler generation seeks one qualifying shared capture, then lets remaining accounts perform personal-only work. A qualifying shared capture requires native shared rows and complete coverage for every required native management window; one successful window cannot mask another partial window, and direct-search completeness cannot substitute for native acquisition because direct coverage is authoritative only for its own source. Manual syncs may reuse the latest qualifying shared capture for 90 minutes. Newer personal-only or failed diagnostics do not hide that proof, and account ordering uses the same latest qualifying capture. If the selected shared account fails to establish proof, the next suitable account may attempt shared capture in the same generation.
 
+Only accounts with saved Deputy credentials become generation members. A successful personal-only refresh is healthy when it reuses fresh qualifying shared proof; its literal zero newly captured shared rows is diagnostic data, not a failed crew acquisition. A user whose authenticated personal refresh succeeds but lacks deterministic shared-identity reconciliation receives a coverage warning rather than a false sync-failure warning.
+
 The five-minute sync runner also enforces the configured daily target as a persisted-evidence invariant. After that local target time, it waits for any active scheduled generation, then plans one idempotent catch-up if no qualifying shared capture has occurred since the target. This recovers both an overlapped daily trigger and an application restart without scheduling a full shared capture for every account.
+
+`app_users.show_open_positions_on_day` is a per-user presentation preference, defaulting to off. It controls only the large Available / Open Shifts block above personal Day details. Genuine Deputy open rows remain in the Day crew schedule and Settings, and their source evidence is never filtered or retired by this preference.
 
 After a successful roster sync, upcoming Thoroughbred date/location pairs inside 72 hours can enqueue stale meeting details. A separate scheduler job services the global Love Racing detail queue, so the user-facing roster sync response does not wait for browser captures.
 

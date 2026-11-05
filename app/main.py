@@ -169,6 +169,7 @@ from .database import (
     update_crew_person,
     transfer_app_user_link,
     update_user_display_theme,
+    update_user_open_positions_on_day,
     update_user_pin_hash,
     upsert_track_map_location_rule,
     delete_track_map_location_rule,
@@ -8317,6 +8318,8 @@ def day_view(
             "global_event": None,
             "shifts": shifts,
             "open_shifts": open_shifts,
+            "show_open_positions_on_day": bool(user and int(user.get("show_open_positions_on_day") or 0)),
+            "has_visible_open_shifts": bool(open_shifts and user and int(user.get("show_open_positions_on_day") or 0)),
             "planning_meetings": planning_meetings,
             "manual_rosters": manual_rosters,
             "track_maps": track_maps_for_day(shifts, manual_rosters),
@@ -9064,6 +9067,7 @@ def settings_view(request: Request, notice: str | None = None) -> object:
             "roster_snapshot": roster_snapshot,
             "roster_insights": roster_insights,
             "open_schedule_shifts": visible_open_schedule_shifts(app_user_id=owner_user_id),
+            "show_open_positions_on_day": bool(account_user and int(account_user["show_open_positions_on_day"] or 0)),
             "theme_groups": THEME_GROUPS,
             "current_theme": current_theme,
             "current_theme_label": THEME_LABELS.get(current_theme, "Jade dark"),
@@ -9227,6 +9231,21 @@ async def save_theme_settings(request: Request) -> RedirectResponse:
         samesite="lax",
     )
     return response
+
+
+@app.post("/settings/day-view")
+async def save_day_view_settings(request: Request) -> RedirectResponse:
+    require_same_origin(request)
+    user = current_user(request)
+    if not user or user.get("id") is None:
+        raise HTTPException(status_code=403, detail="Login required")
+    form = await request.form()
+    update_user_open_positions_on_day(
+        int(user["id"]), str(form.get("show_open_positions_on_day") or "") == "1",
+    )
+    return RedirectResponse(
+        url=notice_url("/settings", "Day view preferences saved."), status_code=303,
+    )
 
 
 @app.post("/admin/love-racing-refresh")

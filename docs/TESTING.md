@@ -2,6 +2,8 @@
 
 The roster-integrity and route-flow smokes include source-shaped coverage for observer churn, named-plus-open positions, vehicle vacancies, the VT maximum-two rule, Sound/SVT/VT equivalence, compatible personal evidence, production-only global timing, paired current source notes, `First X`, and historical-note separation. Run them directly while changing these boundaries, then run `python scripts/release_gate.py`.
 
+`smoke_sync_coordination_0521.py` covers the persisted multi-user generation lifecycle, including credential exclusion, batch-one staggered dispatch, shared-capture reuse/fallback, and restart recovery. `smoke_sync_health_open_positions_0527.py` covers the default-off Day open-position preference, its authenticated save route, genuine schedule open-row preservation, and fresh/upgrade database defaults.
+
 ## Canonical release gate
 
 Run the deterministic offline suite locally and in CI with:

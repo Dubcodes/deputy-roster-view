@@ -120,6 +120,7 @@ def init_db(settings: Settings | None = None) -> None:
                 deputy_email TEXT UNIQUE,
                 display_name TEXT,
                 display_theme TEXT DEFAULT 'jade',
+                show_open_positions_on_day INTEGER NOT NULL DEFAULT 0,
                 pin_hash TEXT,
                 deputy_web_url TEXT,
                 is_admin INTEGER DEFAULT 0,
@@ -1371,6 +1372,7 @@ def init_db(settings: Settings | None = None) -> None:
             )
         _ensure_column(conn, "app_users", "deputy_web_url", "TEXT")
         _ensure_column(conn, "app_users", "display_theme", "TEXT DEFAULT 'jade'")
+        _ensure_column(conn, "app_users", "show_open_positions_on_day", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "deputy_user_secrets", "encrypted_ical_url", "TEXT")
         _ensure_column(conn, "app_users", "deactivated_at", "TEXT")
         _ensure_column(conn, "love_racing_meetings", "is_active", "INTEGER DEFAULT 1")
@@ -2815,6 +2817,7 @@ def get_trusted_device(token_hash: str, now: str | None = None) -> sqlite3.Row |
                 u.deputy_email,
                 u.display_name,
                 u.display_theme,
+                u.show_open_positions_on_day,
                 u.is_admin,
                 u.is_active,
                 u.account_type,
@@ -3050,6 +3053,17 @@ def update_user_display_theme(user_id: int, display_theme: str) -> int:
             (display_theme, now, user_id),
         )
     return result.rowcount
+
+
+def update_user_open_positions_on_day(user_id: int, enabled: bool) -> int:
+    """Persist only the user's Day-page open-position presentation preference."""
+    now = datetime.now(get_settings().timezone).isoformat(timespec="seconds")
+    with get_connection() as conn:
+        result = conn.execute(
+            "UPDATE app_users SET show_open_positions_on_day=?,updated_at=? WHERE id=?",
+            (1 if enabled else 0, now, user_id),
+        )
+    return int(result.rowcount or 0)
 
 
 def set_app_user_active(user_id: int, is_active: bool) -> int:

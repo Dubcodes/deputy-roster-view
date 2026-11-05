@@ -218,6 +218,7 @@ async def trusted_device_middleware(
                 "id": device["user_id"],
                 "display_name": device["display_name"],
                 "display_theme": device["display_theme"],
+                "show_open_positions_on_day": device["show_open_positions_on_day"],
                 "deputy_email": device["deputy_email"],
                 "is_admin": device["is_admin"],
                 "account_type": device["account_type"],
@@ -327,7 +328,10 @@ def _add_sync_notice(user: dict[str, object]) -> None:
         ).fetchone()[0])
     if identity is None:
         user["sync_notice_kind"] = "stale"
-        user["sync_notice_text"] = "Roster coverage incomplete · Some workdays may be missing."
+        user["sync_notice_text"] = (
+            "Personal roster synced, but shared coverage could not be matched to your account. "
+            "Some workdays may need verification."
+        )
         return
     user["sync_notice_kind"] = "healthy"
     user["sync_notice_text"] = f"Deputy roster synced {last_sync.astimezone(settings.timezone).strftime('%d %b %H:%M')}"

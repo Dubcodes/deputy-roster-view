@@ -171,6 +171,18 @@
       </details>
     </article>
 
+    <article class="settings-panel">
+      <div class="section-heading"><h2>Race-day view</h2></div>
+      <form class="settings-form compact-settings-form" action="/settings/day-view" method="post">
+        <label class="checkbox-row">
+          <input type="checkbox" name="show_open_positions_on_day" value="1" {% if show_open_positions_on_day %}checked{% endif %}>
+          <span>Show open positions at top of race days</span>
+        </label>
+        <p class="muted">Off by default. Open positions remain available in Settings and in the race-day crew schedule; this only controls the large list above your race-day details.</p>
+        <button class="button button-secondary" type="submit">Save day view</button>
+      </form>
+    </article>
+
     <article class="settings-panel sync-panel">
       <div class="section-heading">
         <h2>Roster Update</h2>

@@ -276,8 +276,8 @@ def main() -> None:
         "last_sync_status": "ok", "last_sync_at": now.isoformat(),
     }
     _add_sync_notice(unresolved_notice)
-    if "Some workdays may be missing" not in str(unresolved_notice.get("sync_notice_text") or ""):
-        raise AssertionError(f"Unresolved identity did not expose coverage risk: {unresolved_notice!r}")
+    if "Personal roster synced, but shared coverage could not be matched" not in str(unresolved_notice.get("sync_notice_text") or ""):
+        raise AssertionError(f"Unresolved identity did not expose accurate coverage risk: {unresolved_notice!r}")
 
     first_shared = next(item for item in effective if str(item["source_uid"]).endswith(":9000"))
     with sqlite3.connect(db_path) as conn:

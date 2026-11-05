@@ -307,3 +307,9 @@ This remains the governing boundary. Build 2026.08.13.1 implements only the cont
 # 0.5.26 vehicle evidence projection
 
 - Vehicle-resource convergence is a read-only projection, not evidence retirement. An older resource is hidden only when a later native observation from the same observer proves a different overlapping resource for the same non-zero Deputy employee, date, and location. Equal capture state is genuine concurrency; different observers or missing provenance stay visible as conservative conflict evidence. Captured rows, observations, coverage, and completed-event locks are never changed by this projection.
+
+# 0.5.27 sync health and open-position presentation
+
+The persisted sync-generation lifecycle remains the scheduler authority: credentialled users are planned once with batch size one and seven-minute staggering, while accounts without saved Deputy credentials are excluded rather than recorded as failures. A fresh qualifying shared capture is reused for subsequent personal-only refreshes. Startup recovery preserves future pending members. No scheduler cadence, capture qualification, or evidence-retirement rule changed.
+
+Sync wording distinguishes an actual personal refresh failure/partial result from a successful personal-only refresh that reused shared proof. Missing deterministic identity reconciliation remains a conservative coverage warning, not a claimed Deputy failure. The Day-page open-position preference defaults off and is presentation-only; Deputy Schedule open rows and Settings availability remain visible.

@@ -32,9 +32,13 @@ def main() -> None:
     from app.database import (
         create_sync_generation,
         fetch_personal_assignment_evidence_for_date,
+        get_due_user_syncs,
         get_connection,
+        get_user_sync_state,
         init_db,
+        list_syncable_app_users,
         mark_sync_generation_member,
+        recover_incomplete_sync_generations,
         save_deputy_web_capture_diagnostic,
         save_deputy_web_schedule,
     )
@@ -152,6 +156,15 @@ def main() -> None:
     assert scheduler._combined_sync_status({}, {
         "status": "ok", "payload": healthy_shared_payload,
     }) == "ok"
+    shared_reuse_message = scheduler.sync_summary_message({
+        "status": "ok", "calendar": {}, "web": {
+            "status": "ok", "shared_capture_reused": True,
+            "saved_own_shift_rows": 0, "saved_schedule_rows": 0,
+        },
+    })
+    assert "Personal roster: refreshed." in shared_reuse_message
+    assert "Shared crew schedule: reused from a fresh shared capture." in shared_reuse_message
+    assert "0 schedule rows" not in shared_reuse_message
     assert scheduler._combined_sync_status({}, {
         "status": "ok",
         "shared_capture_reused": True,
@@ -475,6 +488,73 @@ def main() -> None:
     finally:
         scheduler.ensure_daily_sync = original_ensure
         scheduler.get_due_user_syncs = original_due
+
+    # Production-scale lifecycle: six credentialled accounts are one persisted
+    # batch-one generation. A seventh account without saved credentials is not
+    # a generation member or a failed sync.
+    with get_connection() as conn:
+        for user_id in range(10, 17):
+            conn.execute(
+                """INSERT INTO app_users(id,deputy_email,display_name,pin_hash,deputy_web_url,is_active,created_at,updated_at)
+                   VALUES(?,?,?,?,?,1,?,?)""",
+                (user_id, f"scale{user_id}@example.test", f"Scale {user_id}", "x", "https://example.test", now.isoformat(), now.isoformat()),
+            )
+            if user_id != 16:
+                conn.execute(
+                    """INSERT INTO deputy_user_secrets(user_id,encrypted_email,encrypted_password,encrypted_ical_url,encrypted_session_json,updated_at)
+                       VALUES(?,?,?,'','',?)""",
+                    (user_id, "fixture", "fixture", now.isoformat()),
+                )
+    scale_users = [row for row in list_syncable_app_users() if 10 <= int(row["id"]) <= 16]
+    assert [int(row["id"]) for row in scale_users] == [10, 11, 12, 13, 14, 15]
+    scale_settings = SimpleNamespace(timezone=ZoneInfo("Pacific/Auckland"), user_sync_batch_size=1, user_sync_stagger_minutes=7, user_sync_jitter_minutes=0, sync_at_hour=23)
+    original_scale = {name: getattr(scheduler, name) for name in ("ensure_daily_sync", "sync_roster_sources", "_shared_capture_after", "_now")}
+    try:
+        run_at = now + timedelta(days=30)
+        clock = run_at
+        scheduler._now = lambda _settings: clock
+        scheduler.ensure_daily_sync = lambda _settings: {"planned": 0, "reason": "fixture"}
+        calls: list[tuple[int, bool, bool]] = []
+        shared_ready = False
+        def scale_shared_after(_users: list[object], _since: str) -> bool:
+            return shared_ready
+        def scale_sync(_settings: object, user_id: int | None = None, *, include_shared: bool | None = None, shared_reused: bool = False) -> dict[str, object]:
+            nonlocal shared_ready
+            calls.append((int(user_id or 0), bool(include_shared), shared_reused))
+            if include_shared:
+                shared_ready = True
+            return {"status": "ok", "calendar": {}, "web": {"status": "ok", "shared_capture_reused": shared_reused}}
+        scheduler._shared_capture_after = scale_shared_after
+        scheduler.sync_roster_sources = scale_sync
+        plan = scheduler.plan_staggered_user_syncs(scale_settings, reason="six-user-fixture", start_at=run_at)
+        assert plan["planned"] == 6 and plan["stagger_minutes"] == 7
+        clock = run_at + timedelta(hours=1)
+        for _ in range(6):
+            assert scheduler.run_due_user_syncs(scale_settings)["count"] == 1
+        assert calls == [(10, True, False), *((user_id, False, True) for user_id in range(11, 16))]
+        with get_connection() as conn:
+            members = conn.execute("SELECT user_id,status FROM sync_generation_members WHERE generation_id=? ORDER BY user_id", (plan["generation_id"],)).fetchall()
+        assert [(int(row["user_id"]), row["status"]) for row in members] == [(user_id, "success") for user_id in range(10, 16)]
+        for user_id in range(10, 16):
+            state = get_user_sync_state(user_id)
+            assert state and state["last_sync_at"] and int(state["sync_in_progress"] or 0) == 0 and not state["next_sync_after"]
+        calls.clear(); shared_ready = False
+        restart_at = clock + timedelta(days=1)
+        clock = restart_at
+        restart_plan = scheduler.plan_staggered_user_syncs(scale_settings, reason="six-user-restart", start_at=restart_at)
+        clock = restart_at + timedelta(hours=1)
+        for _ in range(2):
+            assert scheduler.run_due_user_syncs(scale_settings)["count"] == 1
+        assert recover_incomplete_sync_generations((restart_at + timedelta(minutes=1)).isoformat()) == 0
+        assert len(get_due_user_syncs(clock.isoformat(), limit=10)) == 4
+        for _ in range(4):
+            assert scheduler.run_due_user_syncs(scale_settings)["count"] == 1
+        with get_connection() as conn:
+            pending = conn.execute("SELECT COUNT(*) FROM sync_generation_members WHERE generation_id=? AND status='pending'", (restart_plan["generation_id"],)).fetchone()[0]
+        assert pending == 0
+    finally:
+        for name, value in original_scale.items():
+            setattr(scheduler, name, value)
 
     print("0.5.23 daily sync and personal health smoke passed")
 

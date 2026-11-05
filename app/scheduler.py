@@ -508,13 +508,17 @@ def sync_summary_message(summary: dict[str, object]) -> str:
         parts.append(str(calendar_result.get("message") or "iCal sync failed."))
 
     if web_result.get("status") == "ok":
-        parts.append(
-            "Deputy web capture saved "
-            f"{web_result.get('saved_own_shift_rows', 0)} roster rows and "
-            f"{web_result.get('saved_schedule_rows', 0)} schedule rows."
-        )
         if web_result.get("shared_capture_reused"):
-            parts.append("Fresh shared schedule evidence was reused.")
+            parts.append(
+                "Personal roster: refreshed. "
+                "Shared crew schedule: reused from a fresh shared capture."
+            )
+        else:
+            parts.append(
+                "Deputy web capture saved "
+                f"{web_result.get('saved_own_shift_rows', 0)} roster rows and "
+                f"{web_result.get('saved_schedule_rows', 0)} schedule rows."
+            )
     elif web_result.get("status") == "skipped":
         parts.append(str(web_result.get("message") or "Deputy web capture skipped."))
     elif web_result:
