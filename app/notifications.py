@@ -8,7 +8,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Callable
 
 from .config import Settings, get_settings
-from .database import crew_identity_records, fetch_deputy_schedule_between, get_connection, get_settled_integrity_state, integrity_generation_boundary, list_open_workday_positions, resolve_workday_snapshot_assignments, save_settled_integrity_state
+from .database import crew_identity_records, fetch_deputy_schedule_between, filter_visible_personal_shift_rows, get_connection, get_settled_integrity_state, integrity_generation_boundary, list_open_workday_positions, resolve_workday_snapshot_assignments, save_settled_integrity_state
 from .push_identity import ensure_push_identity
 from .interpreted_workdays import interpret_deputy_workdays
 from .workday_timing import effective_rostered_start
@@ -164,10 +164,10 @@ def _group_deputy_notification_workdays(
         previous_date = (date.fromisoformat(dates[0]) - timedelta(days=1)).isoformat()
         with get_connection() as conn:
             structured_rows = [dict(row) for row in fetch_deputy_schedule_between(previous_date, dates[-1])]
-            preceding_rows = [dict(row) for row in conn.execute(
+            preceding_rows = [dict(row) for row in filter_visible_personal_shift_rows(conn.execute(
                 "SELECT * FROM shifts WHERE owner_user_id=? AND date=? AND deleted_from_source=0 ORDER BY start_at,id",
                 (user_id, previous_date),
-            ).fetchall()]
+            ).fetchall(), user_id)]
             person = conn.execute(
                 "SELECT id,deputy_employee_id,canonical_display_name FROM crew_people WHERE app_user_id=? AND is_active=1",
                 (user_id,),
@@ -625,12 +625,13 @@ def generate_due_notifications(now: datetime | None = None) -> dict[str, int]:
         reminder_at = time.fromisoformat(str(pref.get("reminder_time") or "19:00"))
         _queue_manual_notifications(pref=pref, now=now, reminder_at=reminder_at, created=created)
         with get_connection() as conn:
-            shifts = [dict(row) for row in conn.execute(
+            shift_rows = conn.execute(
                 """SELECT s.* FROM shifts s
                    WHERE s.owner_user_id=? AND s.date BETWEEN ? AND ?
                    AND (s.deleted_from_source=0 OR s.changed_since_viewed=1) ORDER BY s.start_at,s.id""",
                 (user_id, (now.date() - timedelta(days=1)).isoformat(), (now.date() + timedelta(days=31)).isoformat()),
-            ).fetchall()]
+            ).fetchall()
+        shifts = [dict(row) for row in filter_visible_personal_shift_rows(shift_rows, user_id)]
         for shift in _group_deputy_notification_workdays(shifts, user_id):
             event_date = date.fromisoformat(str(shift["date"]))
             location = str(shift.get("notification_location") or "Work day")

@@ -224,17 +224,8 @@ def main() -> None:
         raise AssertionError("A canonical person without a Deputy employee ID did not remain unresolved.")
 
     preferred = [dict(item) for item in fetch_shifts_between(dates[2], dates[3], 5)]
-    if len(preferred) != 1 or not str(preferred[0]["source_uid"]).endswith(":9302"):
-        raise AssertionError(f"Confirmed personal identity did not override conflicting canonical identity: {preferred!r}")
-    preferred_payload = json.loads(str(preferred[0]["source_payload"] or "{}"))
-    preferred_provenance = preferred_payload.get("effective_roster") or {}
-    if (
-        preferred_provenance.get("identity_authority") != "authenticated_personal_capture"
-        or not preferred_provenance.get("identity_conflict")
-        or preferred_provenance.get("authenticated_employee_id") != 30
-        or preferred_provenance.get("canonical_employee_id") != 31
-    ):
-        raise AssertionError(f"Identity disagreement was not inspectable in provenance: {preferred_provenance!r}")
+    if preferred or effective_personal_roster_identity(5) is not None:
+        raise AssertionError("Conflicting authenticated and canonical identities promoted shared work personally.")
     with sqlite3.connect(db_path) as conn:
         canonical_still_linked = conn.execute(
             "SELECT deputy_employee_id FROM crew_people WHERE app_user_id=5"

@@ -27,6 +27,7 @@ def main() -> None:
     from app.database import (
         fetch_deputy_schedule_for_date,
         fetch_personal_assignment_evidence_for_date,
+        fetch_shifts_between,
         get_roster_integrity_diagnostics,
         get_shift_changes_for_date,
         init_db,
@@ -113,12 +114,16 @@ def main() -> None:
     coverage = [{"start_date": future, "end_date": future, "mode": "all", "location_ids": []}]
     own_coverage = [{
         "start_date": future, "end_date": future, "status": "complete",
-        "records_returned": 1, "pagination_complete": True, "known_shift_ids_checked": True,
+        "records_returned": 2, "pagination_complete": True, "known_shift_ids_checked": True,
     }]
     payload = {
-        "captured_at": now.isoformat(), "areas": areas,
+        "captured_at": now.isoformat(), "authenticated_employee_id": 17, "areas": areas,
         "locations": [{"id": 64, "name": "T-Cambridge", "address": ""}],
-        "extracted_shifts": [own_shift], "extracted_schedule_shifts": shared_rows(future),
+        # A successful employee-specific personal response can still contain
+        # unrelated shared rows; only the authenticated employee may become
+        # an owner-scoped personal shift.
+        "extracted_shifts": [own_shift, {**own_shift, "id": 2200723, "employee": 19}],
+        "extracted_schedule_shifts": shared_rows(future),
         "schedule_coverage": coverage, "own_roster_coverage": own_coverage,
         "event_retry_coverage": [{"date": future, "location_id": 64, "status": "partial"}],
     }
@@ -188,6 +193,14 @@ def main() -> None:
 
     first = save_deputy_web_schedule(payload, owner_user_id=1)
     second = save_deputy_web_schedule({**payload, "captured_at": (now + timedelta(minutes=1)).isoformat()}, owner_user_id=1)
+    owned_rows = [dict(item) for item in fetch_shifts_between(future, future, owner_user_id=1)]
+    own_source_ids = {
+        str(item["source_uid"])
+        for item in owned_rows
+        if str(item["source_uid"]).startswith("deputy-web:1:")
+    }
+    if own_source_ids != {"deputy-web:1:2200722"}:
+        raise AssertionError(f"Authenticated personal capture persisted an unrelated employee shift: {owned_rows!r}")
     evidence = fetch_personal_assignment_evidence_for_date(future, [64])
     assert len(evidence) == 1, evidence
     assert first["partial_events"] == 1 and second["personal_evidence_saved"] == 1

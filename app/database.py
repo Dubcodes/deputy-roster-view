@@ -6631,7 +6631,7 @@ def fetch_shifts_between(
             """,
             params,
         ).fetchall()
-    return rows
+        return _visible_personal_shift_rows(conn, rows, owner_user_id)
 
 
 def fetch_shifts_for_date(date_text: str, owner_user_id: int | None = None) -> list[sqlite3.Row]:
@@ -6660,7 +6660,8 @@ def fetch_shift(shift_id: int, owner_user_id: int | None = None) -> sqlite3.Row 
             """,
             params,
         ).fetchone()
-    return row
+        visible_rows = _visible_personal_shift_rows(conn, [row] if row is not None else [], owner_user_id)
+    return visible_rows[0] if visible_rows else None
 
 
 def fetch_user_time_overrides_between(user_id: int, start_date: str, end_date: str) -> list[dict[str, object]]:
@@ -6733,6 +6734,40 @@ def update_shift_marks(shift_id: int, values: dict[str, object], owner_user_id: 
             ),
         )
     return True
+
+
+def _authenticated_employee_id_conn(conn: sqlite3.Connection, app_user_id: int) -> int | None:
+    row = conn.execute("SELECT deputy_employee_id FROM app_user_deputy_identity WHERE app_user_id=? AND status='confirmed'", (app_user_id,)).fetchone()
+    return _optional_int(row["deputy_employee_id"] if row else None)
+
+
+def _canonical_employee_id_conn(conn: sqlite3.Connection, app_user_id: int) -> int | None:
+    row = conn.execute(
+        """SELECT deputy_employee_id FROM crew_people
+           WHERE app_user_id=? AND is_active=1 AND merged_into_person_id IS NULL
+           AND deputy_employee_id IS NOT NULL LIMIT 1""",
+        (app_user_id,),
+    ).fetchone()
+    return _optional_int(row["deputy_employee_id"] if row else None)
+
+
+def _visible_personal_shift_rows(conn: sqlite3.Connection, rows: list[sqlite3.Row], owner_user_id: int | None) -> list[sqlite3.Row]:
+    if owner_user_id is None:
+        return rows
+    # Existing legacy rows need the trusted directory link too: an earlier
+    # mixed capture may have recorded the wrong authenticated response ID.
+    employee_id = _canonical_employee_id_conn(conn, owner_user_id) or _authenticated_employee_id_conn(conn, owner_user_id)
+    if employee_id is None:
+        return rows
+    return [row for row in rows if not (
+        _shift_payload_source(row) in {"deputy_web", "deputy_shared_effective_roster"}
+        and _optional_int((_json_loads_dict(str(row["source_payload"] or "")).get("normalised") or {}).get("employee_id")) not in (None, employee_id)
+    )]
+
+
+def filter_visible_personal_shift_rows(rows: list[sqlite3.Row], owner_user_id: int | None) -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return _visible_personal_shift_rows(conn, rows, owner_user_id)
 
 
 def clear_changed_for_date(date_text: str, owner_user_id: int | None = None, include_schedule: bool = False) -> int:
@@ -8876,6 +8911,8 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
                 ),
             )
 
+        captured_employee_id = _optional_int(payload.get("authenticated_employee_id"))
+        confirmed_employee_id = _authenticated_employee_id_conn(conn, owner_user_id) if owner_user_id is not None else None
         own_counts = _save_deputy_web_own_shifts(
             conn,
             own_shifts,
@@ -8884,6 +8921,7 @@ def save_deputy_web_schedule(payload: dict[str, object], owner_user_id: int | No
             location_lookup,
             captured_at,
             owner_user_id,
+            confirmed_employee_id if confirmed_employee_id is not None else captured_employee_id,
         )
         personal_coverage_counts = _save_personal_capture_coverage(
             conn, payload, owner_user_id, captured_at
@@ -10023,13 +10061,16 @@ def _save_deputy_web_own_shifts(
     area_lookup: dict[str, dict[str, object]],
     location_lookup: dict[int, dict[str, object]],
     captured_at: str,
-    owner_user_id: int | None,
+    owner_user_id: int | None, authenticated_employee_id: int | None,
 ) -> dict[str, int]:
-    counts = {"seen": 0, "created": 0, "updated": 0}
+    counts = {"seen": 0, "created": 0, "updated": 0, "untrusted": 0}
     source_owner = owner_user_id if owner_user_id is not None else "env"
     source_url_hash = f"deputy-web:{source_owner}"
     for shift in own_shifts:
         if not isinstance(shift, dict) or shift.get("id") in (None, ""):
+            continue
+        if authenticated_employee_id is None or _optional_int(shift.get("employee")) != authenticated_employee_id:
+            counts["untrusted"] += 1
             continue
         shift_id = str(shift["id"])
         rich_shift = schedule_shift_lookup.get(shift_id)
@@ -10489,6 +10530,8 @@ def _effective_personal_roster_identities_conn(
     for row in rows:
         authenticated_id = _optional_int(row["authenticated_employee_id"])
         canonical_id = _optional_int(row["canonical_employee_id"])
+        if authenticated_id is not None and canonical_id is not None and authenticated_id != canonical_id:
+            continue
         employee_id = authenticated_id if authenticated_id is not None else canonical_id
         if employee_id is None:
             continue
@@ -10812,7 +10855,7 @@ def get_next_upcoming_shift(now_iso: str, owner_user_id: int | None = None) -> s
         owner_sql = "AND owner_user_id = ?"
         params.append(owner_user_id)
     with get_connection() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             f"""
             SELECT *
             FROM shifts
@@ -10820,11 +10863,11 @@ def get_next_upcoming_shift(now_iso: str, owner_user_id: int | None = None) -> s
               AND start_at >= ?
               {owner_sql}
             ORDER BY start_at ASC
-            LIMIT 1
             """,
             params,
-        ).fetchone()
-    return row
+        ).fetchall()
+        visible_rows = _visible_personal_shift_rows(conn, rows, owner_user_id)
+    return visible_rows[0] if visible_rows else None
 
 
 def get_current_or_next_shift(now_iso: str, owner_user_id: int | None = None) -> sqlite3.Row | None:
@@ -10835,7 +10878,7 @@ def get_current_or_next_shift(now_iso: str, owner_user_id: int | None = None) ->
         params.append(owner_user_id)
     params.append(now_iso)
     with get_connection() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             f"""
             SELECT *
             FROM shifts
@@ -10846,11 +10889,11 @@ def get_current_or_next_shift(now_iso: str, owner_user_id: int | None = None) ->
               CASE WHEN start_at <= ? THEN 0 ELSE 1 END,
               start_at ASC,
               id ASC
-            LIMIT 1
             """,
             params,
-        ).fetchone()
-    return row
+        ).fetchall()
+        visible_rows = _visible_personal_shift_rows(conn, rows, owner_user_id)
+    return visible_rows[0] if visible_rows else None
 
 
 def get_upcoming_shifts(now_iso: str, limit: int = 5, owner_user_id: int | None = None) -> list[sqlite3.Row]:
@@ -10874,11 +10917,11 @@ def get_upcoming_shifts(now_iso: str, limit: int = 5, owner_user_id: int | None 
               AND s.start_at >= ?
               {owner_sql}
             ORDER BY s.start_at ASC
-            LIMIT ?
             """,
-            params,
+            params[:-1],
         ).fetchall()
-    return rows
+        visible_rows = _visible_personal_shift_rows(conn, rows, owner_user_id)
+    return visible_rows[:limit]
 
 
 def write_sync_log(summary: dict[str, object]) -> None:

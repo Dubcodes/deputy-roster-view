@@ -32,6 +32,7 @@ def main() -> None:
     day = "2030-01-02"
     save_deputy_web_schedule({
         "captured_at": f"{day}T00:00:00+12:00",
+        "authenticated_employee_id": 19,
         "areas": [{"id": 10, "name": "Director", "locationId": 69}, {"id": 11, "name": "Side 1", "locationId": 69}],
         "locations": [{"id": 69, "name": "T-Te Rapa"}],
         "extracted_shifts": [{"id": 101, "area": 10, "areaName": "Director", "areaLocationId": 69, "location": 69, "employee": 19, "employeeName": "Fixture User", "start": f"{day}T09:00:00+12:00", "end": f"{day}T17:00:00+12:00", "isPublished": True}],
