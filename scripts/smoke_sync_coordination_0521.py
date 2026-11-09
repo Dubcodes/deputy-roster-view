@@ -108,6 +108,7 @@ def main() -> None:
     }
     positive = {
         "captured_at": now.isoformat(),
+        "authenticated_employee_id": 17,
         "areas": [{"id": 101, "name": "Director", "locationId": 64}],
         "locations": [{"id": 64, "name": "T-Cambridge"}],
         "extracted_shifts": [personal_row],

@@ -245,7 +245,7 @@ def main() -> None:
         raise AssertionError("Assignment advanced controls should be collapsed by default.")
     assert_redirect(client.post(f"/admin/roster-days/{race_id}/publish", follow_redirects=False), "Roster+version+1+published")
     race_day = client.get("/day/2026-08-15")
-    for expected in ("Gimbal", "Gimbal Assist", "TBC", "Attending", "Making own way", "684"):
+    for expected in ("Gimbal", "Gimbal Assist", "Open position", "Attending", "Making own way", "684"):
         if expected not in race_day.text:
             raise AssertionError(f"Gimbal fixture omitted {expected!r}.")
     if "RTS" in race_day.text:
@@ -253,6 +253,9 @@ def main() -> None:
     race_assignments = [dict(row) for row in get_roster_day_assignments(race_id)]
     if len(race_assignments) != 4 or any(row["role_label"] == "RTS" for row in race_assignments):
         raise AssertionError(f"Dynamic race plan was not preserved: {race_assignments!r}")
+    gimbal_assist = next((row for row in race_assignments if row["role_label"] == "Gimbal Assist"), None)
+    if not gimbal_assist or gimbal_assist["assignment_state"] != "open":
+        raise AssertionError(f"Gimbal Assist open assignment was not preserved: {race_assignments!r}")
     if "Gimbal" not in {str(row["display_label"]) for row in list_workday_roles(include_disabled=True)}:
         raise AssertionError("Explicitly saved custom role did not enter the reusable catalogue.")
 

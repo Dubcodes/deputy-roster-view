@@ -1036,7 +1036,7 @@ async def run_deputy_web_capture(
                     if captured_employee_id or value in (None, ""):
                         return
                     value_text = str(value).strip()
-                    if value_text.isdigit():
+                    if value_text.isdigit() and int(value_text) > 0:
                         captured_employee_id = value_text
 
                 async def capture_extended_own_roster() -> None:
@@ -1065,12 +1065,6 @@ async def run_deputy_web_capture(
                         window_start = start_at
 
                     employee_id = captured_employee_id
-                    if not employee_id:
-                        for shift in extracted_shifts_by_id.values():
-                            remember_employee_id(shift.get("employee"))
-                            employee_id = captured_employee_id
-                            if employee_id:
-                                break
                     if not employee_id:
                         events.append("Could not identify the Deputy employee id for extended own-roster capture.")
                         own_roster_coverage.append({
@@ -1215,7 +1209,6 @@ async def run_deputy_web_capture(
                             if not shift_id:
                                 continue
                             extracted_shifts_by_id[shift_id] = shift
-                            remember_employee_id(shift.get("employee"))
                         window_start = (window_end + timedelta(seconds=1)).replace(
                             hour=0,
                             minute=0,
@@ -1310,7 +1303,6 @@ async def run_deputy_web_capture(
                         if shift_id:
                             extracted_schedule_shifts_by_id.setdefault(shift_id, shift)
                             direct_schedule_ids.add(shift_id)
-                            remember_employee_id(shift.get("employee"))
                     return len(shifts)
 
                 async def capture_expanded_area_refs() -> None:
@@ -1413,7 +1405,6 @@ async def run_deputy_web_capture(
                                     continue
                                 extracted_schedule_shifts_by_id[shift_id] = shift
                                 native_schedule_ids.add(shift_id)
-                                remember_employee_id(shift.get("employee"))
                             rows_seen += len(meaningful)
                         management_schedule_coverage.append({
                             "start_date": window_start.date().isoformat(),
@@ -1785,20 +1776,18 @@ async def run_deputy_web_capture(
                             for shift in native_shifts:
                                 shift_id = str(shift.get("id") or "")
                                 if shift_id:
-                                    remember_employee_id(shift.get("employee"))
                                     extracted_schedule_shifts_by_id[shift_id] = shift
                                     native_schedule_ids.add(shift_id)
-                        elif include_personal and "/api/management/v2/shifts" in response_url:
+                        elif is_personal_shift_response:
                             query_params = dict(parse_qsl(urlsplit(response_url).query))
-                            remember_employee_id(query_params.get("employee"))
+                            if _is_successful_personal_shift_response(response.status, data):
+                                remember_employee_id(query_params.get("employee"))
                             for shift in _extract_management_shifts(data):
                                 shift_id = str(shift.get("id") or "")
                                 if shift_id:
-                                    remember_employee_id(shift.get("employee"))
                                     extracted_shifts_by_id[shift_id] = shift
                         if "/api/management/v2/areas" in response_url:
                             query_params = dict(parse_qsl(urlsplit(response_url).query))
-                            remember_employee_id(query_params.get("employeeId"))
                             for area in _extract_area_refs(data):
                                 area_id = str(area.get("id") or "")
                                 if area_id:
@@ -1950,6 +1939,7 @@ async def run_deputy_web_capture(
         "management_schedule_coverage": management_schedule_coverage,
         "travel_schedule_coverage": travel_schedule_coverage,
         "own_roster_coverage": own_roster_coverage,
+        "authenticated_employee_id": captured_employee_id,
         "personal_expansion": personal_expansion,
         "personal_capture_success": bool(
             include_personal

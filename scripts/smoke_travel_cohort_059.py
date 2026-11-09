@@ -374,6 +374,7 @@ def main() -> None:
     mixed_after = [{**mixed_before[0], "areaName": "Overnighter", "roleName": "Overnighter"}]
     mixed_payload = {
         "captured_at": "2026-08-31T15:29:00+12:00",
+        "authenticated_employee_id": 17,
         "areas": [
             {"id": 1412, "name": "Travel then Overnighter", "locationId": 105, "rosterSortOrder": 1},
             {"id": 1762, "name": "Overnighter", "locationId": 158, "rosterSortOrder": 1},
